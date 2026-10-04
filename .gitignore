@@ -4,3 +4,6 @@
 # The till install: its secrets and its database backups stay on the till machine.
 otantik-pos/deploy/.env
 otantik-pos/deploy/backups/
+
+# What the stand-in printers received (dev/fake-printer.py).
+dev/printouts/

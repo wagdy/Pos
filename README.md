@@ -29,6 +29,25 @@ You need the .NET 10 SDK, Node 22 and a PostgreSQL 15+.
 - Without a delivery system, `otantik-pos/backend/tools/OtantikPos.DevCloud` plays one on
   `127.0.0.1:5099`.
 
+### Printers
+
+Without real printers, `dev/fake-printer.py` (Python 3) plays the kitchen's on port 9101 and
+the receipts' on 9102. Each ticket the till prints shows in its output as plain text and in
+`dev/printouts/` (ignored by git):
+
+```
+python3 dev/fake-printer.py
+```
+
+Then start the till server pointed at them:
+
+```
+dotnet run --project otantik-pos/backend/src/OtantikPos.Node.Api -- --Printing:Printers:Kitchen:Host=127.0.0.1 --Printing:Printers:Kitchen:Port=9101 --Printing:Printers:Receipt:Host=127.0.0.1 --Printing:Printers:Receipt:Port=9102
+```
+
+A round sent to the kitchen prints on the kitchen's printer; **Print receipt** on a paid bill
+prints on the receipts' printer.
+
 ## Tests
 
 ```

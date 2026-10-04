@@ -12,8 +12,12 @@ public sealed class PrintingOptions
 
     // Printed at the top and bottom of every receipt: the restaurant's name and address, a
     // thank-you, a tax registration number.
-    public List<string> ReceiptHeader { get; set; } = ["Otantik"];
-    public List<string> ReceiptFooter { get; set; } = ["Thank you!"];
+    //
+    // Empty here; the defaults are in appsettings.json. The configuration binder adds to a list
+    // that already has items rather than replacing them, so a default line here was printed
+    // twice: once from here and once from the configuration.
+    public List<string> ReceiptHeader { get; set; } = [];
+    public List<string> ReceiptFooter { get; set; } = [];
 }
 
 public sealed class PrinterOptions

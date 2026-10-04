@@ -94,8 +94,8 @@ If the cloud icon stays off, see Problems below.
 ## 6. Printers
 
 With `KITCHEN_PRINTER_HOST` and `RECEIPT_PRINTER_HOST` set, every round sent to the kitchen
-prints there, and the final receipt prints at checkout. A print that cannot reach its printer
-waits and prints when the printer is back; nothing is lost.
+prints there, and **Print receipt** on a paid bill prints its receipt. A print that cannot reach
+its printer waits and prints when the printer is back; nothing is lost.
 
 ## 7. Backups
 
