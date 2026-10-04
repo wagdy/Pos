@@ -1,0 +1,74 @@
+# The restaurant's till, on the till machine: the till server (with the till app), its own
+# PostgreSQL, and a daily backup of it. Settings come from .env beside this file (copy
+# .env.example). See INSTALL.md.
+#
+#   docker compose up -d --build
+name: otantik-till
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: otantik_pos_node
+      POSTGRES_USER: otantik
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    volumes:
+      - till-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U otantik -d otantik_pos_node"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  till:
+    build:
+      context: ../..
+      dockerfile: otantik-pos/Dockerfile
+    image: otantik-till:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # The tills (tablets, the counter screen) open http://<this machine>:TILL_PORT.
+      - "${TILL_PORT:-5080}:5080"
+    environment:
+      ConnectionStrings__OtantikPos: "Host=db;Port=5432;Database=otantik_pos_node;Username=otantik;Password=${DB_PASSWORD}"
+      Auth__SigningKey: ${TILL_SIGNING_KEY:?Set TILL_SIGNING_KEY in .env}
+      Auth__BootstrapManager__Name: ${BOOTSTRAP_MANAGER_NAME:-}
+      Auth__BootstrapManager__Pin: ${BOOTSTRAP_MANAGER_PIN:-}
+      DeliverySystem__BaseUrl: ${DELIVERY_SYSTEM_URL:-}
+      DeliverySystem__NodeKey: ${DELIVERY_SYSTEM_NODE_KEY:-}
+      Pricing__TaxPercentageUntilSynced: ${TAX_PERCENTAGE_UNTIL_SYNCED:-}
+      Printing__Printers__Kitchen__Host: ${KITCHEN_PRINTER_HOST:-}
+      Printing__Printers__Kitchen__Port: ${KITCHEN_PRINTER_PORT:-9100}
+      Printing__Printers__Receipt__Host: ${RECEIPT_PRINTER_HOST:-}
+      Printing__Printers__Receipt__Port: ${RECEIPT_PRINTER_PORT:-9100}
+      Printing__ReceiptHeader__0: ${RECEIPT_HEADER:-Otantik}
+      Restaurant__TimeZoneId: ${RESTAURANT_TIME_ZONE:-Africa/Cairo}
+
+  # A copy of the till's database every day, kept 30 days, in ./backups beside this file.
+  # Copy them off this machine now and then: a backup on the same disk does not survive the disk.
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${DB_PASSWORD}
+    volumes:
+      - ./backups:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          pg_dump -h db -U otantik -d otantik_pos_node -Fc -f /backups/till-$$(date +%Y-%m-%d).dump \
+            && echo "Backed up the till database to backups/till-$$(date +%Y-%m-%d).dump"
+          find /backups -name 'till-*.dump' -mtime +30 -delete
+          sleep 86400
+        done
+
+volumes:
+  till-data:

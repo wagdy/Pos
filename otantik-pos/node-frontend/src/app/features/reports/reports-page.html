@@ -1,0 +1,191 @@
+<header class="head">
+  <h1>Reports</h1>
+
+  <div class="day" role="group" aria-label="Business day">
+    <button mat-icon-button (click)="step(-1)" [disabled]="!report()" aria-label="Previous day">
+      <mat-icon>chevron_left</mat-icon>
+    </button>
+    <span class="day-label">
+      @if (report(); as r) {
+        {{ dayOf(r) | date: 'EEEE d MMMM y' }}
+      }
+    </span>
+    <button mat-icon-button (click)="step(1)" [disabled]="!report() || isToday()" aria-label="Next day">
+      <mat-icon>chevron_right</mat-icon>
+    </button>
+    @if (!isToday()) {
+      <button mat-stroked-button (click)="showToday()">Today</button>
+    }
+  </div>
+
+  <span class="spacer"></span>
+  @if (isToday()) {
+    <span class="live" matTooltip="Updates as orders change at any till">
+      <mat-icon>sync</mat-icon>
+      Live
+    </span>
+  }
+</header>
+
+@if (loading() && !report()) {
+  <mat-progress-bar mode="indeterminate" />
+}
+
+@if (error(); as message) {
+  <p class="error" role="alert">
+    {{ message }}
+    <button mat-button (click)="load(date())">Try again</button>
+  </p>
+}
+
+@if (report(); as r) {
+  @let s = r.summary;
+
+  <section class="cards" aria-label="Takings">
+    <mat-card appearance="outlined" class="card main">
+      <span class="caption">Net sales</span>
+      <strong class="amount big">{{ s.netSales | money }}</strong>
+      <span class="sub">{{ s.grossSales | money }} taken · {{ s.refunds | money }} refunded</span>
+    </mat-card>
+    <mat-card appearance="outlined" class="card">
+      <span class="caption">Paid orders</span>
+      <strong class="big">{{ s.paidOrders }}</strong>
+      <span class="sub">of {{ s.orders }} opened</span>
+    </mat-card>
+    <mat-card appearance="outlined" class="card">
+      <span class="caption">Average order</span>
+      <strong class="amount big">{{ s.averageTicket | money }}</strong>
+      <span class="sub">Tax charged {{ s.taxCharged | money }}</span>
+    </mat-card>
+    <mat-card appearance="outlined" class="card">
+      <span class="caption">Still open</span>
+      <strong class="big">{{ s.openOrders }}</strong>
+      <span class="sub">{{ s.openValue | money }} not yet paid · {{ s.cancelledOrders }} cancelled</span>
+    </mat-card>
+  </section>
+
+  <section class="tables">
+    <mat-card appearance="outlined" class="panel">
+      <h2>By payment method</h2>
+      @if (r.byPaymentMethod.length === 0) {
+        <p class="none">Nothing paid yet.</p>
+      } @else {
+        <table class="simple">
+          <thead>
+            <tr><th>Method</th><th class="num">Orders</th><th class="amount">Taken</th><th class="amount">Refunded</th><th class="amount">Net</th></tr>
+          </thead>
+          <tbody>
+            @for (m of r.byPaymentMethod; track m.method) {
+              <tr>
+                <td><mat-icon class="inline-icon">{{ methodIcon(m.method) }}</mat-icon> {{ methodLabel(m.method) }}</td>
+                <td class="num">{{ m.orders }}</td>
+                <td class="amount">{{ m.charged | money }}</td>
+                <td class="amount">{{ m.refunded | money }}</td>
+                <td class="amount strong">{{ m.net | money }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </mat-card>
+
+    <mat-card appearance="outlined" class="panel">
+      <h2>By order type</h2>
+      @if (r.byOrderType.length === 0) {
+        <p class="none">Nothing paid yet.</p>
+      } @else {
+        <table class="simple">
+          <thead>
+            <tr><th>Type</th><th class="num">Orders</th><th class="amount">Net</th></tr>
+          </thead>
+          <tbody>
+            @for (t of r.byOrderType; track t.type) {
+              <tr>
+                <td>{{ typeLabel(t.type) }}</td>
+                <td class="num">{{ t.orders }}</td>
+                <td class="amount strong">{{ t.net | money }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </mat-card>
+
+    <mat-card appearance="outlined" class="panel">
+      <h2>Voids and points</h2>
+      <table class="simple">
+        <tbody>
+          <tr>
+            <td>Voided before the kitchen</td>
+            <td class="num">{{ s.voidedBeforeKitchen.items }}</td>
+            <td class="amount">{{ s.voidedBeforeKitchen.value | money }}</td>
+          </tr>
+          <tr matTooltip="Made by the kitchen, never paid for">
+            <td>Written off after the kitchen</td>
+            <td class="num">{{ s.voidedAfterKitchen.items }}</td>
+            <td class="amount">{{ s.voidedAfterKitchen.value | money }}</td>
+          </tr>
+          <tr>
+            <td>Loyalty points used</td>
+            <td class="num">{{ s.pointsRedeemed }}</td>
+            <td class="amount">−{{ s.pointsDiscount | money }}</td>
+          </tr>
+          <tr>
+            <td>Points returned on refunds</td>
+            <td class="num">{{ s.pointsReturned }}</td>
+            <td class="amount"></td>
+          </tr>
+        </tbody>
+      </table>
+    </mat-card>
+  </section>
+
+  <h2 class="list-title">Orders ({{ r.orders.length }})</h2>
+  <div class="table-wrap">
+    <table mat-table [dataSource]="r.orders" aria-label="The day's orders">
+      <ng-container matColumnDef="opened">
+        <th mat-header-cell *matHeaderCellDef>Opened</th>
+        <td mat-cell *matCellDef="let order">{{ order.createdAt | date: 'HH:mm' }}</td>
+      </ng-container>
+      <ng-container matColumnDef="order">
+        <th mat-header-cell *matHeaderCellDef>Order</th>
+        <td mat-cell *matCellDef="let order">{{ label(order) }}</td>
+      </ng-container>
+      <ng-container matColumnDef="status">
+        <th mat-header-cell *matHeaderCellDef>Status</th>
+        <td mat-cell *matCellDef="let order">
+          <span class="pill" [attr.data-status]="statusText(order)">{{ statusText(order) }}</span>
+        </td>
+      </ng-container>
+      <ng-container matColumnDef="method">
+        <th mat-header-cell *matHeaderCellDef>Paid with</th>
+        <td mat-cell *matCellDef="let order">{{ paidWith(order) }}</td>
+      </ng-container>
+      <ng-container matColumnDef="total">
+        <th mat-header-cell *matHeaderCellDef class="amount">Total</th>
+        <td mat-cell *matCellDef="let order" class="amount">{{ order.totalAmount | money }}</td>
+      </ng-container>
+      <ng-container matColumnDef="refunded">
+        <th mat-header-cell *matHeaderCellDef class="amount">Refunded</th>
+        <td mat-cell *matCellDef="let order" class="amount">
+          @if (order.refundedAmount > 0) {
+            −{{ order.refundedAmount | money }}
+          }
+        </td>
+      </ng-container>
+
+      <tr mat-header-row *matHeaderRowDef="orderColumns; sticky: true"></tr>
+      <tr
+        mat-row
+        *matRowDef="let order; columns: orderColumns"
+        class="row"
+        (click)="open(order)"
+        (keydown.enter)="open(order)"
+        tabindex="0"
+      ></tr>
+      <tr class="mat-row" *matNoDataRow>
+        <td class="none" [attr.colspan]="orderColumns.length">No orders on this day.</td>
+      </tr>
+    </table>
+  </div>
+}

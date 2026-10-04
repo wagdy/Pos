@@ -1,0 +1,81 @@
+<mat-toolbar class="toolbar">
+  <button mat-button class="brand" (click)="openOrders()">
+    <mat-icon>point_of_sale</mat-icon>
+    Otantik POS
+  </button>
+
+  <nav>
+    <a mat-button routerLink="/orders" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
+      <mat-icon>receipt_long</mat-icon>
+      Open orders
+    </a>
+    <a *appCan="Permissions.OrderViewAll" mat-button routerLink="/reports" routerLinkActive="active">
+      <mat-icon>bar_chart</mat-icon>
+      Reports
+    </a>
+    <a *appCan="Permissions.StaffManage" mat-button routerLink="/staff" routerLinkActive="active">
+      <mat-icon>badge</mat-icon>
+      Staff
+    </a>
+  </nav>
+
+  <span class="spacer"></span>
+
+  <span class="links" role="status" aria-live="polite">
+    <span
+      class="link"
+      [class.down]="!connectivity.nodeOnline()"
+      [matTooltip]="connectivity.nodeOnline() ? 'This device is connected to the till server.' : 'Reconnecting to the till server…'"
+    >
+      <mat-icon>{{ connectivity.nodeOnline() ? 'lan' : 'portable_wifi_off' }}</mat-icon>
+      <span class="link-text">{{ connectivity.nodeOnline() ? 'Till server' : 'Reconnecting…' }}</span>
+    </span>
+    <span
+      class="link"
+      [class.down]="!connectivity.cloudOnline()"
+      [class.unset]="connectivity.cloudNotConfigured()"
+      [matTooltip]="cloudLabel()"
+    >
+      <mat-icon>{{ connectivity.cloudOnline() ? 'cloud_done' : 'cloud_off' }}</mat-icon>
+      <span class="link-text">Cloud</span>
+    </span>
+  </span>
+
+  @if (orderTakingOnly()) {
+    <span class="badge" matTooltip="Payments, receipts, points and voids are done by a cashier or manager.">
+      Order taking only
+    </span>
+  }
+
+  <button mat-button [matMenuTriggerFor]="userMenu" class="user">
+    <mat-icon>account_circle</mat-icon>
+    <span class="user-name">{{ auth.me()?.fullName }}</span>
+  </button>
+  <mat-menu #userMenu="matMenu">
+    <div class="who" mat-menu-item disabled>
+      <span>{{ auth.me()?.fullName }}</span>
+      <small>{{ roleLabel() }}</small>
+    </div>
+    <button mat-menu-item (click)="signOut()">
+      <mat-icon>logout</mat-icon>
+      Sign out
+    </button>
+  </mat-menu>
+</mat-toolbar>
+
+@if (!connectivity.nodeOnline()) {
+  <div class="banner danger" role="alert">
+    <mat-icon>portable_wifi_off</mat-icon>
+    The till server cannot be reached. What is on screen stays; changes wait until it reconnects.
+  </div>
+} @else if (connectivity.cloud()?.state === 'Offline') {
+  <div class="banner warn" role="status">
+    <mat-icon>cloud_off</mat-icon>
+    The delivery system is offline. Customer lookup and loyalty points are paused; taking orders, the kitchen,
+    cash and card payments and receipts carry on as normal.
+  </div>
+}
+
+<main class="content">
+  <router-outlet />
+</main>

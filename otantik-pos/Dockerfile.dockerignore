@@ -1,0 +1,12 @@
+# The build context is the repository root (see Dockerfile). Only what the till needs goes in.
+*
+!shared/Otantik.SharedKernel/
+!shared/Otantik.BuildingBlocks/
+!otantik-pos/backend/src/
+!otantik-pos/node-frontend/
+
+**/bin/
+**/obj/
+**/node_modules/
+**/.angular/
+otantik-pos/backend/src/OtantikPos.Node.Api/wwwroot/

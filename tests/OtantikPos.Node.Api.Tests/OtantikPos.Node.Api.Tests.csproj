@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The API over HTTP and SignalR, hosted in process (WebApplicationFactory) with everything
+       real behind it: PostgreSQL (OTANTIKPOS_TEST_DB, skipped when unset), the outbox, the
+       printer and cloud workers, a fake delivery system served for real, and TCP printers. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="4.0.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.12" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\otantik-pos\backend\src\OtantikPos.Node.Api\OtantikPos.Node.Api.csproj" />
+  </ItemGroup>
+
+  <!-- The same fakes the Infrastructure tests run against, shared as source. -->
+  <ItemGroup>
+    <Compile Include="..\OtantikPos.Node.Infrastructure.Tests\FakeDeliverySystem.cs" Link="Fakes\FakeDeliverySystem.cs" />
+    <Compile Include="..\OtantikPos.Node.Infrastructure.Tests\FakePrinter.cs" Link="Fakes\FakePrinter.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

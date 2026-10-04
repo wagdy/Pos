@@ -1,0 +1,61 @@
+@use '@angular/material' as mat;
+
+// Material 3, in the delivery system's colours (indigo, with a pink accent), so the till and the
+// delivery app look like one product. The system font stack rather than a web font: the till must
+// look right with no internet, and the icon font is bundled with the build for the same reason.
+html {
+  color-scheme: light;
+  @include mat.theme((
+    color: (
+      primary: mat.$blue-palette,
+      tertiary: mat.$rose-palette,
+    ),
+    typography: (
+      plain-family: (system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif),
+      brand-family: (system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif),
+    ),
+    density: 0,
+  ));
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--mat-sys-surface-container-lowest);
+  color: var(--mat-sys-on-surface);
+  font: var(--mat-sys-body-large);
+}
+
+// Status colours used across the till.
+:root {
+  --till-ok: #2e7d32;
+  --till-warn: #b26a00;
+  --till-danger: var(--mat-sys-error);
+}
+
+.snack-error {
+  --mat-snack-bar-container-color: var(--mat-sys-error-container);
+  --mat-snack-bar-supporting-text-color: var(--mat-sys-on-error-container);
+  --mat-snack-bar-button-color: var(--mat-sys-on-error-container);
+}
+
+.snack-attention {
+  --mat-snack-bar-container-color: var(--mat-sys-tertiary-container);
+  --mat-snack-bar-supporting-text-color: var(--mat-sys-on-tertiary-container);
+  --mat-snack-bar-button-color: var(--mat-sys-on-tertiary-container);
+}
+
+// Money lines up.
+.amount {
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+  white-space: nowrap;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}

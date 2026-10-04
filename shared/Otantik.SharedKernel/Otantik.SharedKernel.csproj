@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The model the delivery system (cloud) and the POS (restaurant machine) share. The two are
+       deployed separately, so a change here reaches them at different times: additive changes
+       only. See ../README.md. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Only for IdentityUser, the base class of AppUser. The same package and version the
+         delivery system's Core project uses today. -->
+    <PackageReference Include="Microsoft.Extensions.Identity.Stores" Version="10.0.0" />
+  </ItemGroup>
+
+</Project>

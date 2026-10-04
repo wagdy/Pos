@@ -1,0 +1,116 @@
+<h2 mat-dialog-title>
+  <mat-icon>{{ isDelivery ? 'delivery_dining' : 'takeout_dining' }}</mat-icon>
+  {{ isDelivery ? 'Delivery' : 'Takeaway' }}: customer's mobile number
+</h2>
+
+<mat-dialog-content>
+  <p class="why">Required for every {{ isDelivery ? 'delivery' : 'takeaway' }}: it finds the customer's loyalty profile.</p>
+
+  <form [formGroup]="form" (ngSubmit)="connectivity.cloudOnline() && !lookup() ? lookUp() : confirm()" id="customer-form">
+    <div class="phone-row">
+      <mat-form-field class="phone">
+        <mat-label>Mobile number</mat-label>
+        <mat-icon matPrefix>smartphone</mat-icon>
+        <input
+          matInput
+          formControlName="phone"
+          type="tel"
+          inputmode="tel"
+          autocomplete="off"
+          (input)="phoneEdited()"
+          cdkFocusInitial
+        />
+        @if (form.controls.phone.hasError('required') && form.controls.phone.touched) {
+          <mat-error>The mobile number is required.</mat-error>
+        } @else if (form.controls.phone.hasError('pattern') && form.controls.phone.touched) {
+          <mat-error>Digits only, 8 to 15 of them.</mat-error>
+        }
+      </mat-form-field>
+      <button
+        mat-flat-button
+        type="button"
+        class="look-up"
+        (click)="lookUp()"
+        [disabled]="looking() || !connectivity.cloudOnline()"
+      >
+        <mat-icon>person_search</mat-icon>
+        Look up
+      </button>
+    </div>
+
+    @if (looking()) {
+      <mat-progress-bar mode="indeterminate" />
+    }
+
+    @if (!connectivity.cloudOnline()) {
+      <p class="result offline" role="status">
+        <mat-icon>cloud_off</mat-icon>
+        <span>
+          The delivery system is offline, so the profile and points cannot be fetched. The number still goes on the
+          order, and points can be used once it is back.
+        </span>
+      </p>
+    } @else if (lookupError(); as message) {
+      <p class="result offline" role="alert">
+        <mat-icon>error</mat-icon>
+        <span>{{ message }}</span>
+      </p>
+    } @else if (lookup(); as result) {
+      @switch (result.status) {
+        @case ('Found') {
+          <div class="result found" role="status">
+            <mat-icon>verified_user</mat-icon>
+            <div>
+              <strong>{{ result.profile!.fullName }}</strong>
+              <div>
+                {{ result.profile!.pointsBalance }} points · worth {{ result.pointsValue | money }}
+              </div>
+            </div>
+          </div>
+        }
+        @case ('NotFound') {
+          <p class="result walk-in" role="status">
+            <mat-icon>person_outline</mat-icon>
+            <span>No account has this number. The order goes ahead as a walk-in, with the number on it.</span>
+          </p>
+        }
+        @case ('Unavailable') {
+          <p class="result offline" role="status">
+            <mat-icon>cloud_off</mat-icon>
+            <span>The delivery system could not be reached. The number still goes on the order.</span>
+          </p>
+        }
+      }
+    }
+
+    <mat-form-field class="full">
+      <mat-label>Customer name (optional)</mat-label>
+      <input matInput formControlName="name" autocomplete="off" />
+    </mat-form-field>
+
+    @if (isDelivery) {
+      <mat-form-field class="full">
+        <mat-label>Delivery address</mat-label>
+        <textarea matInput formControlName="address" rows="2"></textarea>
+        @if (form.controls.address.hasError('required') && form.controls.address.touched) {
+          <mat-error>The delivery address is required.</mat-error>
+        }
+      </mat-form-field>
+      <mat-form-field class="fee">
+        <mat-label>Delivery fee</mat-label>
+        <span matTextPrefix>L.E&nbsp;</span>
+        <input matInput formControlName="fee" type="number" min="0" step="0.5" />
+        @if (form.controls.fee.hasError('min')) {
+          <mat-error>The fee cannot be negative.</mat-error>
+        }
+      </mat-form-field>
+    }
+  </form>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button type="button" mat-dialog-close>Cancel order</button>
+  <button mat-flat-button type="button" (click)="confirm()" [disabled]="!canContinue()">
+    Continue
+  </button>
+</mat-dialog-actions>

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Base types for the rich-model modules (Inventory today): entities, aggregates, domain
+       events, repository and unit-of-work ports. No package references, and no reference to
+       the shared order model, so a module built on these alone cannot reach into Orders. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

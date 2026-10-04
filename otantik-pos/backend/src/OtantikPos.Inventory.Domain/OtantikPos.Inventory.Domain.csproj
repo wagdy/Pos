@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Inventory as its own module. It references the building blocks and nothing else: not the
+       shared order model, not the POS. It knows a sale only as catalog ids and a quantity (see
+       Recipes/StockRequirements), so it cannot come to depend on how POS orders work. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\shared\Otantik.BuildingBlocks\Otantik.BuildingBlocks.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,26 @@
+<Solution>
+  <Folder Name="/otantik-pos/" />
+  <Folder Name="/otantik-pos/backend/" />
+  <Folder Name="/otantik-pos/backend/src/">
+    <Project Path="otantik-pos/backend/src/OtantikPos.Inventory.Application/OtantikPos.Inventory.Application.csproj" />
+    <Project Path="otantik-pos/backend/src/OtantikPos.Inventory.Domain/OtantikPos.Inventory.Domain.csproj" />
+    <Project Path="otantik-pos/backend/src/OtantikPos.Node.Api/OtantikPos.Node.Api.csproj" />
+    <Project Path="otantik-pos/backend/src/OtantikPos.Node.Infrastructure/OtantikPos.Node.Infrastructure.csproj" />
+    <Project Path="otantik-pos/backend/src/OtantikPos.Ordering.Application/OtantikPos.Ordering.Application.csproj" />
+    <Project Path="otantik-pos/backend/src/OtantikPos.Ordering.Contracts/OtantikPos.Ordering.Contracts.csproj" />
+    <Project Path="otantik-pos/backend/src/OtantikPos.Ordering.Domain/OtantikPos.Ordering.Domain.csproj" />
+  </Folder>
+  <Folder Name="/otantik-pos/backend/tools/">
+    <Project Path="otantik-pos/backend/tools/OtantikPos.DevCloud/OtantikPos.DevCloud.csproj" />
+  </Folder>
+  <Folder Name="/shared/">
+    <Project Path="shared/Otantik.BuildingBlocks/Otantik.BuildingBlocks.csproj" />
+    <Project Path="shared/Otantik.SharedKernel/Otantik.SharedKernel.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Otantik.Domain.Tests/Otantik.Domain.Tests.csproj" />
+    <Project Path="tests/OtantikPos.Application.Tests/OtantikPos.Application.Tests.csproj" />
+    <Project Path="tests/OtantikPos.Node.Api.Tests/OtantikPos.Node.Api.Tests.csproj" />
+    <Project Path="tests/OtantikPos.Node.Infrastructure.Tests/OtantikPos.Node.Infrastructure.Tests.csproj" />
+  </Folder>
+</Solution>

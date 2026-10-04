@@ -1,0 +1,55 @@
+h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.why {
+  margin-top: 0;
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.phone-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.phone {
+  flex: 1;
+}
+
+.look-up {
+  height: 56px;
+}
+
+.full {
+  width: 100%;
+}
+
+.fee {
+  width: 200px;
+}
+
+.result {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 4px 0 16px;
+  padding: 12px;
+  border-radius: 12px;
+
+  &.found {
+    background: var(--mat-sys-primary-container);
+    color: var(--mat-sys-on-primary-container);
+  }
+
+  &.walk-in {
+    background: var(--mat-sys-surface-container-high);
+  }
+
+  &.offline {
+    background: #fff4e5;
+    color: #663c00;
+  }
+}

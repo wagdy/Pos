@@ -1,0 +1,299 @@
+@if (order(); as order) {
+  <div class="order-page">
+    <!-- The menu. Browsing works from the copy in memory, connection or not. -->
+    <section class="menu" aria-label="Menu">
+      <mat-form-field class="search" subscriptSizing="dynamic">
+        <mat-icon matPrefix>search</mat-icon>
+        <mat-label>Find an item</mat-label>
+        <input matInput [ngModel]="search()" (ngModelChange)="search.set($event)" autocomplete="off" />
+        @if (search()) {
+          <button matSuffix mat-icon-button (click)="search.set('')" aria-label="Clear search">
+            <mat-icon>close</mat-icon>
+          </button>
+        }
+      </mat-form-field>
+
+      @if (!editable()) {
+        <p class="menu-note">
+          {{ payable() ? 'This order has been handed over: nothing more can be added.' : 'This order is closed: nothing more can be added.' }}
+        </p>
+      } @else if (!auth.can(Permissions.OrderAddItems)) {
+        <p class="menu-note">Your role cannot add items.</p>
+      }
+
+      <ng-template #itemGrid let-items>
+        <div class="items">
+          @for (item of items; track item.id) {
+            <button
+              mat-stroked-button
+              class="item"
+              [class.sold-out]="soldOut(item)"
+              [disabled]="!canAddItems() || soldOut(item)"
+              (click)="pick(item)"
+            >
+              <span class="item-name">{{ item.name }}</span>
+              <span class="item-price">
+                @if (soldOut(item)) {
+                  Sold out
+                } @else if (item.variants.length > 0) {
+                  from {{ fromPrice(item) | money }}
+                } @else if (item.isPriceBasedOnAddons) {
+                  choose options
+                } @else {
+                  {{ item.price | money }}
+                }
+              </span>
+            </button>
+          }
+        </div>
+      </ng-template>
+
+      @if (search()) {
+        @if (searchResults().length === 0) {
+          <p class="menu-note">Nothing on the menu matches.</p>
+        } @else {
+          <ng-container *ngTemplateOutlet="itemGrid; context: { $implicit: searchResults() }" />
+        }
+      } @else if (menu.menu() === null) {
+        <mat-progress-bar mode="indeterminate" />
+      } @else if (menu.categories().length === 0 && menu.unfiled().length === 0) {
+        <p class="menu-note">
+          The menu is empty. It arrives from the delivery system; a new till needs to reach it once.
+        </p>
+      } @else {
+        <mat-tab-group mat-stretch-tabs="false" animationDuration="0ms">
+          @for (category of menu.categories(); track category.id) {
+            <mat-tab [label]="category.name">
+              @for (section of menu.sectionsFor(category.id); track section.subCategory?.id) {
+                <h3 class="section">{{ section.subCategory?.name }}</h3>
+                <ng-container *ngTemplateOutlet="itemGrid; context: { $implicit: section.items }" />
+              }
+            </mat-tab>
+          }
+          @if (menu.unfiled().length > 0) {
+            <mat-tab label="Other">
+              <ng-container *ngTemplateOutlet="itemGrid; context: { $implicit: menu.unfiled() }" />
+            </mat-tab>
+          }
+        </mat-tab-group>
+      }
+    </section>
+
+    <!-- The bill: the live order. -->
+    <mat-card class="bill" appearance="outlined">
+      <header class="bill-head">
+        <a mat-icon-button routerLink="/orders" aria-label="Back to open orders">
+          <mat-icon>arrow_back</mat-icon>
+        </a>
+        <div>
+          <h1>{{ label(order) }}</h1>
+          <span class="state" [class.closed]="!editable()">{{ statusText(order) }}</span>
+          @if (order.paymentStatus !== 'Pending' && order.closedAt) {
+            <span class="state">{{ order.paymentMethod }}</span>
+          }
+        </div>
+      </header>
+
+      @if (order.type !== 'DineIn' || order.customerPhone) {
+        <div class="customer">
+          <mat-icon>{{ order.userId ? 'verified_user' : 'person_outline' }}</mat-icon>
+          <div>
+            <div>
+              <strong>{{ order.customerName || 'Customer' }}</strong> · {{ order.customerPhone }}
+            </div>
+            <div class="sub">
+              {{ order.userId ? 'Loyalty account found' : 'Walk-in: no loyalty account linked' }}
+            </div>
+            @if (order.type === 'Delivery' && order.deliveryAddress) {
+              <div class="sub">{{ order.deliveryAddress }}</div>
+            }
+          </div>
+          @if (!order.userId && order.customerPhone && editable()) {
+            <button
+              *appCan="Permissions.OrderAddItems"
+              mat-button
+              (click)="lookUpCustomerAgain()"
+              [disabled]="busy() || !connectivity.cloudOnline()"
+              [matTooltip]="connectivity.cloudOnline() ? 'Look the number up in the delivery system' : 'The delivery system is offline'"
+            >
+              Look up again
+            </button>
+          }
+        </div>
+      }
+
+      <mat-divider />
+
+      <ul class="lines" aria-label="Items">
+        @for (item of order.orderItems; track item.publicId) {
+          <li class="line" [class.voided]="isVoided(item)">
+            <span class="qty">{{ item.quantity }}×</span>
+            <div class="what">
+              <div class="name">{{ itemName(item) }}</div>
+              @for (addOn of item.addOns; track addOn.id) {
+                <div class="detail">+ {{ addOn.name }}</div>
+              }
+              @if (item.notes) {
+                <div class="detail note">“{{ item.notes }}”</div>
+              }
+              @if (isVoided(item)) {
+                <div class="detail void">
+                  {{ item.voidType === 'AfterPayment' ? 'Refunded ' + (item.refundAmount | money) : 'Voided' }}
+                  @if (item.voidReason) {
+                    · {{ item.voidReason }}
+                  }
+                </div>
+              }
+            </div>
+            <span class="kitchen" [matTooltip]="isSentToKitchen(item) ? 'In the kitchen' : 'Not sent to the kitchen yet'">
+              <mat-icon [class.sent]="isSentToKitchen(item)">{{ isSentToKitchen(item) ? 'soup_kitchen' : 'schedule' }}</mat-icon>
+            </span>
+            <span class="amount">{{ lineTotal(item) | money }}</span>
+            @if (canVoidItem(item)) {
+              <button mat-icon-button (click)="voidItem(item)" [disabled]="busy() || !connectivity.nodeOnline()" aria-label="Void this item">
+                <mat-icon>remove_circle_outline</mat-icon>
+              </button>
+            } @else {
+              <span class="no-action"></span>
+            }
+          </li>
+        } @empty {
+          <li class="empty">Nothing on the bill yet. Pick items from the menu.</li>
+        }
+      </ul>
+
+      <mat-divider />
+
+      <dl class="totals">
+        <dt>Items</dt>
+        <dd class="amount">{{ billedSubtotal(order) | money }}</dd>
+        @if (order.deliveryFee > 0) {
+          <dt>Delivery</dt>
+          <dd class="amount">{{ order.deliveryFee | money }}</dd>
+        }
+        @if (order.discountAmount > 0) {
+          <dt>Discount</dt>
+          <dd class="amount">−{{ order.discountAmount | money }}</dd>
+        }
+        <dt>Tax</dt>
+        <dd class="amount">{{ order.taxAmount | money }}</dd>
+        @if (order.pointsRedeemed > 0) {
+          <dt>
+            {{ order.pointsRedeemed }} points
+            @if (payable()) {
+              <button
+                *appCan="Permissions.OrderApplyLoyalty"
+                mat-icon-button
+                class="inline"
+                (click)="removePoints()"
+                [disabled]="busy() || !connectivity.nodeOnline()"
+                aria-label="Remove the points"
+              >
+                <mat-icon>close</mat-icon>
+              </button>
+            }
+          </dt>
+          <dd class="amount">−{{ order.pointsDiscountAmount | money }}</dd>
+        }
+        <dt class="total">Total</dt>
+        <dd class="total amount">{{ order.totalAmount | money }}</dd>
+        @if (order.refundedAmount > 0) {
+          <dt class="refund">Refunded</dt>
+          <dd class="refund amount">−{{ order.refundedAmount | money }}</dd>
+        }
+        @if (order.pointsRefunded > 0) {
+          <dt class="refund">Points returned</dt>
+          <dd class="refund amount">{{ order.pointsRefunded }}</dd>
+        }
+      </dl>
+
+      @if (checkoutBlockedByPoints() && payable()) {
+        <p class="blocked" role="status">
+          <mat-icon>cloud_off</mat-icon>
+          Points on this bill are spent from the customer's account, which needs the delivery system. Remove them to take
+          payment now, or wait until it is back.
+        </p>
+      }
+
+      <div class="actions">
+        @if (editable()) {
+          <button
+            *appCan="Permissions.OrderSendToKitchen"
+            mat-stroked-button
+            (click)="sendToKitchen()"
+            [disabled]="busy() || unsent().length === 0 || !connectivity.nodeOnline()"
+          >
+            <mat-icon>soup_kitchen</mat-icon>
+            Send to kitchen
+            @if (unsent().length > 0) {
+              ({{ unsent().length }})
+            }
+          </button>
+        }
+
+        @if (payable()) {
+          @if (order.userId && order.pointsRedeemed === 0) {
+            <button
+              *appCan="Permissions.OrderApplyLoyalty"
+              mat-stroked-button
+              (click)="applyPoints()"
+              [disabled]="busy() || pointsBlocked() || live().length === 0"
+              [matTooltip]="pointsBlocked() ? 'Points need the delivery system, which is offline' : ''"
+            >
+              <mat-icon>loyalty</mat-icon>
+              Use points
+            </button>
+          }
+
+          <button
+            *appCan="Permissions.OrderCheckout"
+            mat-flat-button
+            class="pay"
+            (click)="checkout()"
+            [disabled]="busy() || live().length === 0 || checkoutBlockedByPoints() || !connectivity.nodeOnline()"
+          >
+            <mat-icon>payments</mat-icon>
+            Checkout {{ order.totalAmount | money }}
+          </button>
+        }
+
+        @if (settled()) {
+          <button
+            *appCan="Permissions.ReceiptPrintFinal"
+            mat-flat-button
+            (click)="printReceipt()"
+            [disabled]="busy() || !connectivity.nodeOnline()"
+          >
+            <mat-icon>print</mat-icon>
+            Print receipt
+          </button>
+        }
+
+        @if (canVoidOrder()) {
+          <button mat-button class="danger" (click)="voidOrder()" [disabled]="busy() || !connectivity.nodeOnline()">
+            <mat-icon>{{ orderVoidType() === 'AfterPayment' ? 'currency_exchange' : 'delete_outline' }}</mat-icon>
+            {{ orderVoidType() === 'AfterPayment' ? 'Refund order' : 'Void order' }}
+          </button>
+        }
+      </div>
+
+      @if (!auth.canAny(MoneyPermissions)) {
+        <p class="captain-note">
+          <mat-icon>info</mat-icon>
+          Payments, receipts, points and voids are done by a cashier or manager.
+        </p>
+      }
+
+      @if (busy()) {
+        <mat-progress-bar mode="indeterminate" class="busy" />
+      }
+    </mat-card>
+  </div>
+} @else if (loadError(); as message) {
+  <mat-card class="missing" appearance="outlined">
+    <p>{{ message }}</p>
+    <a mat-flat-button routerLink="/orders">Back to open orders</a>
+  </mat-card>
+} @else {
+  <mat-progress-bar mode="indeterminate" />
+}

@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Runs on Microsoft.Testing.Platform, not VSTest. On the .NET 10 SDK, dotnet test only
+       runs it with the opt-in in the repository's global.json. The test project is also an
+       executable, so `dotnet run` runs the tests without dotnet test at all. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="4.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\shared\Otantik.SharedKernel\Otantik.SharedKernel.csproj" />
+    <ProjectReference Include="..\..\otantik-pos\backend\src\OtantikPos.Inventory.Domain\OtantikPos.Inventory.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

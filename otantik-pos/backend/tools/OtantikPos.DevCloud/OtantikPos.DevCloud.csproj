@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- A stand-in delivery system for running the POS on a laptop: the test suite's fake, served
+       on a fixed port, with a few endpoints to play the cloud's part. Development only; never
+       deployed. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OtantikPos.Node.Infrastructure\OtantikPos.Node.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\..\..\tests\OtantikPos.Node.Infrastructure.Tests\FakeDeliverySystem.cs" Link="FakeDeliverySystem.cs" />
+  </ItemGroup>
+
+</Project>

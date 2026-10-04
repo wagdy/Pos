@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- What the till does to an order, as rules over the shared Order. The shared model stays
+       the delivery system's plain classes, so every rule about changing an order safely
+       lives here. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\shared\Otantik.SharedKernel\Otantik.SharedKernel.csproj" />
+    <ProjectReference Include="..\..\..\..\shared\Otantik.BuildingBlocks\Otantik.BuildingBlocks.csproj" />
+  </ItemGroup>
+
+</Project>

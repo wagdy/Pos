@@ -1,0 +1,45 @@
+<header class="head">
+  <h1>Staff</h1>
+  <p class="intro">
+    Staff accounts are made in the delivery system's Staff tab and arrive here on their own. Give each one a PIN to
+    sign in to this till.
+  </p>
+</header>
+
+@if (loading() && staff().length === 0) {
+  <mat-progress-bar mode="indeterminate" />
+}
+
+@if (error(); as message) {
+  <p class="error" role="alert">
+    {{ message }}
+    <button mat-button (click)="load()">Try again</button>
+  </p>
+}
+
+<div class="list">
+  @for (member of sorted(); track member.id) {
+    <mat-card appearance="outlined" class="member">
+      <div class="who">
+        <strong>{{ member.fullName }}</strong>
+        <span class="role">
+          {{ roleLabel(member.role) }}
+          @if (member.isLocalOnly) {
+            · this till's first manager
+          }
+        </span>
+      </div>
+      <span class="pin" [class.missing]="!member.hasPin">
+        <mat-icon>{{ member.hasPin ? 'lock' : 'lock_open' }}</mat-icon>
+        {{ member.hasPin ? 'Has a PIN' : 'No PIN yet' }}
+      </span>
+      <button mat-stroked-button (click)="setPin(member)">
+        {{ member.hasPin ? 'Change PIN' : 'Set PIN' }}
+      </button>
+    </mat-card>
+  } @empty {
+    @if (!loading()) {
+      <p class="none">No staff yet. They arrive from the delivery system once this till is connected to it.</p>
+    }
+  }
+</div>

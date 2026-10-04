@@ -1,0 +1,138 @@
+.sign-in {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  box-sizing: border-box;
+  background: var(--mat-sys-surface-container);
+}
+
+.panel {
+  width: min(560px, 100%);
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+
+  h1 {
+    margin: 0;
+    font: var(--mat-sys-headline-small);
+  }
+}
+
+.logo {
+  color: var(--mat-sys-primary);
+  transform: scale(1.4);
+}
+
+h2 {
+  font: var(--mat-sys-title-medium);
+  margin: 8px 0 16px;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--mat-sys-tertiary-container);
+  color: var(--mat-sys-on-tertiary-container);
+}
+
+.people {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.person {
+  height: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin: 0 auto;
+  border-radius: 50%;
+  background: var(--mat-sys-primary-container);
+  color: var(--mat-sys-on-primary-container);
+  font-weight: 600;
+}
+
+.name {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pin {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+}
+
+.who {
+  justify-self: start;
+}
+
+.dots {
+  display: flex;
+  gap: 12px;
+}
+
+.dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--mat-sys-outline);
+
+  &.filled {
+    background: var(--mat-sys-primary);
+    border-color: var(--mat-sys-primary);
+  }
+}
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 80px);
+  gap: 10px;
+
+  button {
+    height: 64px;
+    font: var(--mat-sys-headline-small);
+  }
+}
+
+.error {
+  color: var(--mat-sys-error);
+  margin: 0;
+  text-align: center;
+}
+
+.hint {
+  color: var(--mat-sys-on-surface-variant);
+}
+
+mat-progress-bar {
+  width: 100%;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}

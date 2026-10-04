@@ -1,0 +1,6 @@
+# OS cruft
+.DS_Store
+
+# The till install: its secrets and its database backups stay on the till machine.
+otantik-pos/deploy/.env
+otantik-pos/deploy/backups/

@@ -1,0 +1,111 @@
+<header class="head">
+  <h1>Open orders</h1>
+
+  <mat-button-toggle-group
+    [value]="filter()"
+    (change)="filter.set($event.value)"
+    hideSingleSelectionIndicator
+    aria-label="Show"
+  >
+    <mat-button-toggle value="all">All ({{ counts().all }})</mat-button-toggle>
+    <mat-button-toggle value="DineIn">Dine-in ({{ counts().DineIn }})</mat-button-toggle>
+    <mat-button-toggle value="Takeaway">Takeaway ({{ counts().Takeaway }})</mat-button-toggle>
+    <mat-button-toggle value="Delivery">Delivery ({{ counts().Delivery }})</mat-button-toggle>
+  </mat-button-toggle-group>
+
+  <span class="spacer"></span>
+
+  <button
+    *appCan="Permissions.OrderCreate"
+    mat-flat-button
+    class="new"
+    (click)="newOrder()"
+    [disabled]="creating() || !connectivity.nodeOnline()"
+  >
+    <mat-icon>add</mat-icon>
+    New order
+  </button>
+</header>
+
+@if (!store.loaded()) {
+  <mat-progress-bar mode="indeterminate" />
+}
+
+<div class="table-wrap">
+  <table mat-table [dataSource]="rows()" class="orders" aria-label="Open orders">
+    <ng-container matColumnDef="order">
+      <th mat-header-cell *matHeaderCellDef>Order</th>
+      <td mat-cell *matCellDef="let order">
+        <span class="order-cell">
+          <mat-icon class="type-icon">{{ typeIcon(order) }}</mat-icon>
+          <span>
+            <span class="label">{{ label(order) }}</span>
+            @if (order.type !== 'DineIn' && order.customerName) {
+              <span class="sub">{{ order.customerPhone }}</span>
+            }
+          </span>
+          @if (store.arrived().has(order.publicId)) {
+            <span class="new-badge" matTooltip="Arrived since this till last looked">NEW</span>
+          }
+        </span>
+      </td>
+    </ng-container>
+
+    <ng-container matColumnDef="items">
+      <th mat-header-cell *matHeaderCellDef>Items</th>
+      <td mat-cell *matCellDef="let order">{{ liveCount(order) }}</td>
+    </ng-container>
+
+    <ng-container matColumnDef="kitchen">
+      <th mat-header-cell *matHeaderCellDef>Kitchen</th>
+      <td mat-cell *matCellDef="let order">
+        @if (unsentCount(order) > 0) {
+          <span class="pill warn">{{ unsentCount(order) }} not sent</span>
+        } @else if (liveCount(order) > 0) {
+          <span class="pill ok">Sent</span>
+        } @else {
+          <span class="pill">Empty</span>
+        }
+      </td>
+    </ng-container>
+
+    <ng-container matColumnDef="total">
+      <th mat-header-cell *matHeaderCellDef class="amount">Total</th>
+      <td mat-cell *matCellDef="let order" class="amount">{{ order.totalAmount | money }}</td>
+    </ng-container>
+
+    <ng-container matColumnDef="status">
+      <th mat-header-cell *matHeaderCellDef>Status</th>
+      <td mat-cell *matCellDef="let order">
+        <span class="pill">{{ order.status }}</span>
+        @if (order.pointsRedeemed > 0) {
+          <span class="pill points" matTooltip="Loyalty points applied">{{ order.pointsRedeemed }} pts</span>
+        }
+      </td>
+    </ng-container>
+
+    <ng-container matColumnDef="age">
+      <th mat-header-cell *matHeaderCellDef>Opened</th>
+      <td mat-cell *matCellDef="let order">{{ age(order) }}</td>
+    </ng-container>
+
+    <tr mat-header-row *matHeaderRowDef="columns; sticky: true"></tr>
+    <tr
+      mat-row
+      *matRowDef="let order; columns: columns"
+      class="row"
+      [class.arrived]="store.arrived().has(order.publicId)"
+      (click)="open(order)"
+      (keydown.enter)="open(order)"
+      tabindex="0"
+    ></tr>
+
+    <tr class="mat-row" *matNoDataRow>
+      <td class="empty" [attr.colspan]="columns.length">
+        @if (store.loaded()) {
+          No open orders{{ filter() === 'all' ? '' : ' of this kind' }}.
+        }
+      </td>
+    </tr>
+  </table>
+</div>

@@ -1,0 +1,274 @@
+.order-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 440px);
+  gap: 16px;
+  align-items: start;
+}
+
+.menu {
+  min-width: 0;
+}
+
+.search {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.menu-note {
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.section {
+  margin: 16px 0 8px;
+  font: var(--mat-sys-title-small);
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  padding-top: 8px;
+}
+
+.item {
+  height: 84px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  text-align: start;
+  white-space: normal;
+  line-height: 1.25;
+
+  &.sold-out {
+    opacity: 0.55;
+  }
+}
+
+.item-name {
+  display: block;
+  font: var(--mat-sys-title-small);
+}
+
+.item-price {
+  display: block;
+  margin-top: 4px;
+  font: var(--mat-sys-body-small);
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.bill {
+  position: sticky;
+  top: 80px;
+  padding: 8px 16px 16px;
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+}
+
+.bill-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+
+  h1 {
+    margin: 6px 0 4px;
+    font: var(--mat-sys-title-large);
+  }
+}
+
+.state {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font: var(--mat-sys-label-medium);
+  background: #e6f4ea;
+  color: var(--till-ok);
+
+  &.closed {
+    background: var(--mat-sys-surface-container-highest);
+    color: var(--mat-sys-on-surface);
+  }
+}
+
+.customer {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 0;
+
+  > div {
+    flex: 1;
+  }
+}
+
+.sub {
+  color: var(--mat-sys-on-surface-variant);
+  font: var(--mat-sys-body-small);
+}
+
+.lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.line {
+  display: grid;
+  grid-template-columns: 36px 1fr 28px auto 40px;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--mat-sys-outline-variant);
+
+  &.voided {
+    color: var(--mat-sys-on-surface-variant);
+
+    .name,
+    .amount {
+      text-decoration: line-through;
+    }
+  }
+}
+
+.qty {
+  font: var(--mat-sys-title-small);
+}
+
+.name {
+  font: var(--mat-sys-body-large);
+}
+
+.detail {
+  font: var(--mat-sys-body-small);
+  color: var(--mat-sys-on-surface-variant);
+
+  &.note {
+    font-style: italic;
+  }
+
+  &.void {
+    color: var(--mat-sys-error);
+  }
+}
+
+.kitchen mat-icon {
+  font-size: 20px;
+  width: 20px;
+  height: 20px;
+  color: var(--till-warn);
+
+  &.sent {
+    color: var(--till-ok);
+  }
+}
+
+.empty {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.totals {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  margin: 12px 0;
+
+  dt,
+  dd {
+    margin: 0;
+    display: flex;
+    align-items: center;
+  }
+
+  dd {
+    justify-content: flex-end;
+  }
+
+  .total {
+    font: var(--mat-sys-title-large);
+    margin-top: 6px;
+  }
+
+  .refund {
+    color: var(--mat-sys-error);
+  }
+}
+
+.inline {
+  width: 28px;
+  height: 28px;
+  padding: 2px;
+  --mat-icon-button-state-layer-size: 28px;
+
+  mat-icon {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+  }
+}
+
+.blocked,
+.captain-note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font: var(--mat-sys-body-medium);
+}
+
+.blocked {
+  background: #fff4e5;
+  color: #663c00;
+}
+
+.captain-note {
+  background: var(--mat-sys-tertiary-container);
+  color: var(--mat-sys-on-tertiary-container);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+
+  button {
+    height: 48px;
+  }
+
+  .pay {
+    flex: 1 1 100%;
+    height: 56px;
+    font: var(--mat-sys-title-medium);
+  }
+
+  .danger {
+    color: var(--mat-sys-error);
+  }
+}
+
+.busy {
+  margin-top: 12px;
+}
+
+.missing {
+  max-width: 480px;
+  margin: 48px auto;
+  padding: 24px;
+  text-align: center;
+}
+
+@media (max-width: 960px) {
+  .order-page {
+    grid-template-columns: 1fr;
+  }
+
+  .bill {
+    position: static;
+    max-height: none;
+    order: -1;
+  }
+}

@@ -1,0 +1,8 @@
+bin/
+obj/
+*.user
+.vs/
+
+# The till's Angular app, built here by otantik-pos/node-frontend (npm run build) and served by
+# the API. Build output, rebuilt from source.
+src/OtantikPos.Node.Api/wwwroot/
