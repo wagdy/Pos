@@ -33,7 +33,7 @@ public static class TillOperations
     {
         var phone = Clean(details.CustomerPhone);
 
-        if (details.Type == OrderType.DineIn && Clean(details.TableNumber) is null)
+        if (details.Type == OrderType.DineIn && TableNumbers.Normalize(details.TableNumber) is null)
             throw new DomainException("Enter the table number.");
         if (OrderRules.RequiresCustomerPhone(details.Type) && phone is null)
             throw new DomainException("Enter the customer's mobile number.");
@@ -45,7 +45,7 @@ public static class TillOperations
         return new Order
         {
             Type = details.Type,
-            TableNumber = details.Type == OrderType.DineIn ? Clean(details.TableNumber) : null,
+            TableNumber = details.Type == OrderType.DineIn ? TableNumbers.Normalize(details.TableNumber) : null,
             CustomerName = Clean(details.CustomerName) ?? string.Empty,
             CustomerPhone = phone ?? string.Empty,
             // Required by the delivery database, so never null; empty unless it is a delivery.

@@ -64,8 +64,10 @@
         <mat-tab-group mat-stretch-tabs="false" animationDuration="0ms">
           @for (category of menu.categories(); track category.id) {
             <mat-tab [label]="category.name">
-              @for (section of menu.sectionsFor(category.id); track section.subCategory?.id) {
-                <h3 class="section">{{ section.subCategory?.name }}</h3>
+              @for (section of menu.sectionsFor(category); track section.subCategory?.id) {
+                @if (section.subCategory) {
+                  <h3 class="section">{{ section.subCategory.name }}</h3>
+                }
                 <ng-container *ngTemplateOutlet="itemGrid; context: { $implicit: section.items }" />
               }
             </mat-tab>
@@ -89,7 +91,7 @@
           <h1>{{ label(order) }}</h1>
           <span class="state" [class.closed]="!editable()">{{ statusText(order) }}</span>
           @if (order.paymentStatus !== 'Pending' && order.closedAt) {
-            <span class="state">{{ order.paymentMethod }}</span>
+            <span class="state">{{ paymentMethodLabel(order.paymentMethod) }}</span>
           }
         </div>
       </header>

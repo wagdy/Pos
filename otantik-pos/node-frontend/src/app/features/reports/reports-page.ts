@@ -10,7 +10,7 @@ import { Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { DayReport, Order, OrderType, PaymentMethod } from '../../core/api/models';
 import { errorMessage } from '../../core/http/error-message';
-import { isSettled, orderLabel, statusText } from '../../core/orders/order-rules';
+import { isSettled, orderLabel, paymentMethodLabel, statusText } from '../../core/orders/order-rules';
 import { OrdersStore } from '../../core/orders/orders.store';
 import { ReportsApi } from '../../core/reports/reports.api';
 import { MoneyPipe } from '../../core/ui/money.pipe';
@@ -114,10 +114,10 @@ export class ReportsPage {
   }
 
   protected paidWith(order: Order): string {
-    return isSettled(order) ? methodLabel(order.paymentMethod) : '';
+    return isSettled(order) ? paymentMethodLabel(order.paymentMethod) : '';
   }
 
-  protected methodLabel = methodLabel;
+  protected methodLabel = paymentMethodLabel;
 
   protected typeLabel(type: OrderType): string {
     return type === 'DineIn' ? 'Dine-in' : type;
@@ -149,10 +149,6 @@ export class ReportsPage {
       void this.load(this.date());
     }, 1000);
   }
-}
-
-function methodLabel(method: PaymentMethod): string {
-  return method === 'Visa' ? 'Card' : method;
 }
 
 // yyyy-MM-dd plus or minus some days, in UTC so no time zone can move it.

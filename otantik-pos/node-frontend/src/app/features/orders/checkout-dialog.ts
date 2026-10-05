@@ -56,7 +56,7 @@ export interface CheckoutDialogData {
       </mat-button-toggle-group>
 
       @if (method() === 'Cash') {
-        <mat-form-field class="tendered">
+        <mat-form-field class="tendered" floatLabel="always">
           <mat-label>Cash received</mat-label>
           <span matTextPrefix>L.E&nbsp;</span>
           <input matInput type="number" min="0" step="any" [ngModel]="tendered()" (ngModelChange)="tendered.set($event)" />

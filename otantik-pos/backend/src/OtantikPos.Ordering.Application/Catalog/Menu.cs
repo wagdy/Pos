@@ -8,7 +8,8 @@ namespace OtantikPos.Ordering.Application.Catalog;
 
 // The menu the till takes orders from: the delivery system's own catalog entities as replicated
 // down, so an item, its variants and its add-ons have the same ids and JSON here as in the
-// delivery app. Flat lists; the till groups them by CategoryId and SubCategoryId.
+// delivery app. Flat lists; the till files each item under the category named by its Category
+// (free text, as in the delivery app), and groups it there by SubCategoryId.
 //
 // Items switched off for now (IsAvailable false) are included, so the till can show them as
 // sold out rather than have them vanish mid-shift. Deleted ones are not.

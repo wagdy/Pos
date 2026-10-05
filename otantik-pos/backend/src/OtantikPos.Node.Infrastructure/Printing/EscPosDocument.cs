@@ -1,4 +1,5 @@
 using System.Text;
+using Otantik.SharedKernel.Orders;
 
 namespace OtantikPos.Node.Infrastructure.Printing;
 
@@ -6,7 +7,8 @@ namespace OtantikPos.Node.Infrastructure.Printing;
 //
 // Text goes out in a single-byte code page (PrinterOptions.CodePage), so a character that page
 // lacks prints as '?'. Arabic is one of those: printing Arabic names needs the document
-// rendered to a bitmap and sent as a raster image (GS v 0) instead of text.
+// rendered to a bitmap and sent as a raster image (GS v 0) instead of text. Arabic digits are
+// the exception, printed as 0-9 (Line).
 internal sealed class EscPosDocument
 {
     private const byte Esc = 0x1B;
@@ -37,7 +39,9 @@ internal sealed class EscPosDocument
 
     public EscPosDocument Line(string text = "")
     {
-        _output.Write(_encoding.GetBytes(text + "\n"));
+        // Arabic digits as 0-9, which every code page has: a phone number or a note typed on an
+        // Arabic keyboard would otherwise print as '?'.
+        _output.Write(_encoding.GetBytes(TableNumbers.WesternDigits(text) + "\n"));
         return this;
     }
 

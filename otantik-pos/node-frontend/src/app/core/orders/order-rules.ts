@@ -1,4 +1,4 @@
-import { MenuItem, Order, OrderItem, OrderStatus, OrderType, VoidType } from '../api/models';
+import { MenuItem, Order, OrderItem, OrderStatus, OrderType, PaymentMethod, VoidType } from '../api/models';
 import { Permission, Permissions } from '../auth/permissions';
 
 // The shared kernel's OrderRules and OrderStatuses, mirrored so the till can show the right
@@ -91,6 +91,11 @@ export function billedSubtotal(order: Order): number {
   return order.orderItems
     .filter((item) => item.voidType === null || item.voidType === 'AfterPayment')
     .reduce((sum, item) => sum + lineTotal(item), 0);
+}
+
+// 'Visa' is only the stored name: the card machine takes any card.
+export function paymentMethodLabel(method: PaymentMethod): string {
+  return method === 'Visa' ? 'Card' : method;
 }
 
 export function orderLabel(order: Order): string {

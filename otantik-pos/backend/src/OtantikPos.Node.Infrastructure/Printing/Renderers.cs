@@ -78,7 +78,8 @@ internal static class ReceiptRenderer
             doc.Columns($"Points ({order.PointsRedeemed})", "-" + Money(order.PointsDiscountAmount));
 
         doc.Bold(true).Tall().Columns("TOTAL", Money(order.TotalAmount)).Normal().Bold(false);
-        doc.Columns($"Paid ({order.PaymentMethod})", Money(order.TotalAmount));
+        // Visa is only the stored name: the card machine takes any card.
+        doc.Columns($"Paid ({(order.PaymentMethod == PaymentMethod.Visa ? "Card" : order.PaymentMethod.ToString())})", Money(order.TotalAmount));
         if (order.RefundedAmount > 0)
             doc.Columns("Refunded", "-" + Money(order.RefundedAmount));
 

@@ -80,6 +80,7 @@ describe('order rules, as the shared kernel has them', () => {
       isAvailable: true,
       isPriceBasedOnAddons: false,
       priceNote: null,
+      category: 'Mains',
       subCategoryId: 11,
       menuItemAddOns: [],
       variants: [{ id: 101, menuItemId: 10, name: 'Kilo tray', nameAr: null, price: 400, displayOrder: 0, isAvailable: true }],

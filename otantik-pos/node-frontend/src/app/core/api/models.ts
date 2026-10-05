@@ -129,6 +129,9 @@ export interface MenuItem {
   isAvailable: boolean;
   isPriceBasedOnAddons: boolean;
   priceNote: string | null;
+  // The category's name, as free text: an item belongs to the category of that name. The
+  // sub-category, when there is one, only groups items within it.
+  category: string;
   subCategoryId: number | null;
   menuItemAddOns: MenuItemAddOn[];
   variants: MenuItemVariant[];

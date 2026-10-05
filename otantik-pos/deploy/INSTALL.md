@@ -58,7 +58,9 @@ the machine, by itself. Check it is running:
 docker compose ps
 ```
 
-All three should say `running` (the database also `healthy`).
+All three should say `running` (the database also `healthy`). On the very first start, the
+till's log (`docker compose logs till`) shows one `Failed executing DbCommand` line about
+`__EFMigrationsHistory`: that is the empty database being set up, and happens only once.
 
 ## 4. First sign-in, and the staff's PINs
 
@@ -71,7 +73,9 @@ All three should say `running` (the database also `healthy`).
    listed once the till is connected (step 5). Give each a PIN with **Set PIN**. Captains do not
    use the till: they take table orders on their phones.
 5. Once a real manager has a PIN, empty `BOOTSTRAP_MANAGER_PIN` in `.env` and run
-   `docker compose up -d` again.
+   `docker compose up -d` again. The first **Manager** then stops working and leaves the
+   sign-in screen, so the PIN typed into `.env` at setup opens nothing. It stays until a manager
+   from the delivery system has a PIN, so the till is never left with no manager.
 
 On a tablet, add the page to the home screen so it opens like an app.
 
@@ -110,6 +114,10 @@ docker compose stop till
 docker compose exec -T db pg_restore -U otantik -d otantik_pos_node --clean --if-exists < backups/till-YYYY-MM-DD.dump
 docker compose start till
 ```
+
+The till comes back as it was on that day. Orders taken since then that had already reached the
+delivery system come back by themselves when it reconnects; only what never reached it (taken
+while the internet was down, after the backup) is lost.
 
 ## 8. Updating
 

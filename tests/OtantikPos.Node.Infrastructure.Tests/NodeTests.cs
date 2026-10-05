@@ -49,6 +49,40 @@ public class NodeTests
         Assert.Equal(12.5m, await node.Db(db => db.Settings.Select(s => s.RedemptionValuePer100Points).SingleAsync()));
     }
 
+    // INSTALL.md, step 4: once a real manager has a PIN, the first manager's PIN comes out of .env
+    // and the till restarts. The account it made must stop working then; its PIN was typed into a
+    // settings file at setup.
+    [Fact]
+    public async Task The_first_manager_is_retired_once_its_pin_is_out_of_the_settings()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        using var scope = node.Scope();
+        var staff = node.Service<StaffDirectory>(scope);
+        var ct = TestContext.Current.CancellationToken;
+
+        // The first start: nobody has a PIN, so the settings make a manager.
+        await staff.EnsureBootstrapManagerAsync("Manager", "1234", ct);
+        var first = Assert.Single(await staff.GetSignInListAsync(ct));
+        Assert.True(first.IsLocalOnly);
+
+        // Its PIN out of the settings, but it is the only manager who can sign in: kept.
+        await staff.SetPinAsync("staff-cashier", "2468", ct);
+        await staff.EnsureBootstrapManagerAsync("Manager", null, ct);
+        Assert.NotNull((await staff.SignInAsync(first.Id, "1234", ct)).Staff);
+
+        // Omar, from the delivery system, has a PIN: with the PIN still in the settings, kept...
+        await staff.SetPinAsync("staff-manager", "1357", ct);
+        await staff.EnsureBootstrapManagerAsync("Manager", "1234", ct);
+        Assert.Contains(await staff.GetSignInListAsync(ct), s => s.Id == first.Id);
+
+        // ...and once it is out of them, retired.
+        await staff.EnsureBootstrapManagerAsync("Manager", null, ct);
+        Assert.DoesNotContain(await staff.GetSignInListAsync(ct), s => s.Id == first.Id);
+        Assert.Null((await staff.SignInAsync(first.Id, "1234", ct)).Staff);
+        Assert.Null(await staff.GetActiveRoleAsync(first.Id, ct));
+    }
+
     // The whole till path on real infrastructure: a dine-in order taken, printed in the
     // kitchen over TCP, paid, its stock deducted through the recipes by the outbox, a receipt
     // printed, and the order pushed to the delivery system as the shared model's JSON.
@@ -97,6 +131,38 @@ public class NodeTests
         Assert.Equal(OrderType.DineIn, pushed.Type);
         Assert.Equal(2, pushed.OrderItems.Count);
         Assert.DoesNotContain("\"user\"", node.Cloud.PushedOrders[order.PublicId]);
+    }
+
+    // A tablet with an Arabic keyboard types ١٢ for table 12. The printer's code page has no
+    // Arabic, so the kitchen got "Table ?"; the digits are the same numbers as 0-9.
+    [Fact]
+    public async Task A_table_number_typed_in_arabic_digits_prints_as_digits()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+
+        var order = await node.Send(new OpenOrderCommand(OrderType.DineIn, TableNumber: "١٢"));
+        await node.Send(new AddOrderItemCommand(order.PublicId, FakeDeliverySystem.Burger, 1));
+        await node.Send(new SendToKitchenCommand(order.PublicId));
+
+        Assert.True(await TestNode.WaitFor(() => Task.FromResult(!node.Kitchen.Printed.IsEmpty)));
+        Assert.Contains("Table 12", node.Kitchen.Printed.Single());
+    }
+
+    // The cashier chose Card; Visa is only the name the payment is stored under.
+    [Fact]
+    public async Task A_card_payment_reads_card_on_the_receipt()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+
+        var order = await node.Send(new OpenOrderCommand(OrderType.DineIn, TableNumber: "3"));
+        await node.Send(new AddOrderItemCommand(order.PublicId, FakeDeliverySystem.Burger, 1));
+        await node.Send(new CheckoutCommand(order.PublicId, PaymentMethod.Visa));
+        await node.Send(new PrintFinalReceiptCommand(order.PublicId));
+
+        Assert.True(await TestNode.WaitFor(() => Task.FromResult(!node.Receipts.Printed.IsEmpty)));
+        Assert.Contains("Paid (Card)", node.Receipts.Printed.Single());
     }
 
     // A captain's order taken in the delivery app reaches the till over SignalR, lands as the

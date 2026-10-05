@@ -135,7 +135,11 @@ public sealed class StaffDirectory(NodeDbContext db, ILogger<StaffDirectory> log
     public async Task EnsureBootstrapManagerAsync(string? name, string? pin, CancellationToken cancellationToken)
     {
         if (await db.Staff.AnyAsync(s => s.PinHash != null, cancellationToken))
+        {
+            if (string.IsNullOrWhiteSpace(pin))
+                await RetireBootstrapManagerAsync(cancellationToken);
             return;
+        }
 
         if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(pin))
         {
@@ -149,5 +153,31 @@ public sealed class StaffDirectory(NodeDbContext db, ILogger<StaffDirectory> log
         var created = await db.Staff.SingleAsync(s => s.IsLocalOnly && s.FullName == name.Trim(), cancellationToken);
         await SetPinAsync(created.Id, pin, cancellationToken);
         logger.LogWarning("Created a local manager, {Name}, from Auth:BootstrapManager. Remove the PIN from configuration now.", name);
+    }
+
+    // Its PIN taken out of the configuration (INSTALL.md, step 4) and a manager from the delivery
+    // system able to sign in instead: the account the configuration made stops working. Its PIN
+    // was typed into a settings file at setup, and kept, it would stay a manager's PIN for good.
+    // Never while it is the only manager who can sign in.
+    private async Task RetireBootstrapManagerAsync(CancellationToken cancellationToken)
+    {
+        var bootstrap = await db.Staff.Where(s => s.IsLocalOnly && s.IsActive).ToListAsync(cancellationToken);
+        if (bootstrap.Count == 0)
+            return;
+
+        var aManagerCanSignIn = await db.Staff.AnyAsync(
+            s => !s.IsLocalOnly && s.IsActive && s.PinHash != null && (s.Role == UserRole.Manager || s.Role == UserRole.Admin),
+            cancellationToken);
+        if (!aManagerCanSignIn)
+            return;
+
+        foreach (var staff in bootstrap)
+        {
+            staff.IsActive = false;
+            staff.PinHash = null;
+        }
+        await db.SaveChangesAsync(cancellationToken);
+        logger.LogWarning("Retired this till's first manager, {Name}: its PIN is out of the configuration and a manager from the delivery system has one.",
+            string.Join(", ", bootstrap.Select(s => s.FullName)));
     }
 }

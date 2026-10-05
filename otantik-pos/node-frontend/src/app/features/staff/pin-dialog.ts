@@ -1,6 +1,7 @@
 import { Component, inject } from '@angular/core';
 import { AbstractControl, FormControl, FormGroup, ReactiveFormsModule, ValidationErrors, Validators } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
+import { ErrorStateMatcher } from '@angular/material/core';
 import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
@@ -25,7 +26,14 @@ import { TillStaff } from '../../core/staff/staff.api';
         </mat-form-field>
         <mat-form-field>
           <mat-label>The same PIN again</mat-label>
-          <input matInput type="password" formControlName="repeat" inputmode="numeric" autocomplete="new-password" />
+          <input
+            matInput
+            type="password"
+            formControlName="repeat"
+            inputmode="numeric"
+            autocomplete="new-password"
+            [errorStateMatcher]="repeatErrors"
+          />
           @if (form.hasError('mismatch') && form.controls.repeat.touched) {
             <mat-error>The two PINs are not the same.</mat-error>
           }
@@ -56,6 +64,12 @@ export class PinDialog {
     },
     { validators: (group: AbstractControl): ValidationErrors | null => (group.value.pin === group.value.repeat ? null : { mismatch: true }) },
   );
+
+  // A field shows its errors only when it is itself invalid, and a mismatch is the form's
+  // error, not the second field's: without this, Save PIN stayed greyed out with no reason given.
+  protected readonly repeatErrors: ErrorStateMatcher = {
+    isErrorState: (control) => !!control?.touched && (control.invalid || this.form.hasError('mismatch')),
+  };
 
   protected save(): void {
     if (this.form.valid) {

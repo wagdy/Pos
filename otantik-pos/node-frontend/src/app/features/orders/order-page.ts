@@ -31,6 +31,7 @@ import {
   lineTotal,
   liveItems,
   orderLabel,
+  paymentMethodLabel,
   statusText,
   unsentItems,
   voidPermissionFor,
@@ -150,6 +151,7 @@ export class OrderPage {
   protected readonly searchResults = computed(() => this.menu.search(this.search()));
 
   protected readonly label = orderLabel;
+  protected readonly paymentMethodLabel = paymentMethodLabel;
   protected readonly statusText = statusText;
   protected readonly itemName = itemName;
   protected readonly lineTotal = lineTotal;

@@ -52,9 +52,13 @@
     <span class="user-name">{{ auth.me()?.fullName }}</span>
   </button>
   <mat-menu #userMenu="matMenu">
-    <div class="who" mat-menu-item disabled>
-      <span>{{ auth.me()?.fullName }}</span>
-      <small>{{ roleLabel() }}</small>
+    <!-- The menu item wraps its content in an inline span of its own, so the name and the
+         role are stacked by a span inside it. -->
+    <div mat-menu-item disabled>
+      <span class="who">
+        <span>{{ auth.me()?.fullName }}</span>
+        <small>{{ roleLabel() }}</small>
+      </span>
     </div>
     <button mat-menu-item (click)="signOut()">
       <mat-icon>logout</mat-icon>
