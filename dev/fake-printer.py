@@ -38,11 +38,19 @@ def readable(data: bytes) -> str:
     return text.decode("cp437", errors="replace").rstrip()
 
 
-def serve(name: str, port: int) -> None:
+def listen(name: str, port: int) -> socket.socket:
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", port))
+    try:
+        listener.bind(("127.0.0.1", port))
+    except OSError as error:
+        sys.exit(f"The {name} printer cannot use port {port} ({error.strerror}). Stand-in printers "
+                 f"are probably running already, in another terminal; use those, or stop them first.")
     listener.listen()
+    return listener
+
+
+def serve(name: str, listener: socket.socket) -> None:
     while True:
         connection, _ = listener.accept()
         # Each in its own thread: a connection left open and silent (the Claude app checking the
@@ -73,9 +81,11 @@ def take(name: str, connection: socket.socket) -> None:
 
 def main() -> None:
     os.makedirs(OUT, exist_ok=True)
-    for name, port in PRINTERS.items():
-        threading.Thread(target=serve, args=(name, port), daemon=True).start()
-        print(f"{name} printer listening on 127.0.0.1:{port}", flush=True)
+    # Both ports first, so that a busy one stops the script before either printer says it is up.
+    listeners = {name: listen(name, port) for name, port in PRINTERS.items()}
+    for name, listener in listeners.items():
+        threading.Thread(target=serve, args=(name, listener), daemon=True).start()
+        print(f"{name} printer listening on 127.0.0.1:{PRINTERS[name]}", flush=True)
     try:
         threading.Event().wait()
     except KeyboardInterrupt:
