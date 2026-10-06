@@ -11,6 +11,8 @@ using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Node.Infrastructure.DeliverySystem;
 using OtantikPos.Node.Infrastructure.Identity;
+using OtantikPos.Node.Infrastructure.Messaging;
+using OtantikPos.Node.Infrastructure.Printing;
 using OtantikPos.Ordering.Application.Orders;
 using OtantikPos.Ordering.Application.Reports;
 using OtantikPos.Ordering.Domain;
@@ -133,6 +135,65 @@ public class NodeTests
         Assert.DoesNotContain("\"user\"", node.Cloud.PushedOrders[order.PublicId]);
     }
 
+    // A kitchen printer switched off, out of paper or unplugged showed nothing at the till: the
+    // cashier saw "sent to the kitchen" while the tickets piled up. Now the tills are told, with
+    // how many are waiting, and told again when it prints.
+    [Fact]
+    public async Task The_tills_are_told_when_a_printer_is_not_printing()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        using var scope = node.Scope();
+        var printers = node.Service<PrinterStatus>(scope);
+        node.Kitchen.SwitchOff();
+
+        var order = await node.Send(new OpenOrderCommand(OrderType.DineIn, TableNumber: "6"));
+        await node.Send(new AddOrderItemCommand(order.PublicId, FakeDeliverySystem.Burger, 1));
+        await node.Send(new SendToKitchenCommand(order.PublicId));
+
+        Assert.True(await TestNode.WaitFor(() => Task.FromResult(printers.Current.Any(p => p.Printer == "Kitchen" && p.Waiting == 1))));
+        Assert.Empty(node.Kitchen.Printed);
+
+        node.Kitchen.SwitchOn();
+        Assert.True(await TestNode.WaitFor(() => Task.FromResult(printers.Current.Count == 0), seconds: 45));
+        Assert.Contains("Table 6", Assert.Single(node.Kitchen.Printed));
+    }
+
+    // Sent messages and printed tickets are cleared after a week; kept for good they grew every
+    // backup by several hundred MB a year. What is still waiting is never cleared, however old.
+    [Fact]
+    public async Task Old_sent_messages_and_printed_tickets_are_cleared_and_waiting_ones_kept()
+    {
+        await using var node = await TestNode.StartAsync();
+        var now = DateTime.UtcNow;
+        var old = now - Housekeeping.KeepFor - TimeSpan.FromHours(1);
+        var recent = now - TimeSpan.FromDays(1);
+        OutboxMessage Message(DateTime occurred, DateTime? sent) =>
+            new() { Id = Guid.NewGuid(), Type = "Test", Payload = "{}", OccurredAtUtc = occurred, ProcessedAtUtc = sent };
+        PrintJob Ticket(DateTime created, DateTime? printed) =>
+            new() { Id = Guid.NewGuid(), Printer = "Nowhere", Content = [1], CreatedAtUtc = created, PrintedAtUtc = printed };
+
+        var oldSent = Message(old, old);
+        var recentSent = Message(recent, recent);
+        var oldWaiting = Message(old, null);
+        var oldPrinted = Ticket(old, old);
+        var recentPrinted = Ticket(recent, recent);
+        var oldUnprinted = Ticket(old, null);
+        await node.Db(async db =>
+        {
+            db.OutboxMessages.AddRange(oldSent, recentSent, oldWaiting);
+            db.PrintJobs.AddRange(oldPrinted, recentPrinted, oldUnprinted);
+            return await db.SaveChangesAsync();
+        });
+
+        await node.Db(db => Housekeeping.ClearAsync(db, now, TestContext.Current.CancellationToken));
+
+        var messages = await node.Db(db => db.OutboxMessages.Where(m => m.Type == "Test").Select(m => m.Id).ToListAsync());
+        Assert.Equal(new[] { recentSent.Id, oldWaiting.Id }.Order(), messages.Order());
+        var tickets = await node.Db(db => db.PrintJobs.Where(j => j.Printer == "Nowhere").Select(j => j.Id).ToListAsync());
+        Assert.Equal(new[] { recentPrinted.Id, oldUnprinted.Id }.Order(), tickets.Order());
+    }
+
     // A tablet with an Arabic keyboard types ١٢ for table 12. The printer's code page has no
     // Arabic, so the kitchen got "Table ?"; the digits are the same numbers as 0-9.
     [Fact]
@@ -147,6 +208,29 @@ public class NodeTests
 
         Assert.True(await TestNode.WaitFor(() => Task.FromResult(!node.Kitchen.Printed.IsEmpty)));
         Assert.Contains("Table 12", node.Kitchen.Printed.Single());
+    }
+
+    // The cash the customer handed over, and their change, on the receipt; a reprint too.
+    [Fact]
+    public async Task A_cash_receipt_shows_the_cash_received_and_the_change()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+
+        var order = await node.Send(new OpenOrderCommand(OrderType.DineIn, TableNumber: "8"));
+        order = await node.Send(new AddOrderItemCommand(order.PublicId, FakeDeliverySystem.Burger, 1));
+        order = await node.Send(new CheckoutCommand(order.PublicId, PaymentMethod.Cash, order.TotalAmount, CashReceived: 200));
+        await node.Send(new PrintFinalReceiptCommand(order.PublicId));
+        await node.Send(new PrintFinalReceiptCommand(order.PublicId));
+
+        Assert.True(await TestNode.WaitFor(() => Task.FromResult(node.Receipts.Printed.Count == 2)));
+        Assert.All(node.Receipts.Printed, receipt =>
+        {
+            Assert.Contains("Cash received", receipt);
+            Assert.Contains("200.00", receipt);
+            Assert.Contains("Change", receipt);
+            Assert.Contains((200 - order.TotalAmount).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture), receipt);
+        });
     }
 
     // The cashier chose Card; Visa is only the name the payment is stored under.

@@ -44,7 +44,7 @@ internal static class KitchenTicketRenderer
 // still shows the original sale, with the refund on its own line beneath.
 internal static class ReceiptRenderer
 {
-    public static byte[] Render(Order order, DateTime localTime, PrinterOptions printer, PrintingOptions options)
+    public static byte[] Render(Order order, decimal? cashReceived, DateTime localTime, PrinterOptions printer, PrintingOptions options)
     {
         var doc = new EscPosDocument(printer).Center();
 
@@ -80,6 +80,11 @@ internal static class ReceiptRenderer
         doc.Bold(true).Tall().Columns("TOTAL", Money(order.TotalAmount)).Normal().Bold(false);
         // Visa is only the stored name: the card machine takes any card.
         doc.Columns($"Paid ({(order.PaymentMethod == PaymentMethod.Visa ? "Card" : order.PaymentMethod.ToString())})", Money(order.TotalAmount));
+        if (cashReceived is { } received && order.PaymentMethod == PaymentMethod.Cash)
+        {
+            doc.Columns("Cash received", Money(received));
+            doc.Columns("Change", Money(received - order.TotalAmount));
+        }
         if (order.RefundedAmount > 0)
             doc.Columns("Refunded", "-" + Money(order.RefundedAmount));
 

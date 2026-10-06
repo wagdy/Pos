@@ -13,6 +13,25 @@ public class OrderAccessPolicyTests
     private static readonly TestUser Cashier = new("cashier-1", UserRole.Cashier);
     private static readonly TestUser Driver = new("driver-1", UserRole.DeliveryCaptain);
 
+    // The till does not take a cancellation for food the kitchen is making, so the delivery
+    // system's admin is not offered one: the till voids it and records the waste.
+    [Fact]
+    public void An_order_the_kitchen_has_is_cancelled_at_the_till_not_from_the_delivery_system()
+    {
+        var admin = new TestUser("admin-1", UserRole.Admin);
+        var waiting = Orders.DineIn(Cashier.UserId, Orders.Item(100));
+        var cooking = Orders.DineIn(Cashier.UserId, Orders.Item(100, sent: true));
+
+        Assert.True(OrderAccessPolicy.CanChangeStatus(admin, waiting, OrderStatus.Cancelled).IsAllowed);
+        var refused = OrderAccessPolicy.CanChangeStatus(admin, cooking, OrderStatus.Cancelled);
+        Assert.False(refused.IsAllowed);
+        Assert.Contains("Void it at the till", refused.Reason);
+
+        // Once the till has voided what was sent, nothing is left cooking.
+        cooking.OrderItems.Single().VoidType = VoidType.AfterKitchen;
+        Assert.True(OrderAccessPolicy.CanChangeStatus(admin, cooking, OrderStatus.Cancelled).IsAllowed);
+    }
+
     [Fact]
     public void Captain_creates_dine_in_orders_only()
     {

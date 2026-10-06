@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
-import { DeliverySystemLinkStatus, NodeStatus } from '../api/models';
+import { DeliverySystemLinkStatus, NodeStatus, PrinterProblem } from '../api/models';
 
 export type HubState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
@@ -25,6 +25,10 @@ export class ConnectivityService {
   // The till server's own view of the delivery system: GET /api/status, then pushes.
   readonly cloud = signal<DeliverySystemLinkStatus | null>(null);
 
+  // Printers holding tickets they cannot print, as the till server last found them: GET
+  // /api/status, then pushes. Empty when everything has printed.
+  readonly printers = signal<PrinterProblem[]>([]);
+
   readonly nodeOnline = computed(
     () => this.httpReachable() && (this.hub() === 'connected' || this.hub() === 'connecting'),
   );
@@ -42,8 +46,13 @@ export class ConnectivityService {
     this.cloud.set(status);
   }
 
+  setPrinters(printers: PrinterProblem[]): void {
+    this.printers.set(printers);
+  }
+
   async refreshStatus(): Promise<void> {
     const status = await firstValueFrom(this.http.get<NodeStatus>('/api/status'));
     this.cloud.set(status.deliverySystem);
+    this.printers.set(status.printers ?? []);
   }
 }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using Otantik.BuildingBlocks;
 using Otantik.SharedKernel.Auditing;
 using Otantik.SharedKernel.Identity;
@@ -161,6 +162,39 @@ public class OrderingTests
         Assert.Equal("cashier-1", order.ClosedByUserId);
         Assert.True(order.OrderItems.Single().IsSentToKitchen);
         Assert.Single(_pos.Sink.Committed<OrderSettled>());
+    }
+
+    // The payment screen shows a total, and a captain's round can land while it is open. Charging
+    // the new total left the drawer short: shown L.E 3.41, charged L.E 17.07.
+    [Fact]
+    public async Task Payment_is_refused_when_the_bill_changed_since_the_cashier_saw_it()
+    {
+        var order = await TwoCheeseBurgers();
+        var shown = order.TotalAmount;
+        order = await _pos.Send(new AddOrderItemCommand(order.PublicId, TestPos.Burger));
+
+        var refused = await Assert.ThrowsAsync<ConflictException>(() => _pos.Send(new CheckoutCommand(order.PublicId, PaymentMethod.Cash, shown)));
+        Assert.Contains($"it is now L.E {order.TotalAmount.ToString("0.00", CultureInfo.InvariantCulture)}", refused.Message);
+        Assert.Null(_pos.Orders.Saved(order.PublicId).ClosedAt);
+
+        var paid = await _pos.Send(new CheckoutCommand(order.PublicId, PaymentMethod.Cash, order.TotalAmount));
+        Assert.NotNull(paid.ClosedAt);
+    }
+
+    // For the receipt's "Cash received" and "Change". Less than the bill is refused: the screen
+    // does not offer it, and a receipt with negative change would be wrong.
+    [Fact]
+    public async Task The_cash_handed_over_is_kept_for_the_receipt_and_must_cover_the_bill()
+    {
+        var order = await TwoCheeseBurgers();
+
+        var refused = await Assert.ThrowsAsync<DomainException>(() =>
+            _pos.Send(new CheckoutCommand(order.PublicId, PaymentMethod.Cash, order.TotalAmount, CashReceived: order.TotalAmount - 1)));
+        Assert.Contains("less than the bill", refused.Message);
+        Assert.Empty(_pos.Sink.CashReceived);
+
+        await _pos.Send(new CheckoutCommand(order.PublicId, PaymentMethod.Cash, order.TotalAmount, CashReceived: 500));
+        Assert.Equal(500m, _pos.Sink.CashReceived[order.PublicId]);
     }
 
     [Fact]

@@ -53,8 +53,12 @@ export class OrdersApi {
     return this.http.delete<Order>(`/api/orders/${orderId}/loyalty-points`);
   }
 
-  checkout(orderId: string, paymentMethod: PaymentMethod): Observable<Order> {
-    return this.http.post<Order>(`/api/orders/${orderId}/checkout`, { paymentMethod });
+  // expectedTotal: what the cashier was shown. The till refuses if the bill has changed since,
+  // a captain's round landing while the payment screen was open, rather than charge a total
+  // nobody was told.
+  // cashReceived: what the customer handed over, for the receipt's change.
+  checkout(orderId: string, paymentMethod: PaymentMethod, expectedTotal: number, cashReceived: number | null = null): Observable<Order> {
+    return this.http.post<Order>(`/api/orders/${orderId}/checkout`, { paymentMethod, expectedTotal, cashReceived });
   }
 
   printReceipt(orderId: string): Observable<void> {

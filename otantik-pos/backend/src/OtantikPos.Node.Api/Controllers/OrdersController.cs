@@ -67,7 +67,7 @@ public sealed class OrdersController(ISender sender) : ControllerBase
 
     [HttpPost("{orderId:guid}/checkout")]
     public Task<Order> Checkout(Guid orderId, CheckoutRequest request, CancellationToken cancellationToken) =>
-        sender.Send(new CheckoutCommand(orderId, request.PaymentMethod), cancellationToken);
+        sender.Send(new CheckoutCommand(orderId, request.PaymentMethod, request.ExpectedTotal, request.CashReceived), cancellationToken);
 
     // Queued for the receipt printer; 202 because it prints after this returns. Each call is
     // a copy, and each copy is in the audit trail.
@@ -97,7 +97,7 @@ public sealed record AttachCustomerRequest(string PhoneNumber, string? Name = nu
 
 public sealed record ApplyLoyaltyPointsRequest(int Points);
 
-public sealed record CheckoutRequest(PaymentMethod PaymentMethod);
+public sealed record CheckoutRequest(PaymentMethod PaymentMethod, decimal? ExpectedTotal = null, decimal? CashReceived = null);
 
 public sealed record VoidItemRequest(int Quantity, string? Reason);
 

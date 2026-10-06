@@ -1,4 +1,4 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, Signal, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
@@ -11,7 +11,18 @@ import { orderLabel } from '../../core/orders/order-rules';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 
 export interface CheckoutDialogData {
-  order: Order;
+  // The live bill: a captain's round, or another tablet, can change it while this is open.
+  order: Signal<Order>;
+}
+
+export interface CheckoutResult {
+  method: PaymentMethod;
+  // What the cashier was shown when they took payment. The till refuses if the bill has
+  // changed since, rather than charge a total nobody was told.
+  total: number;
+  // The cash handed over, when paying in cash and the cashier entered it: the receipt prints it
+  // and the change.
+  cashReceived: number | null;
 }
 
 // Taking payment. None of these methods needs the cloud: the till closes the bill on its own,
@@ -30,15 +41,20 @@ export interface CheckoutDialogData {
     MoneyPipe,
   ],
   template: `
-    <h2 mat-dialog-title>Checkout · {{ label }}</h2>
+    <h2 mat-dialog-title>Checkout · {{ label() }}</h2>
     <mat-dialog-content>
       <p class="due">
         <span>Amount due</span>
-        <strong class="amount">{{ order.totalAmount | money }}</strong>
+        <strong class="amount">{{ order().totalAmount | money }}</strong>
       </p>
-      @if (order.pointsRedeemed > 0) {
+      @if (changed()) {
+        <p class="changed" role="alert">
+          The bill changed while this was open: it was {{ openedTotal | money }}. Check the new amount with the customer.
+        </p>
+      }
+      @if (order().pointsRedeemed > 0) {
         <p class="note">
-          Includes {{ order.pointsRedeemed }} loyalty points ({{ order.pointsDiscountAmount | money }} off), spent from the
+          Includes {{ order().pointsRedeemed }} loyalty points ({{ order().pointsDiscountAmount | money }} off), spent from the
           customer's account when you confirm.
         </p>
       }
@@ -93,6 +109,11 @@ export interface CheckoutDialogData {
       color: var(--mat-sys-on-surface-variant);
       margin: 0 0 12px;
     }
+    .changed {
+      color: var(--mat-sys-error);
+      font: var(--mat-sys-title-small);
+      margin: 0 0 12px;
+    }
     .methods {
       width: 100%;
       margin: 8px 0 16px;
@@ -106,25 +127,31 @@ export interface CheckoutDialogData {
   `,
 })
 export class CheckoutDialog {
-  private readonly dialogRef = inject(MatDialogRef<CheckoutDialog, PaymentMethod>);
+  private readonly dialogRef = inject(MatDialogRef<CheckoutDialog, CheckoutResult>);
   protected readonly order = inject<CheckoutDialogData>(MAT_DIALOG_DATA).order;
-  protected readonly label = orderLabel(this.order);
+  protected readonly label = computed(() => orderLabel(this.order()));
+
+  // What was due when this opened, to say so if it changes.
+  protected readonly openedTotal = this.order().totalAmount;
+  protected readonly changed = computed(() => this.order().totalAmount !== this.openedTotal);
 
   protected readonly method = signal<PaymentMethod>('Cash');
   protected readonly tendered = signal<number | null>(null);
 
-  // Only a help for the cashier: the API records the method, not the cash handed over.
+  // The change, for the cashier now; the receipt prints it too.
   protected readonly change = computed(() => {
     const tendered = this.tendered();
-    return tendered === null || tendered < this.order.totalAmount ? null : tendered - this.order.totalAmount;
+    const due = this.order().totalAmount;
+    return tendered === null || tendered < due ? null : tendered - due;
   });
 
   protected readonly short = computed(() => {
     const tendered = this.tendered();
-    return this.method() === 'Cash' && tendered !== null && tendered < this.order.totalAmount;
+    return this.method() === 'Cash' && tendered !== null && tendered < this.order().totalAmount;
   });
 
   protected confirm(): void {
-    this.dialogRef.close(this.method());
+    const method = this.method();
+    this.dialogRef.close({ method, total: this.order().totalAmount, cashReceived: method === 'Cash' ? this.tendered() : null });
   }
 }

@@ -13,7 +13,7 @@ import { MatTabsModule } from '@angular/material/tabs';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
-import { AddOrderItemRequest, MenuItem, Order, OrderItem, PaymentMethod, VoidType } from '../../core/api/models';
+import { AddOrderItemRequest, MenuItem, Order, OrderItem, VoidType } from '../../core/api/models';
 import { AuthService } from '../../core/auth/auth.service';
 import { CanDirective } from '../../core/auth/can.directive';
 import { MoneyPermissions, Permissions } from '../../core/auth/permissions';
@@ -41,7 +41,7 @@ import { OrdersStore } from '../../core/orders/orders.store';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { AddItemDialog, AddItemDialogData } from './add-item-dialog';
-import { CheckoutDialog, CheckoutDialogData } from './checkout-dialog';
+import { CheckoutDialog, CheckoutDialogData, CheckoutResult } from './checkout-dialog';
 import { PointsDialog, PointsDialogData } from './points-dialog';
 import { VoidDialog, VoidDialogData, VoidRequest } from './void-dialog';
 
@@ -252,13 +252,15 @@ export class OrderPage {
 
   protected async checkout(): Promise<void> {
     const order = this.order()!;
-    const method = await firstValueFrom(
+    // The live bill, so the dialog shows a round that lands while it is open.
+    const live = computed(() => this.order() ?? order);
+    const result = await firstValueFrom(
       this.dialog
-        .open<CheckoutDialog, CheckoutDialogData, PaymentMethod>(CheckoutDialog, { data: { order }, width: '480px' })
+        .open<CheckoutDialog, CheckoutDialogData, CheckoutResult>(CheckoutDialog, { data: { order: live }, width: '480px' })
         .afterClosed(),
     );
-    if (method) {
-      await this.run(() => this.store.checkout(order.publicId, method), 'Paid');
+    if (result) {
+      await this.run(() => this.store.checkout(order.publicId, result.method, result.total, result.cashReceived), 'Paid');
     }
   }
 

@@ -53,6 +53,7 @@ public static class DependencyInjection
         services.AddScoped<IEventOutbox, EventOutbox>();
         services.AddScoped<IKitchenPrintQueue, KitchenPrintQueue>();
         services.AddScoped<IReceiptPrintQueue, ReceiptPrintQueue>();
+        services.AddScoped<ICashReceived, CashReceivedRecord>();
 
         // Inventory.
         services.AddScoped<IRawMaterialRepository, RawMaterialRepository>();
@@ -90,7 +91,9 @@ public static class DependencyInjection
         // Printing.
         services.AddSingleton<PrintSignal>();
         services.AddSingleton<TcpPrinterClient>();
+        services.AddSingleton<PrinterStatus>();
         services.AddHostedService<PrintWorker>();
+        services.AddHostedService<Housekeeping>();
 
         // Staff PINs.
         services.AddScoped<StaffDirectory>();

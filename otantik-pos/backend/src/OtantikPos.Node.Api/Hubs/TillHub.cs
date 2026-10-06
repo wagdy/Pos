@@ -4,6 +4,7 @@ using Otantik.SharedKernel.Authorization;
 using Otantik.SharedKernel.Orders;
 using OtantikPos.Node.Api.Auth;
 using OtantikPos.Node.Infrastructure.DeliverySystem;
+using OtantikPos.Node.Infrastructure.Printing;
 using OtantikPos.Ordering.Application.Ports;
 
 namespace OtantikPos.Node.Api.Hubs;
@@ -48,6 +49,10 @@ public interface ITillClient
     // This machine's link to the delivery system came up or went down. To every till: what
     // needs the cloud (customer lookup, points) is switched on or off by it.
     Task DeliverySystemLinkChanged(DeliverySystemLinkStatus status);
+
+    // The printers holding tickets they cannot print, all of them each time: empty once
+    // everything has printed.
+    Task PrintersChanged(IReadOnlyList<PrinterProblem> printers);
 }
 
 // Ordering's ITillNotifier. OrderWorkflow calls it after every commit; the cloud listener and

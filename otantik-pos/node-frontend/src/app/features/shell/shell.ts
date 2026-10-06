@@ -5,7 +5,7 @@ import { MatMenuModule } from '@angular/material/menu';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
-import { Order } from '../../core/api/models';
+import { Order, PrinterProblem } from '../../core/api/models';
 import { AuthService } from '../../core/auth/auth.service';
 import { CanDirective } from '../../core/auth/can.directive';
 import { MoneyPermissions, Permissions } from '../../core/auth/permissions';
@@ -60,6 +60,12 @@ export class Shell implements OnInit, OnDestroy {
         return 'Delivery system: connecting';
     }
   });
+
+  protected printerHint(printer: PrinterProblem): string {
+    const tickets = printer.waiting === 1 ? '1 ticket is' : `${printer.waiting} tickets are`;
+    return `The ${printer.printer.toLowerCase()} printer is not printing (${printer.problem}): ${tickets} waiting. ` +
+      'Check it is switched on, has paper and is connected. They print by themselves once it is back.';
+  }
 
   ngOnInit(): void {
     // Someone else opened an order: a captain from the delivery app, or another till.

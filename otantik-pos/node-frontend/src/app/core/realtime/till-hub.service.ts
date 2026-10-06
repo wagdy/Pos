@@ -1,6 +1,6 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpError, HubConnection, HubConnectionBuilder, HubConnectionState, LogLevel } from '@microsoft/signalr';
-import { DeliverySystemLinkStatus, Order } from '../api/models';
+import { DeliverySystemLinkStatus, Order, PrinterProblem } from '../api/models';
 import { AuthService } from '../auth/auth.service';
 import { ConnectivityService } from '../connectivity/connectivity.service';
 import { MenuService } from '../menu/menu.service';
@@ -49,6 +49,7 @@ export class TillHubService {
 
     connection.on('OrderChanged', (order: Order) => this.orders.receive(order, 'push'));
     connection.on('DeliverySystemLinkChanged', (status: DeliverySystemLinkStatus) => this.connectivity.setCloud(status));
+    connection.on('PrintersChanged', (printers: PrinterProblem[]) => this.connectivity.setPrinters(printers));
 
     connection.onreconnecting(() => this.connectivity.hub.set('reconnecting'));
     connection.onreconnected(() => {

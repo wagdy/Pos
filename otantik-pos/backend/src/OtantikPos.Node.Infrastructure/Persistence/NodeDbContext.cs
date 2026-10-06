@@ -44,6 +44,7 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
 
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<PrintJob> PrintJobs => Set<PrintJob>();
+    public DbSet<CashReceived> CashReceived => Set<CashReceived>();
     public DbSet<SyncState> SyncState => Set<SyncState>();
 
     public DbSet<StaffMember> Staff => Set<StaffMember>();

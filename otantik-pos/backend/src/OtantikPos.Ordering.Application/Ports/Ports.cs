@@ -130,3 +130,10 @@ public interface IReceiptPrintQueue
 {
     Task EnqueueAsync(Order order, string printedByUserId, CancellationToken cancellationToken);
 }
+
+// The cash handed over for a bill paid in cash, for its receipt's "Cash received" and "Change".
+// Kept by the till alone, saved with the payment: the order the delivery system gets is unchanged.
+public interface ICashReceived
+{
+    void Record(Guid orderPublicId, decimal amount);
+}

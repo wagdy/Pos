@@ -48,4 +48,12 @@ public static class OrderRules
     // items and sending them to the kitchen ask IsOpen.
     public static bool AwaitsPayment(Order order) =>
         !IsSettled(order) && order.Status != OrderStatus.Cancelled;
+
+    // Something still on the bill has reached the kitchen. A cancellation from the delivery
+    // system then waits for the till: the food is being made, and the till records it as waste
+    // when it voids it. The till does not take such a cancellation (CloudOrderMerge), so the
+    // delivery system does not accept one either (OrderAccessPolicy.CanChangeStatus); otherwise
+    // it called cancelled an order the kitchen was still making.
+    public static bool KitchenHasIt(Order order) =>
+        order.OrderItems.Any(i => i.IsSentToKitchen && !i.IsVoided);
 }

@@ -22,6 +22,7 @@ builder.Services.AddNodeInfrastructure(builder.Configuration);
 builder.Services.AddTillAuthentication(builder.Configuration);
 builder.Services.AddSingleton<ITillNotifier, TillNotifier>();
 builder.Services.AddHostedService<DeliverySystemLinkBroadcaster>();
+builder.Services.AddHostedService<PrinterStatusBroadcaster>();
 
 // Enums travel as names ("DineIn", "Cash", "AfterPayment"), as the delivery system's API sends
 // them, over REST and the hub alike.
@@ -39,7 +40,10 @@ builder.Services.AddExceptionHandler<ApplicationExceptionHandler>();
 builder.Services.AddHealthChecks().AddDbContextCheck<NodeDbContext>(name: "database", tags: ["ready"]);
 
 // Per device, on top of StaffDirectory's per-account lockout: one tablet cannot cycle through
-// PINs across every account on the sign-in screen.
+// PINs across every account on the sign-in screen. Behind Docker Desktop (a Windows or Mac till
+// machine) every device reaches the till from the same address, so it is then one limit for the
+// whole restaurant; Docker on Linux keeps them apart. 20, not 10, so a few mistyped PINs at shift
+// change do not make every tablet wait; the per-account lockout is what stops PIN guessing.
 builder.Services.AddRateLimiter(o =>
 {
     o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -48,11 +52,11 @@ builder.Services.AddRateLimiter(o =>
         if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
             context.HttpContext.Response.Headers.RetryAfter = ((int)retryAfter.TotalSeconds).ToString(NumberFormatInfo.InvariantInfo);
         await context.HttpContext.Response.WriteAsJsonAsync(
-            new { errors = new[] { "Too many sign-in attempts from this device. Wait a minute and try again." } }, cancellationToken);
+            new { errors = new[] { "Too many sign-in attempts. Wait a minute and try again." } }, cancellationToken);
     };
     o.AddPolicy(AuthController.SignInRateLimit, context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
 
 // Only needed when the Angular app is served from somewhere else, such as `ng serve` during

@@ -22,6 +22,11 @@ It runs in Docker as three parts, started together:
     sign in by itself after a restart.
   - Linux: install Docker Engine and the compose plugin, and enable the service
     (`sudo systemctl enable --now docker`).
+- **A network customers do not use.** The till, the counter screen, the tablets and the printers
+  go on the staff network only. If customers get Wi-Fi, give them the router's guest network,
+  which cannot see the staff one. Anyone on the till's network can open its sign-in screen and
+  try PINs, lock the staff out by entering wrong ones, and read what the tablets send: the till
+  is reached over plain `http`, as nearly every till on a local network is.
 - **The printers** (optional at first): network ESC/POS printers, one for the kitchen and one
   for receipts, each with a fixed IP address. They usually listen on port 9100.
 - **This repository** on the machine: `git clone https://github.com/wagdy/Pos.git`, or a copy of
@@ -99,13 +104,16 @@ If the cloud icon stays off, see Problems below.
 
 With `KITCHEN_PRINTER_HOST` and `RECEIPT_PRINTER_HOST` set, every round sent to the kitchen
 prints there, and **Print receipt** on a paid bill prints its receipt. A print that cannot reach
-its printer waits and prints when the printer is back; nothing is lost.
+its printer waits and prints when the printer is back; nothing is lost. While tickets are
+waiting, every till's top bar says so in red, for example **Kitchen printer: 2 waiting**, so the
+counter knows before the kitchen asks.
 
 ## 7. Backups
 
 Every day the database is copied to `otantik-pos/deploy/backups`, and copies older than 30 days
 are deleted. Copy that folder off the machine now and then (a USB stick, a cloud folder): a
-backup on the same disk does not survive the disk.
+backup on the same disk does not survive the disk. The copies hold customers' names and phone
+numbers, so keep them somewhere private, not a shared or public folder.
 
 To restore one:
 
@@ -123,11 +131,16 @@ while the internet was down, after the backup) is lost.
 
 ```
 git pull
-docker compose up -d --build
+docker compose pull db backup
+docker compose build --pull
+docker compose up -d
 ```
 
-The database is updated by itself when the new till starts. The tablets pick up the new app on
-their next reload.
+The two middle lines also fetch the latest of what the till is built on: operating-system security
+fixes, PostgreSQL's fixes within version 16, and the time-zone rules the business day is counted
+by, should Egypt change its summer time again. Without them, `up --build` keeps using what the
+machine first downloaded. The database is updated by itself when the new till starts. The
+tablets pick up the new app on their next reload.
 
 ## Problems
 
@@ -138,5 +151,7 @@ their next reload.
   and Railway. The till's log says "refused this till's key" when it is the key.
 - **"has not received the tax rate":** the till has never reached the delivery system yet.
   Connect it once, or set `TAX_PERCENTAGE_UNTIL_SYNCED` for now.
-- **Nothing prints:** check the printer's IP in `.env`, that it is on, and that the till machine
-  can reach it (`ping <printer IP>`).
+- **Nothing prints** (the top bar says **Kitchen printer: … waiting**): check the printer is on,
+  has paper and is plugged in, that its IP in `.env` is right, and that the till machine can
+  reach it (`ping <printer IP>`). The waiting tickets print by themselves, in order, once it is
+  back.

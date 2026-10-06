@@ -58,6 +58,7 @@ public sealed class TestPos
         services.AddSingleton<ITillNotifier>(Sink);
         services.AddSingleton<IKitchenPrintQueue>(Sink);
         services.AddSingleton<IReceiptPrintQueue>(Sink);
+        services.AddSingleton<ICashReceived>(Sink);
         services.AddSingleton<IUnitOfWork>(new UnitOfWork(this));
         services.AddSingleton<IRawMaterialRepository>(Inventory);
         services.AddSingleton<IRecipeRepository>(Inventory.Recipes);
@@ -267,7 +268,7 @@ public sealed class FakeDeliverySystem : ICustomerDirectory, ILoyaltyGateway
 }
 
 // Audit log, outbox, till pushes and both print queues, recorded.
-public sealed class RecordingSink : IAuditLog, IEventOutbox, ITillNotifier, IKitchenPrintQueue, IReceiptPrintQueue
+public sealed class RecordingSink : IAuditLog, IEventOutbox, ITillNotifier, IKitchenPrintQueue, IReceiptPrintQueue, ICashReceived
 {
     private readonly List<OrderAuditEntry> _pendingAudit = new();
     private readonly List<OrderingEvent> _pendingEvents = new();
@@ -301,6 +302,11 @@ public sealed class RecordingSink : IAuditLog, IEventOutbox, ITillNotifier, IKit
         Receipts.Add(order.PublicId);
         return Task.CompletedTask;
     }
+
+    // Recorded at once here; at the till it is saved with the payment.
+    public Dictionary<Guid, decimal> CashReceived { get; } = new();
+
+    public void Record(Guid orderPublicId, decimal amount) => CashReceived[orderPublicId] = amount;
 
     public IEnumerable<T> Committed<T>() where T : OrderingEvent => _committedEvents.OfType<T>().Concat(Delivered.OfType<T>());
 

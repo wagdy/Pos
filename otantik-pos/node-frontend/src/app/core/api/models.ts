@@ -196,8 +196,18 @@ export interface DeliverySystemLinkStatus {
   cloudFeaturesAvailable: boolean;
 }
 
+// A printer holding tickets it cannot print: off, out of paper, unplugged, or with no address
+// set. printer is its name on the till server (Kitchen, Receipt); problem is the last error.
+export interface PrinterProblem {
+  printer: string;
+  problem: string;
+  waiting: number;
+  oldestWaitingSinceUtc: string;
+}
+
 export interface NodeStatus {
   deliverySystem: DeliverySystemLinkStatus;
+  printers: PrinterProblem[];
 }
 
 // Request bodies.

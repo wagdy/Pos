@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using OtantikPos.Node.Infrastructure.DeliverySystem;
+using OtantikPos.Node.Infrastructure.Printing;
 
 namespace OtantikPos.Node.Api.Controllers;
 
@@ -7,10 +8,10 @@ namespace OtantikPos.Node.Api.Controllers;
 // the till hub.
 [ApiController]
 [Route("api/status")]
-public sealed class StatusController(DeliverySystemLink link) : ControllerBase
+public sealed class StatusController(DeliverySystemLink link, PrinterStatus printers) : ControllerBase
 {
     [HttpGet]
-    public NodeStatus Get() => new(link.Current);
+    public NodeStatus Get() => new(link.Current, printers.Current);
 }
 
-public sealed record NodeStatus(DeliverySystemLinkStatus DeliverySystem);
+public sealed record NodeStatus(DeliverySystemLinkStatus DeliverySystem, IReadOnlyList<PrinterProblem> Printers);

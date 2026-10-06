@@ -124,7 +124,7 @@ public static class CloudOrderMerge
         string? ignored = null;
         if (incoming.Status == OrderStatus.Cancelled)
         {
-            if (local.OrderItems.Any(i => i.IsSentToKitchen && !i.IsVoided))
+            if (OrderRules.KitchenHasIt(local))
             {
                 ignored = "The order was cancelled in the delivery system, but the kitchen already has it. Void it at the till if it should go.";
             }

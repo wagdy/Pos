@@ -119,18 +119,20 @@ public sealed class FakeDeliverySystem : IAsyncDisposable
         var cheese = new AddOn { Id = Cheese, Name = "Cheese", Price = 15 };
         return new ReferenceData(
             14m,
+            // Items name their category, as every item in the delivery system does: the till files
+            // them under the category of that name.
             [new Category { Id = 1, Name = "Mains" }],
             [new SubCategory { Id = 11, Name = "Grill", CategoryId = 1 }],
             [cheese],
             [
                 new MenuItem
                 {
-                    Id = Burger, Name = "Burger", Price = 120, SubCategoryId = 11,
+                    Id = Burger, Name = "Burger", Price = 120, Category = "Mains", SubCategoryId = 11,
                     MenuItemAddOns = [new MenuItemAddOn { MenuItemId = Burger, AddOnId = Cheese, AddOn = cheese }],
                 },
                 new MenuItem
                 {
-                    Id = Shawarma, Name = "Shawarma", Price = 0, SubCategoryId = 11,
+                    Id = Shawarma, Name = "Shawarma", Price = 0, Category = "Mains", SubCategoryId = 11,
                     Variants = [new MenuItemVariant { Id = KiloTray, MenuItemId = Shawarma, Name = "Kilo tray", Price = 400 }],
                 },
             ],

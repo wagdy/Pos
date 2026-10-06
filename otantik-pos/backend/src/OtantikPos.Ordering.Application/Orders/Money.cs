@@ -1,3 +1,4 @@
+using System.Globalization;
 using MediatR;
 using Otantik.BuildingBlocks;
 using Otantik.SharedKernel.Auditing;
@@ -51,15 +52,31 @@ internal sealed class RemoveLoyaltyPointsHandler(OrderWorkflow workflow) : IRequ
 
 // Takes payment and closes the bill. In one save: the order is paid, anything not yet in the
 // kitchen goes there, and OrderSettled goes to the outbox for Inventory to deduct stock.
-public sealed record CheckoutCommand(Guid OrderId, PaymentMethod PaymentMethod) : IRequest<Order>;
+// ExpectedTotal: the amount the cashier was shown and is taking. Without it (an older client),
+// the bill is charged as it stands. CashReceived: what the customer handed over, when paying in
+// cash and the cashier entered it, for the receipt's change.
+public sealed record CheckoutCommand(Guid OrderId, PaymentMethod PaymentMethod, decimal? ExpectedTotal = null, decimal? CashReceived = null)
+    : IRequest<Order>;
 
-internal sealed class CheckoutHandler(OrderWorkflow workflow, ILoyaltyGateway loyalty)
+internal sealed class CheckoutHandler(OrderWorkflow workflow, ILoyaltyGateway loyalty, ICashReceived cash)
     : IRequestHandler<CheckoutCommand, Order>
 {
     public async Task<Order> Handle(CheckoutCommand request, CancellationToken cancellationToken)
     {
         var order = await workflow.LoadForAsync(OrderAction.Checkout, request.OrderId, cancellationToken);
         var tax = await workflow.TaxPercentageAsync(cancellationToken);
+
+        // A captain's round, or a change on another tablet, can land while the payment screen is
+        // open. Charged the new total, the drawer would hold less than the record says.
+        if (request.ExpectedTotal is { } shown && shown != order.TotalAmount)
+            throw new ConflictException(
+                $"The bill changed while you were taking payment: it is now L.E {order.TotalAmount.ToString("0.00", CultureInfo.InvariantCulture)}, " +
+                $"not L.E {shown.ToString("0.00", CultureInfo.InvariantCulture)}. Check it with the customer and take payment again.");
+
+        var cashReceived = request.PaymentMethod == PaymentMethod.Cash ? request.CashReceived : null;
+        if (cashReceived < order.TotalAmount)
+            throw new DomainException(
+                $"The cash received, L.E {cashReceived.Value.ToString("0.00", CultureInfo.InvariantCulture)}, is less than the bill.");
 
         // Closed in memory first: every rule that can refuse checkout has had its say before any
         // points are spent.
@@ -72,6 +89,8 @@ internal sealed class CheckoutHandler(OrderWorkflow workflow, ILoyaltyGateway lo
         if (order.PointsRedeemed > 0)
             await loyalty.RedeemAsync(order.UserId!, order.PointsRedeemed, order.PublicId, cancellationToken);
 
+        if (cashReceived is { } received)
+            cash.Record(order.PublicId, received);
         workflow.Audit(order, OrderAuditAction.PaymentTaken, order.TotalAmount);
         if (sentNow.Count > 0)
             workflow.Publish(OrderEvents.Sent(order, sentNow));

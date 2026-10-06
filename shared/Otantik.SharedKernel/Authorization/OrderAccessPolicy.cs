@@ -69,12 +69,23 @@ public static class OrderAccessPolicy
     // a dine-in bill, which is a checkout. Anything else is the delivery or collection leg.
     public static AccessDecision CanChangeStatus(ICurrentUser user, Order order, OrderStatus newStatus) => newStatus switch
     {
-        OrderStatus.Cancelled => Evaluate(user, OrderAction.VoidOrder, order),
+        OrderStatus.Cancelled => Cancel(user, order),
         OrderStatus.Served => Evaluate(user, OrderAction.Checkout, order),
         _ when !CanSee(user, order) => AccessDecision.Denied("You can only work on orders you created."),
         _ when !user.Has(Permissions.OrderUpdateFulfilment) => AccessDecision.Denied("You are not allowed to change an order's status."),
         _ => AccessDecision.Allowed,
     };
+
+    // Cancelling is a void, so it needs the right to void. Someone who has it is still not
+    // offered a cancellation once the kitchen has the order: the till would not take it, and
+    // would keep the order open while the delivery system called it cancelled.
+    private static AccessDecision Cancel(ICurrentUser user, Order order)
+    {
+        var decision = Evaluate(user, OrderAction.VoidOrder, order);
+        if (!decision.IsAllowed || order.Status == OrderStatus.Cancelled || !OrderRules.KitchenHasIt(order))
+            return decision;
+        return AccessDecision.Denied("The kitchen already has this order. Void it at the till, where what was made is written off.");
+    }
 
     private static bool CanSee(ICurrentUser user, Order order) =>
         user.Has(Permissions.OrderViewAll)

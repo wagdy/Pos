@@ -41,20 +41,20 @@ internal sealed class ReceiptPrintQueue(NodeDbContext db, RestaurantClock clock,
     // Added to the context rather than inserted directly, so it is saved in the same
     // transaction as the audit entry that records it (see PrintFinalReceiptHandler). Each call
     // is a new job: a reprint is a second receipt.
-    public Task EnqueueAsync(Order order, string printedByUserId, CancellationToken cancellationToken)
+    public async Task EnqueueAsync(Order order, string printedByUserId, CancellationToken cancellationToken)
     {
         var printer = options.Value.Printers.GetValueOrDefault(PrintingOptions.Receipt) ?? new PrinterOptions();
         var now = DateTime.UtcNow;
+        var cash = await db.CashReceived.FindAsync([order.PublicId], cancellationToken);
 
         db.PrintJobs.Add(new PrintJob
         {
             Id = Guid.NewGuid(),
             Printer = PrintingOptions.Receipt,
-            Content = ReceiptRenderer.Render(order, clock.ToLocal(now), printer, options.Value),
+            Content = ReceiptRenderer.Render(order, cash?.Amount, clock.ToLocal(now), printer, options.Value),
             CreatedAtUtc = now,
         });
 
         signal.Notify();
-        return Task.CompletedTask;
     }
 }

@@ -16,6 +16,7 @@ public sealed class PrintWorker(
     TcpPrinterClient printerClient,
     IOptionsMonitor<PrintingOptions> options,
     PrintSignal signal,
+    PrinterStatus status,
     ILogger<PrintWorker> logger) : BackgroundService
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
@@ -99,7 +100,21 @@ public sealed class PrintWorker(
                 }
             }
         }
+
+        // What the tills show: each printer still holding tickets after this pass because the
+        // one at the head of its queue failed, or because it has nowhere to print.
+        status.Set(pending
+            .Where(j => j.PrintedAtUtc == null)
+            .GroupBy(j => j.Printer)
+            .Select(queue => (Queue: queue, Head: queue.First()))
+            .Where(x => x.Head.LastError is not null || !IsConfigured(x.Queue.Key))
+            .Select(x => new PrinterProblem(x.Queue.Key, x.Head.LastError ?? "no printer address is set", x.Queue.Count(), x.Head.CreatedAtUtc))
+            .OrderBy(p => p.Printer)
+            .ToList());
     }
+
+    private bool IsConfigured(string printer) =>
+        options.CurrentValue.Printers.TryGetValue(printer, out var settings) && !string.IsNullOrWhiteSpace(settings.Host);
 
     private void Report(string printer, string problem, string message)
     {

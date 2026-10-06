@@ -1,6 +1,7 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { Observable, firstValueFrom } from 'rxjs';
 import { AddOrderItemRequest, AttachCustomerResult, OpenOrderRequest, Order, PaymentMethod } from '../api/models';
+import { AuthService } from '../auth/auth.service';
 import { awaitsPayment, isOpen } from './order-rules';
 import { OrdersApi } from './orders.api';
 
@@ -14,6 +15,7 @@ import { OrdersApi } from './orders.api';
 @Injectable({ providedIn: 'root' })
 export class OrdersStore {
   private readonly api = inject(OrdersApi);
+  private readonly auth = inject(AuthService);
 
   private readonly byId = signal<ReadonlyMap<string, Order>>(new Map());
   private readonly _arrived = signal<ReadonlySet<string>>(new Set());
@@ -78,7 +80,10 @@ export class OrdersStore {
     this.byId.update((current) => new Map(current).set(order.publicId, order));
     this._changes.update((n) => n + 1);
 
-    if (origin === 'push' && !known && isOpen(order)) {
+    // The push for an order opened here can come back before the response does. Without this,
+    // the cashier who had just opened a takeaway was told of a "new order" from someone else.
+    const mine = order.createdByUserId !== null && order.createdByUserId === this.auth.me()?.id;
+    if (origin === 'push' && !known && !mine && isOpen(order)) {
       this._arrived.update((ids) => new Set(ids).add(order.publicId));
       this.onArrival?.(order);
     }
@@ -121,8 +126,8 @@ export class OrdersStore {
     return this.track(this.api.removePoints(publicId));
   }
 
-  checkout(publicId: string, paymentMethod: PaymentMethod): Promise<Order> {
-    return this.track(this.api.checkout(publicId, paymentMethod));
+  checkout(publicId: string, paymentMethod: PaymentMethod, expectedTotal: number, cashReceived: number | null = null): Promise<Order> {
+    return this.track(this.api.checkout(publicId, paymentMethod, expectedTotal, cashReceived));
   }
 
   printReceipt(publicId: string): Promise<void> {

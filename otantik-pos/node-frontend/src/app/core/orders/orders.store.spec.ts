@@ -1,6 +1,8 @@
+import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { Order } from '../api/models';
-import { anOrder } from '../../../testing/fixtures';
+import { anOrder, cashierMe } from '../../../testing/fixtures';
+import { AuthService } from '../auth/auth.service';
 import { OrdersApi } from './orders.api';
 import { OrdersStore } from './orders.store';
 
@@ -8,7 +10,12 @@ describe('OrdersStore', () => {
   let store: OrdersStore;
 
   beforeEach(() => {
-    TestBed.configureTestingModule({ providers: [{ provide: OrdersApi, useValue: {} }] });
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: OrdersApi, useValue: {} },
+        { provide: AuthService, useValue: { me: signal(cashierMe) } },
+      ],
+    });
     store = TestBed.inject(OrdersStore);
   });
 
@@ -29,6 +36,19 @@ describe('OrdersStore', () => {
     expect(store.arrived().has(mine.publicId)).toBe(false);
 
     store.acknowledge(captains.publicId);
+    expect(store.arrived().size).toBe(0);
+  });
+
+  // The push for a takeaway the cashier just opened can come back before the response does.
+  it("does not announce the signed-in person's own order as an arrival", () => {
+    const arrivals: Order[] = [];
+    store.onArrival = (order) => arrivals.push(order);
+
+    const mine = anOrder({ createdByUserId: cashierMe.id });
+    store.receive(mine, 'push');
+
+    expect(store.open()).toEqual([mine]);
+    expect(arrivals).toEqual([]);
     expect(store.arrived().size).toBe(0);
   });
 

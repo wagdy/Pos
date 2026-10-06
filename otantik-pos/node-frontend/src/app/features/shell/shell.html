@@ -39,6 +39,13 @@
       <mat-icon>{{ connectivity.cloudOnline() ? 'cloud_done' : 'cloud_off' }}</mat-icon>
       <span class="link-text">Cloud</span>
     </span>
+    <!-- Only while a printer is holding tickets: the kitchen would otherwise find out first. -->
+    @for (printer of connectivity.printers(); track printer.printer) {
+      <span class="link down" [matTooltip]="printerHint(printer)">
+        <mat-icon>print_disabled</mat-icon>
+        <span class="link-text">{{ printer.printer }} printer: {{ printer.waiting }} waiting</span>
+      </span>
+    }
   </span>
 
   @if (orderTakingOnly()) {
