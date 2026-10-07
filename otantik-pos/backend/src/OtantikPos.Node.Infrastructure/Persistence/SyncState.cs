@@ -9,6 +9,7 @@ public sealed class SyncState
 {
     public const string OrdersChangedSince = "orders.changed-since";
     public const string ReferenceDataSyncedAt = "reference-data.synced-at";
+    public const string OnlineOrdersChangedSince = "online-orders.changed-since";
 
     public string Key { get; set; } = string.Empty;
 

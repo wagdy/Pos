@@ -125,7 +125,7 @@ public sealed record SaveSharedCostRequest(string Name, Guid? RawMaterialId, dec
 // report (Pillar 2). Costs come from the stock module: each material's weighted average cost,
 // and the cost each sale's stock movements recorded when they happened. Prices are the menu's,
 // which are before tax, so net sales need no VAT taken off.
-public sealed class CostingService(NodeDbContext db, RestaurantClock clock)
+public sealed class CostingService(NodeDbContext db, RestaurantClock clock, SalesLedger ledger)
 {
     // ---- Materials ----
 
@@ -359,14 +359,10 @@ public sealed class CostingService(NodeDbContext db, RestaurantClock clock)
         var (from, _) = clock.Bounds(first);
         var (_, to) = clock.Bounds(last);
 
-        // Billed and not refunded: a line voided before payment was never charged, and a refunded
-        // one is not a sale. An order's own discount is not shared out across its items.
-        var lines = await db.Orders.AsNoTracking()
-            .Where(o => !o.IsDeleted && o.ClosedAt >= from && o.ClosedAt < to)
-            .SelectMany(o => o.OrderItems)
-            .Where(i => i.VoidType == null)
-            .Include(i => i.AddOns)
-            .ToListAsync(cancellationToken);
+        // Paid at the till or online, billed and not refunded: a line voided before payment was
+        // never charged, and a refunded one is not a sale. An order's own discount is not shared
+        // out across its items.
+        var lines = (await ledger.GetAsync(from, to, cancellationToken)).SelectMany(o => o.Lines).Where(l => l.OnBill).ToList();
         if (lines.Count == 0)
             return [];
 
@@ -402,8 +398,7 @@ public sealed class CostingService(NodeDbContext db, RestaurantClock clock)
                 return new SoldLine(l.MenuItemId, l.VariantId, name, nameAr, item?.Category ?? string.Empty, l.Quantity, l.LineTotal,
                     posted.Sum(m => -m.Quantity * (m.UnitCost ?? 0)), true, posted.Any(m => m.UnitCost is null), false);
 
-            var needs = StockRequirements.For(
-                new SoldItem(l.MenuItemId, l.VariantId, l.AddOns.Select(a => a.AddOnId).ToList(), l.Quantity), recipes);
+            var needs = StockRequirements.For(new SoldItem(l.MenuItemId, l.VariantId, l.AddOnIds, l.Quantity), recipes);
             return new SoldLine(l.MenuItemId, l.VariantId, name, nameAr, item?.Category ?? string.Empty, l.Quantity, l.LineTotal,
                 needs.Sum(n => n.Value * (averageCosts.GetValueOrDefault(n.Key) ?? 0)), needs.Count > 0,
                 needs.Keys.Any(id => averageCosts.GetValueOrDefault(id) is null), needs.Count > 0);

@@ -10,6 +10,7 @@ using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Costing;
+using OtantikPos.Node.Infrastructure.DeliverySystem;
 using OtantikPos.Node.Infrastructure.Identity;
 using OtantikPos.Node.Infrastructure.Messaging;
 using OtantikPos.Node.Infrastructure.Printing;
@@ -51,6 +52,7 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<PrintJob> PrintJobs => Set<PrintJob>();
     public DbSet<CashReceived> CashReceived => Set<CashReceived>();
+    public DbSet<OnlineSale> OnlineSales => Set<OnlineSale>();
     public DbSet<SyncState> SyncState => Set<SyncState>();
 
     public DbSet<StaffMember> Staff => Set<StaffMember>();

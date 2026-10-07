@@ -93,7 +93,7 @@ public sealed record SpoilageEntryLine(
 // what the counts and the deliveries say left the stores; standard usage is what the recipes
 // say the sales should have taken. Both are as purchased (before trimming), as stock is kept,
 // so the variance is valued at the average purchase cost, as the template prices it.
-public sealed class VarianceService(NodeDbContext db)
+public sealed class VarianceService(NodeDbContext db, SalesLedger ledger)
 {
     private static readonly StockMovementReason[] Flows =
         [StockMovementReason.Purchase, StockMovementReason.Waste, StockMovementReason.VoidReturn, StockMovementReason.Spoilage];
@@ -138,13 +138,12 @@ public sealed class VarianceService(NodeDbContext db)
         decimal Flow(Guid id, StockMovementReason reason) =>
             flows.Where(m => m.RawMaterialId == id && m.Reason == reason).Sum(m => m.Quantity);
 
-        // Sales, by when their order closed: a sale's movements are posted just after, so one
-        // closed a moment before the count belongs to this period even if posted after it.
-        var sold = await db.Orders.AsNoTracking()
-            .Where(o => !o.IsDeleted && o.ClosedAt > from.PostedAtUtc && o.ClosedAt <= to.PostedAtUtc)
-            .SelectMany(o => o.OrderItems)
-            .Select(i => new { i.PublicId, i.MenuItemId, i.VariantId, i.MenuItemName, i.VariantName, i.Quantity, Voided = i.VoidType != null })
-            .ToListAsync(cancellationToken);
+        // Sales at the till by when their order closed, online ones by when they were paid: a
+        // sale's movements are posted just after, so one closed a moment before the count belongs
+        // to this period even if posted after it. After the opening count, up to the closing one.
+        var sold = (await ledger.GetAsync(from.PostedAtUtc.AddTicks(1), to.PostedAtUtc.AddTicks(1), cancellationToken))
+            .SelectMany(o => o.Lines)
+            .ToList();
         var soldIds = sold.Select(i => i.PublicId).ToHashSet();
         var saleMovements = (await db.StockMovements.AsNoTracking()
                 .Where(m => m.Reason == StockMovementReason.Sale
@@ -157,7 +156,7 @@ public sealed class VarianceService(NodeDbContext db)
 
         var withStock = saleMovements.Select(m => m.SourceId).ToHashSet();
         var soldWithoutStock = sold
-            .Where(i => !i.Voided && !withStock.Contains(i.PublicId))
+            .Where(i => i.OnBill && !withStock.Contains(i.PublicId))
             .GroupBy(i => (i.MenuItemId, i.VariantId))
             .Select(g => new SoldWithoutStock(
                 ItemCode(g.Key.MenuItemId, g.Key.VariantId),

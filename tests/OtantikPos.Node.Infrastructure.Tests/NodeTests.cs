@@ -19,6 +19,7 @@ using OtantikPos.Node.Infrastructure.DeliverySystem;
 using OtantikPos.Node.Infrastructure.Identity;
 using OtantikPos.Node.Infrastructure.Messaging;
 using OtantikPos.Node.Infrastructure.Printing;
+using OtantikPos.Node.Infrastructure.Persistence;
 using OtantikPos.Ordering.Application.Orders;
 using OtantikPos.Ordering.Application.Reports;
 using OtantikPos.Ordering.Domain;
@@ -335,6 +336,108 @@ public class NodeTests
         await node.Service<CostingService>(scope).SaveSharedCostAsync(null, new SaveSharedCostRequest("Gas", null, 60, null), ct);
         s = (await kpis.GetAsync(today.Year, today.Month, ct)).Statement;
         Assert.Equal((135m, 12m), (s.FoodRecipeCost, s.BeverageRecipeCost));
+    }
+
+    // Online orders are run from the delivery system's own screens but cooked from the same stores:
+    // the till reads the paid ones, takes their stock once, and counts them in its cost reports,
+    // while its open orders and the day's takings stay its own.
+    [Fact]
+    public async Task Online_orders_paid_in_the_delivery_system_take_stock_and_count_in_the_reports()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        var ct = TestContext.Current.CancellationToken;
+        var patty = (await node.Send(new CreateRawMaterialCommand("Beef patty", UnitOfMeasure.Piece, PurchaseUnit: "piece", PurchaseUnitSize: 1, CostPerPurchaseUnit: 20))).Id;
+        await node.Send(new ReceivePurchaseCommand(Guid.NewGuid(), [new(patty, 50)]));
+        await node.Send(new SetRecipeCommand(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, [new(patty, 1)]));
+        Task<decimal> Patties() => node.Db(db => db.RawMaterials.Where(m => m.Id == patty).Select(m => m.QuantityOnHand).SingleAsync());
+
+        // The sync starts from when it first runs; these are placed after.
+        Assert.True(await TestNode.WaitFor(() => node.Db(db => db.SyncState.AnyAsync(s => s.Key == SyncState.OnlineOrdersChangedSince))));
+        Order Online(PaymentMethod method, int burgers, OrderStatus status = OrderStatus.Pending) => new()
+        {
+            Type = OrderType.Delivery,
+            Status = status,
+            PaymentMethod = method,
+            PaymentStatus = PaymentStatus.Confirmed,
+            OrderItems = [new OrderItem { MenuItemId = FakeDeliverySystem.Burger, MenuItemName = "Burger", UnitPrice = 120, Quantity = burgers }],
+        };
+        var instapay = Online(PaymentMethod.Instapay, 3);
+        instapay.DiscountAmount = 30;
+        instapay.DeliveryFee = 20;
+        var cash = Online(PaymentMethod.Cash, 1);
+        lock (node.Cloud.OnlineOrders)
+            node.Cloud.OnlineOrders.AddRange([instapay, cash, Online(PaymentMethod.Instapay, 5, OrderStatus.Cancelled)]);
+
+        using var scope = node.Scope();
+        var sync = node.Service<OnlineSalesSync>(scope);
+        await sync.SyncAsync(ct);
+        Assert.True(await TestNode.WaitFor(async () => await Patties() == 47));
+
+        // Cash on delivery counts once the driver has handed it over.
+        var delivered = Online(PaymentMethod.Cash, 1, OrderStatus.Delivered);
+        delivered.PublicId = cash.PublicId;
+        delivered.OrderItems.Single().PublicId = cash.OrderItems.Single().PublicId;
+        lock (node.Cloud.OnlineOrders)
+        {
+            node.Cloud.OnlineOrders.Remove(cash);
+            node.Cloud.OnlineOrders.Add(delivered);
+        }
+        await sync.SyncAsync(ct);
+        await sync.SyncAsync(ct);
+        Assert.True(await TestNode.WaitFor(async () => await Patties() == 46));
+        Assert.Equal(2, await node.Db(db => db.OnlineSales.CountAsync()));
+
+        var today = node.Service<RestaurantClock>(scope).BusinessDateOf(DateTime.UtcNow);
+        var burger = Assert.Single((await node.Service<CostingService>(scope).GetTheoreticalCostAsync(today.Year, today.Month, ct)).Rows);
+        Assert.Equal((4, 480m, 80m, 0), (burger.QuantitySold, burger.NetSales, burger.TheoreticalCost, burger.QuantityCostedNow));
+        // Revenue: 360 less the 30 promo, the delivered 120, and the 20 delivery fee.
+        var month = (await node.Service<KpiService>(scope).GetAsync(today.Year, today.Month, ct)).Statement;
+        Assert.Equal((470m, 2), (month.Revenue, month.PaidOrders));
+
+        // Not the till's orders: nothing to take payment for, and not in its takings.
+        Assert.Empty(await node.Send(new GetOpenOrdersQuery()));
+        Assert.Empty((await node.Send(new GetDayReportQuery())).Orders);
+        await Task.Delay(500, ct);
+        Assert.Equal(46m, await Patties());
+    }
+
+    // A delivery system from before the online orders feed answers 404. The till carries on, and
+    // once the feed appears takes the stock of online orders from then, not the weeks before.
+    [Fact]
+    public async Task Without_the_online_orders_feed_the_till_waits_and_starts_from_when_it_appears()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        var ct = TestContext.Current.CancellationToken;
+        node.Cloud.OnlineOrdersOffered = false;
+        using var scope = node.Scope();
+        var sync = node.Service<OnlineSalesSync>(scope);
+
+        // The till has been reading since yesterday; an online order was paid an hour ago, while
+        // the delivery system had no feed.
+        Assert.True(await TestNode.WaitFor(() => node.Db(db => db.SyncState.AnyAsync(s => s.Key == SyncState.OnlineOrdersChangedSince))));
+        await node.Db(async db =>
+        {
+            var cursor = await db.SyncState.SingleAsync(s => s.Key == SyncState.OnlineOrdersChangedSince, ct);
+            cursor.Value = DateTime.UtcNow.AddDays(-1).ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+            return await db.SaveChangesAsync(ct);
+        });
+        var placedWhileMissing = new Order
+        {
+            Type = OrderType.Delivery,
+            PaymentMethod = PaymentMethod.Instapay,
+            PaymentStatus = PaymentStatus.Confirmed,
+            UpdatedAt = DateTime.UtcNow.AddHours(-1),
+            OrderItems = [new OrderItem { MenuItemId = FakeDeliverySystem.Burger, MenuItemName = "Burger", UnitPrice = 120, Quantity = 1 }],
+        };
+        lock (node.Cloud.OnlineOrders)
+            node.Cloud.OnlineOrders.Add(placedWhileMissing);
+        await sync.SyncAsync(ct);
+
+        node.Cloud.OnlineOrdersOffered = true;
+        await sync.SyncAsync(ct);
+        Assert.Equal(0, await node.Db(db => db.OnlineSales.CountAsync()));
     }
 
     // The break-even worksheet: the month's sales at a year's pace, cost of sales at its ratio, the

@@ -37,6 +37,11 @@ public sealed class FakeDeliverySystem : IAsyncDisposable
     public ConcurrentDictionary<Guid, LoyaltyRefund> Refunds { get; } = new();
     public List<Order> ChangedOrders { get; } = new();
 
+    // Online orders, which the till does not hold: what api/pos-sync/online-orders serves. Not
+    // offered, it answers 404, as a delivery system from before the feed does.
+    public List<Order> OnlineOrders { get; } = new();
+    public volatile bool OnlineOrdersOffered = true;
+
     // What GET reference-data serves: the menu, tax rate and staff. A test changes it to play an
     // admin editing the menu.
     public ReferenceData Reference { get; set; } = ReferenceData();
@@ -97,6 +102,13 @@ public sealed class FakeDeliverySystem : IAsyncDisposable
             return Results.NoContent();
         });
         _app.MapGet("/api/pos-sync/orders", (DateTime changedSince) => ChangedOrders.Where(o => o.UpdatedAt >= changedSince).ToList());
+        _app.MapGet("/api/pos-sync/online-orders", (DateTime changedSince) =>
+        {
+            if (!OnlineOrdersOffered)
+                return Results.NotFound();
+            lock (OnlineOrders)
+                return Results.Ok(OnlineOrders.Where(o => o.UpdatedAt >= changedSince.ToUniversalTime()).ToList());
+        });
         _app.MapHub<PosSyncHub>("/hubs/pos-sync");
     }
 

@@ -122,6 +122,18 @@ public sealed class DeliverySystemApi(HttpClient http, IOptions<DeliverySystemOp
         return await response.Content.ReadFromJsonAsync<List<Order>>(Json, cancellationToken) ?? [];
     }
 
+    // Online orders, which the till does not hold, changed since then; without who ordered. Null
+    // from a delivery system too old to offer them.
+    public async Task<IReadOnlyList<Order>?> GetOnlineOrdersChangedSinceAsync(DateTime sinceUtc, CancellationToken cancellationToken)
+    {
+        var since = Uri.EscapeDataString(sinceUtc.ToString("O", CultureInfo.InvariantCulture));
+        using var response = await SendAsync(HttpMethod.Get, $"api/pos-sync/online-orders?changedSince={since}", null, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<List<Order>>(Json, cancellationToken) ?? [];
+    }
+
     public async Task<ReferenceData> GetReferenceDataAsync(CancellationToken cancellationToken)
     {
         using var response = await SendAsync(HttpMethod.Get, "api/pos-sync/reference-data", null, cancellationToken);

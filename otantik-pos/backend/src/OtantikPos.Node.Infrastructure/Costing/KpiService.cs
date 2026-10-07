@@ -84,7 +84,7 @@ public sealed record KpiReport(
 // Pillar 4: the template's financial KPIs for a business month. Sales and recipe costs come
 // from the till; losses from the stock ledger; wages, hours and overheads from what the manager
 // enters for the month.
-public sealed class KpiService(NodeDbContext db, RestaurantClock clock, CostingService costing)
+public sealed class KpiService(NodeDbContext db, RestaurantClock clock, CostingService costing, SalesLedger ledger)
 {
     // The template's healthy ranges.
     private static readonly (decimal From, decimal To) FoodCostRange = (28, 35);
@@ -107,23 +107,21 @@ public sealed class KpiService(NodeDbContext db, RestaurantClock clock, CostingS
         var (from, _) = clock.Bounds(theoretical.From);
         var (_, to) = clock.Bounds(theoretical.To);
 
-        // Revenue: the paid orders' lines still on the bill, less each order's promo discount
-        // shared over its lines by value, before VAT. Refunded lines are not revenue.
-        var orders = await db.Orders.AsNoTracking()
-            .Where(o => !o.IsDeleted && o.ClosedAt >= from && o.ClosedAt < to)
-            .Include(o => o.OrderItems).ThenInclude(i => i.AddOns)
-            .ToListAsync(cancellationToken);
+        // Revenue: the paid orders' lines still on the bill, at the till and online, less each
+        // order's promo discount shared over its lines by value, before VAT. Refunded lines are
+        // not revenue.
+        var orders = await ledger.GetAsync(from, to, cancellationToken);
         var categoryOf = await db.MenuItems.AsNoTracking().IgnoreQueryFilters()
             .ToDictionaryAsync(m => m.Id, m => m.Category, cancellationToken);
         decimal food = 0, drinks = 0, deliveryFees = 0;
         var paidOrders = 0;
         foreach (var order in orders)
         {
-            var lines = order.OrderItems.Where(i => i.VoidType is null).ToList();
+            var lines = order.Lines.Where(l => l.OnBill).ToList();
             if (lines.Count == 0)
                 continue;
             paidOrders++;
-            var billed = order.BilledItemsSubtotal;
+            var billed = order.BilledSubtotal;
             var kept = billed > 0 ? 1 - Math.Min(order.DiscountAmount, billed) / billed : 1;
             foreach (var line in lines)
             {
@@ -133,7 +131,7 @@ public sealed class KpiService(NodeDbContext db, RestaurantClock clock, CostingS
                 else
                     food += revenue;
             }
-            deliveryFees += Math.Max(order.DeliveryFee - order.DeliveryDiscountAmount, 0);
+            deliveryFees += order.DeliveryFee;
         }
         var revenueTotal = food + drinks + deliveryFees;
 

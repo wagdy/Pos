@@ -56,6 +56,7 @@ public static class DependencyInjection
         services.AddScoped<IKitchenPrintQueue, KitchenPrintQueue>();
         services.AddScoped<IReceiptPrintQueue, ReceiptPrintQueue>();
         services.AddScoped<ICashReceived, CashReceivedRecord>();
+        services.AddScoped<SalesLedger>();
         services.AddScoped<CostingService>();
         services.AddScoped<VarianceService>();
         services.AddScoped<KpiService>();
@@ -90,6 +91,9 @@ public static class DependencyInjection
         services.AddSingleton<DeliverySystemLink>();
         services.AddHostedService<CloudOrderListener>();
         services.AddHostedService<ReferenceDataSync>();
+        services.AddScoped<OnlineSalesImporter>();
+        services.AddSingleton<OnlineSalesSync>();
+        services.AddHostedService(sp => sp.GetRequiredService<OnlineSalesSync>());
 
         // Outbox.
         services.AddSingleton<EventSerializer>();
