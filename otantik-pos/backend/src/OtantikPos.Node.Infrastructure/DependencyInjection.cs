@@ -58,12 +58,14 @@ public static class DependencyInjection
         services.AddScoped<ICashReceived, CashReceivedRecord>();
         services.AddScoped<CostingService>();
         services.AddScoped<VarianceService>();
+        services.AddScoped<KpiService>();
 
         // Inventory.
         services.AddScoped<IRawMaterialRepository, RawMaterialRepository>();
         services.AddScoped<IRecipeRepository, RecipeRepository>();
         services.AddScoped<IStockMovementRepository, StockMovementRepository>();
         services.AddScoped<IStockCountRepository, StockCountRepository>();
+        services.AddTransient(typeof(IPipelineBehavior<,>), typeof(RetryOnConflictBehavior<,>));
 
         // The delivery system. Short timeouts: a cashier is waiting on most of these calls, and
         // "the internet is down" has to come back in seconds, not after the default 30.

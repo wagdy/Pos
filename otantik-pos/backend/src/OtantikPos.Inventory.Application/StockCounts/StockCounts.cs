@@ -90,7 +90,7 @@ internal sealed class SaveStockCountCommandHandler(
 }
 
 // Posting again, after an answer was lost, returns the posted count and changes nothing.
-public sealed record PostStockCountCommand(Guid StockCountId, string StaffName = "") : IRequest<StockCountDto>;
+public sealed record PostStockCountCommand(Guid StockCountId, string StaffName = "") : IRequest<StockCountDto>, IRetryOnConflict;
 
 internal sealed class PostStockCountCommandHandler(
     IStockCountRepository counts,
@@ -136,7 +136,7 @@ internal sealed class DiscardStockCountCommandHandler(IStockCountRepository coun
 // A whole count in one request: recorded and posted at once. For a quick count of a few
 // materials, and for scripts; the screens use a draft.
 public sealed record RecordStockCountCommand(Guid StockCountId, IReadOnlyList<StockCountLine> Lines, string StaffName = "")
-    : IRequest<IReadOnlyList<RawMaterialDto>>;
+    : IRequest<IReadOnlyList<RawMaterialDto>>, IRetryOnConflict;
 
 internal sealed class RecordStockCountCommandHandler(
     IStockCountRepository counts,

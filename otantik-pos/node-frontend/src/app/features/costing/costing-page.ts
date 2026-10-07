@@ -47,6 +47,7 @@ export class CostingPage {
     { path: 'recipes', en: 'Recipes', ar: 'الوصفات' },
     { path: 'theoretical', en: 'Theoretical cost', ar: 'التكلفة النظرية' },
     { path: 'variance', en: 'Variance', ar: 'الانحراف' },
+    { path: 'kpis', en: 'KPIs', ar: 'المؤشرات' },
     { path: 'settings', en: 'Settings', ar: 'الإعدادات' },
   ];
 }

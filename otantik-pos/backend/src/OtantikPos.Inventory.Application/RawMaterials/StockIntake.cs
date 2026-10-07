@@ -11,7 +11,7 @@ namespace OtantikPos.Inventory.Application.RawMaterials;
 // so a delivery is never booked twice.
 
 public sealed record ReceivePurchaseCommand(Guid PurchaseId, IReadOnlyList<PurchaseLine> Lines)
-    : IRequest<IReadOnlyList<RawMaterialDto>>;
+    : IRequest<IReadOnlyList<RawMaterialDto>>, IRetryOnConflict;
 
 // Quantity in the material's own unit (grams, millilitres, pieces). Cost: what the line cost in
 // all, from the invoice; it moves the material's average cost. Without it, only stock changes.
@@ -42,7 +42,7 @@ internal sealed class ReceivePurchaseCommandHandler(
 // Thrown-away raw stock, as a manager records it. SpoilageId works as PurchaseId does, and
 // RecordedBy is set by the API from who is signed in.
 public sealed record RecordSpoilageCommand(Guid SpoilageId, IReadOnlyList<SpoilageLine> Lines, string RecordedBy = "")
-    : IRequest<IReadOnlyList<RawMaterialDto>>;
+    : IRequest<IReadOnlyList<RawMaterialDto>>, IRetryOnConflict;
 
 // Quantity in the material's own unit. Reason: expired, spoiled, dropped, damaged packaging.
 public sealed record SpoilageLine(Guid RawMaterialId, decimal Quantity, string Reason);

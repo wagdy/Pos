@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Otantik.SharedKernel.Authorization;
 using OtantikPos.Inventory.Domain.Recipes;
+using OtantikPos.Node.Api.Auth;
 using OtantikPos.Node.Infrastructure.Costing;
 
 namespace OtantikPos.Node.Api.Controllers;
@@ -12,7 +13,7 @@ namespace OtantikPos.Node.Api.Controllers;
 [ApiController]
 [Route("api/costing")]
 [Authorize(Policy = Permissions.CostingView)]
-public sealed class CostingController(CostingService costing, VarianceService variance) : ControllerBase
+public sealed class CostingController(CostingService costing, VarianceService variance, KpiService kpis) : ControllerBase
 {
     // Raw materials with their costs: what each costs per purchase unit, the last price paid, and
     // the stock's value.
@@ -48,6 +49,19 @@ public sealed class CostingController(CostingService costing, VarianceService va
         var to = DateTime.UtcNow;
         return variance.GetSpoilageAsync(to.AddDays(-Math.Clamp(days, 1, 366)), to.AddMinutes(1), cancellationToken);
     }
+
+    // The template's financial KPIs for a business month, with the month as an income statement
+    // and what each dish earned.
+    [HttpGet("kpis")]
+    public Task<KpiReport> GetKpis([FromQuery] int year, [FromQuery] int month, CancellationToken cancellationToken) =>
+        kpis.GetAsync(year, month, cancellationToken);
+
+    // A month's wages, labour hours and overheads, as the manager enters them. The whole month
+    // each time: a figure left out is not known yet.
+    [HttpPut("expenses/{year:int}/{month:int}")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public Task<MonthlyExpensesDto> SaveExpenses(int year, int month, MonthlyExpensesDto expenses, CancellationToken cancellationToken) =>
+        kpis.SaveExpensesAsync(year, month, expenses, User.FindFirst(StaffClaims.Name)?.Value, cancellationToken);
 
     [HttpGet("settings")]
     public Task<CostingSettingsDto> GetSettings(CancellationToken cancellationToken) =>

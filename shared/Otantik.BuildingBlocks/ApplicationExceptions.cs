@@ -15,3 +15,9 @@ public sealed class ForbiddenException(string message) : Exception(message);
 // value already exists. Infrastructure translates the database's own exceptions into this.
 public sealed class ConflictException(string message, Exception? innerException = null)
     : Exception(message, innerException);
+
+// A request that may be run again from the start when its save collides with another: it is
+// idempotent by an id of its own, and it reads everything it needs afresh. Stock entered by
+// hand (a delivery, spoilage, a count posted) is: it can collide with the outbox taking a sale's
+// stock from the same material, which the person entering it neither did nor can fix.
+public interface IRetryOnConflict;

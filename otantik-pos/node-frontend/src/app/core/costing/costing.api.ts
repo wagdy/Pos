@@ -101,8 +101,95 @@ export interface TheoreticalCostReport {
 
 export interface CostingSettings {
   foodCostTargetPercent: number;
-  // Left out of a save, it stays as it is.
+  // Left out of a save, these stay as they are.
   varianceTolerancePercent?: number | null;
+  // Menu categories that are drinks: the beverage cost %. None, everything is food.
+  beverageCategories?: string[] | null;
+}
+
+export type KpiKey =
+  | 'FoodCost'
+  | 'BeverageCost'
+  | 'LabourCost'
+  | 'AverageCheck'
+  | 'SalesPerLabourHour'
+  | 'GrossProfitMargin'
+  | 'NetProfitMargin';
+
+export type KpiStatus = 'Healthy' | 'Above' | 'Below' | 'NoRange' | 'Missing';
+
+// Value is a % for the ratios, money for the average check and sales per labour hour. Missing
+// says what is needed when there is no value.
+export interface Kpi {
+  key: KpiKey;
+  value: number | null;
+  healthyFrom: number | null;
+  healthyTo: number | null;
+  highIsBad: boolean;
+  status: KpiStatus;
+  missing: string | null;
+}
+
+// The month as an income statement: revenue before VAT, after promo discounts.
+export interface MonthStatement {
+  foodSales: number;
+  beverageSales: number;
+  deliveryFees: number;
+  revenue: number;
+  paidOrders: number;
+  foodRecipeCost: number;
+  beverageRecipeCost: number;
+  kitchenWaste: number;
+  spoilage: number;
+  countDifferences: number;
+  costOfSales: number;
+  grossProfit: number;
+  wagesAndBenefits: number | null;
+  otherControllableCosts: number | null;
+  occupationCost: number | null;
+  interest: number | null;
+  depreciation: number | null;
+  netProfit: number | null;
+}
+
+// What a month cost beyond its ingredients, as entered; null is not known yet.
+export interface MonthlyExpenses {
+  wagesAndBenefits: number | null;
+  labourHours: number | null;
+  otherControllableCosts: number | null;
+  occupationCost: number | null;
+  interest: number | null;
+  depreciation: number | null;
+  updatedAtUtc?: string | null;
+  updatedBy?: string | null;
+}
+
+export interface ItemProfit {
+  itemCode: string;
+  menuItem: string;
+  menuItemAr: string | null;
+  category: string;
+  beverage: boolean;
+  quantitySold: number;
+  netSales: number;
+  cost: number | null;
+  profit: number | null;
+  profitPerUnit: number | null;
+  marginPercent: number | null;
+}
+
+export interface KpiReport {
+  year: number;
+  month: number;
+  from: string;
+  to: string;
+  beverageCategories: string[];
+  statement: MonthStatement;
+  expenses: MonthlyExpenses;
+  kpis: Kpi[];
+  items: ItemProfit[];
+  itemsWithoutRecipe: number;
+  salesWithoutRecipe: number;
 }
 
 export type StockCountStatus = 'Draft' | 'Posted';
@@ -317,6 +404,15 @@ export class CostingApi {
     return this.http.put('/api/inventory/recipes', recipe);
   }
 
+  kpis(year: number, month: number): Observable<KpiReport> {
+    return this.http.get<KpiReport>('/api/costing/kpis', { params: { year, month } });
+  }
+
+  // The whole month each time: a figure left empty is not known yet.
+  saveExpenses(year: number, month: number, expenses: MonthlyExpenses): Observable<MonthlyExpenses> {
+    return this.http.put<MonthlyExpenses>(`/api/costing/expenses/${year}/${month}`, expenses);
+  }
+
   stockCounts(): Observable<StockCountSummary[]> {
     return this.http.get<StockCountSummary[]>('/api/inventory/stock-counts');
   }
@@ -397,4 +493,64 @@ export const evaluationLabels: Record<VarianceEvaluation, { en: string; ar: stri
   Favourable: { en: 'Favourable', ar: 'مواتٍ' },
   WithinLimit: { en: 'Within limit', ar: 'ضمن الحد' },
   SharedCost: { en: 'Shared cost', ar: 'تكلفة مشتركة' },
+};
+
+// The template's indicators: name, formula and purpose in English and Arabic, as it writes them.
+export const kpiLabels: Record<KpiKey, { en: string; ar: string; formula: string; formulaAr: string; purpose: string; money: boolean }> = {
+  FoodCost: {
+    en: 'Food cost %',
+    ar: 'نسبة تكلفة الطعام',
+    formula: 'Cost of raw materials consumed ÷ food sales × 100',
+    formulaAr: '(تكلفة المواد الخام المستهلكة ÷ إجمالي مبيعات الطعام) × 100',
+    purpose: 'How well food is bought and prepared',
+    money: false,
+  },
+  BeverageCost: {
+    en: 'Beverage cost %',
+    ar: 'نسبة تكلفة المشروبات',
+    formula: 'Cost of beverages sold ÷ beverage revenue × 100',
+    formulaAr: '(تكلفة المشروبات المباعة ÷ إيرادات المشروبات) × 100',
+    purpose: 'How well drinks are managed',
+    money: false,
+  },
+  LabourCost: {
+    en: 'Labour cost %',
+    ar: 'نسبة تكلفة العمالة',
+    formula: 'Wages and benefits ÷ revenue × 100',
+    formulaAr: '(إجمالي الرواتب والمزايا ÷ إجمالي الإيرادات) × 100',
+    purpose: 'Staffing against revenue',
+    money: false,
+  },
+  AverageCheck: {
+    en: 'Average check',
+    ar: 'متوسط قيمة الفاتورة',
+    formula: 'Revenue ÷ paid orders',
+    formulaAr: 'إجمالي الإيرادات ÷ عدد الفواتير',
+    purpose: 'What a customer spends on average',
+    money: true,
+  },
+  SalesPerLabourHour: {
+    en: 'Sales per labour hour',
+    ar: 'الإيراد لكل ساعة عمل',
+    formula: 'Revenue ÷ labour hours',
+    formulaAr: 'إجمالي المبيعات ÷ إجمالي ساعات العمل',
+    purpose: 'How productive the staff are',
+    money: true,
+  },
+  GrossProfitMargin: {
+    en: 'Gross profit margin',
+    ar: 'هامش الربح الإجمالي',
+    formula: 'Gross profit ÷ revenue × 100',
+    formulaAr: '(إجمالي الربح ÷ إجمالي الإيرادات) × 100',
+    purpose: 'Profit after the cost of sales',
+    money: false,
+  },
+  NetProfitMargin: {
+    en: 'Net profit margin',
+    ar: 'هامش الربح الصافي',
+    formula: 'Net profit ÷ revenue × 100',
+    formulaAr: '(صافي الربح ÷ إجمالي الإيرادات) × 100',
+    purpose: 'Profit after everything',
+    money: false,
+  },
 };

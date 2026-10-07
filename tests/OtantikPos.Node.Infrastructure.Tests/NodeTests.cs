@@ -1,3 +1,4 @@
+using MediatR;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -259,6 +260,109 @@ public class NodeTests
         await node.Send(new SaveStockCountCommand(next, [new(oil, 1)], "Sara"));
         await node.Send(new DiscardStockCountCommand(next));
         Assert.Equal([draft], (await node.Send(new GetStockCountsQuery())).Select(c => c.Id));
+    }
+
+    // Pillar 4, the template's KPIs for a month: food and drinks split by category, losses from
+    // the ledger counted against food, wages and overheads as the manager enters them.
+    [Fact]
+    public async Task The_months_kpis_come_from_sales_recipes_losses_and_what_the_manager_enters()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        var ct = TestContext.Current.CancellationToken;
+        async Task<Guid> Piece(string name, decimal cost) =>
+            (await node.Send(new CreateRawMaterialCommand(name, UnitOfMeasure.Piece, PurchaseUnit: "piece", PurchaseUnitSize: 1, CostPerPurchaseUnit: cost))).Id;
+        var patty = await Piece("Beef patty", 20);
+        var bun = await Piece("Bun", 5);
+        var lemon = await Piece("Lemon", 6);
+        await node.Send(new ReceivePurchaseCommand(Guid.NewGuid(), [new(patty, 50), new(bun, 50), new(lemon, 50)]));
+        await node.Send(new SetRecipeCommand(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, [new(patty, 1), new(bun, 1)]));
+        await node.Send(new SetRecipeCommand(RecipeTargetKind.MenuItem, FakeDeliverySystem.Lemonade, null, [new(lemon, 1)]));
+
+        // Two burgers and two lemonades; then two burgers sent, one voided after the kitchen made it.
+        var first = await node.Send(new OpenOrderCommand(OrderType.DineIn, TableNumber: "K1"));
+        await node.Send(new AddOrderItemCommand(first.PublicId, FakeDeliverySystem.Burger, 2));
+        await node.Send(new AddOrderItemCommand(first.PublicId, FakeDeliverySystem.Lemonade, 2));
+        await node.Send(new SendToKitchenCommand(first.PublicId));
+        await node.Send(new CheckoutCommand(first.PublicId, PaymentMethod.Cash));
+        var second = await node.Send(new OpenOrderCommand(OrderType.DineIn, TableNumber: "K2"));
+        second = await node.Send(new AddOrderItemCommand(second.PublicId, FakeDeliverySystem.Burger, 2));
+        await node.Send(new SendToKitchenCommand(second.PublicId));
+        await node.Send(new VoidOrderItemCommand(second.PublicId, second.OrderItems.Single().PublicId, 1, "Dropped"));
+        await node.Send(new CheckoutCommand(second.PublicId, PaymentMethod.Cash));
+        await node.Send(new RecordSpoilageCommand(Guid.NewGuid(), [new(bun, 2, "Stale")], "Omar"));
+        Assert.True(await TestNode.WaitFor(async () => await node.Db(db => db.StockMovements.CountAsync(m => m.Reason == StockMovementReason.Sale)) == 5));
+
+        using var scope = node.Scope();
+        await node.Service<CostingService>(scope).SaveSettingsAsync(new CostingSettingsDto(30, BeverageCategories: ["Drinks"]), ct);
+        var kpis = node.Service<KpiService>(scope);
+        var today = node.Service<RestaurantClock>(scope).BusinessDateOf(DateTime.UtcNow);
+
+        // Before the month's wages are in, what needs them says so rather than showing 0.
+        var report = await kpis.GetAsync(today.Year, today.Month, ct);
+        var labour = Assert.Single(report.Kpis, k => k.Key == "LabourCost");
+        Assert.Equal((KpiStatus.Missing, (decimal?)null), (labour.Status, labour.Value));
+        Assert.Null(report.Statement.NetProfit);
+
+        await kpis.SaveExpensesAsync(today.Year, today.Month, new MonthlyExpensesDto(120, 10, 20, 50, 5, 5), "Omar", ct);
+        report = await kpis.GetAsync(today.Year, today.Month, ct);
+
+        // Food 3 × 120, drinks 2 × 30. Recipes: 3 burgers × 25, 2 lemonades × 6. Losses: the voided
+        // burger (25) and two stale buns (10).
+        var s = report.Statement;
+        Assert.Equal((360m, 60m, 420m, 2, 75m, 12m, 25m, 10m, 0m, 122m, 298m, 98m),
+            (s.FoodSales, s.BeverageSales, s.Revenue, s.PaidOrders, s.FoodRecipeCost, s.BeverageRecipeCost,
+                s.KitchenWaste, s.Spoilage, s.CountDifferences, s.CostOfSales, s.GrossProfit, s.NetProfit));
+
+        var byKey = report.Kpis.ToDictionary(k => k.Key);
+        Assert.Equal((30.6m, KpiStatus.Healthy), (byKey["FoodCost"].Value, byKey["FoodCost"].Status));
+        Assert.Equal((20m, KpiStatus.Healthy), (byKey["BeverageCost"].Value, byKey["BeverageCost"].Status));
+        Assert.Equal((28.6m, KpiStatus.Healthy), (byKey["LabourCost"].Value, byKey["LabourCost"].Status));
+        Assert.Equal((210m, KpiStatus.NoRange), (byKey["AverageCheck"].Value, byKey["AverageCheck"].Status));
+        Assert.Equal(42m, byKey["SalesPerLabourHour"].Value);
+        Assert.Equal((71m, KpiStatus.Above), (byKey["GrossProfitMargin"].Value, byKey["GrossProfitMargin"].Status));
+        Assert.Equal((23.3m, KpiStatus.Above), (byKey["NetProfitMargin"].Value, byKey["NetProfitMargin"].Status));
+
+        // Item profitability: selling price − ingredient cost, the most profitable first.
+        Assert.Equal([("Burger", 285m, 95m, 79.2m), ("Lemonade", 48m, 24m, 80m)],
+            report.Items.Select(i => (i.MenuItem, i.Profit!.Value, i.ProfitPerUnit!.Value, i.MarginPercent!.Value)));
+        Assert.True(report.Items.Single(i => i.MenuItem == "Lemonade").Beverage);
+
+        // A shared cost for every meal, 60 a month: the three burgers carry it, not the lemonades.
+        await node.Service<CostingService>(scope).SaveSharedCostAsync(null, new SaveSharedCostRequest("Gas", null, 60, null), ct);
+        s = (await kpis.GetAsync(today.Year, today.Month, ct)).Statement;
+        Assert.Equal((135m, 12m), (s.FoodRecipeCost, s.BeverageRecipeCost));
+    }
+
+    // A delivery, spoilage or count entered by hand can collide with the outbox taking a sale's
+    // stock from the same material. Those are run again rather than refused; anything else still
+    // reports the conflict.
+    [Fact]
+    public async Task Stock_entered_by_hand_is_saved_on_a_retry_when_it_collides_with_a_sale()
+    {
+        await using var node = await TestNode.StartAsync();
+        using var scope = node.Scope();
+        var ct = TestContext.Current.CancellationToken;
+        var collision = () => new ConflictException("Someone else changed this at the same time.");
+
+        var purchase = Assert.Single(node.Service<IEnumerable<IPipelineBehavior<ReceivePurchaseCommand, IReadOnlyList<RawMaterialDto>>>>(scope));
+        var calls = 0;
+        await purchase.Handle(new ReceivePurchaseCommand(Guid.NewGuid(), []),
+            _ => ++calls == 1 ? throw collision() : Task.FromResult<IReadOnlyList<RawMaterialDto>>([]), ct);
+        Assert.Equal(2, calls);
+
+        // Three collisions in a row: given up, and reported.
+        calls = 0;
+        await Assert.ThrowsAsync<ConflictException>(() => purchase.Handle(new ReceivePurchaseCommand(Guid.NewGuid(), []),
+            _ => { calls++; throw collision(); }, ct));
+        Assert.Equal(3, calls);
+
+        // A draft count saved from two tablets is not retried: the second should see the first.
+        var draft = Assert.Single(node.Service<IEnumerable<IPipelineBehavior<SaveStockCountCommand, StockCountDto>>>(scope));
+        calls = 0;
+        await Assert.ThrowsAsync<ConflictException>(() => draft.Handle(new SaveStockCountCommand(Guid.NewGuid(), []),
+            _ => { calls++; throw collision(); }, ct));
+        Assert.Equal(1, calls);
     }
 
     // INSTALL.md, step 4: once a real manager has a PIN, the first manager's PIN comes out of .env

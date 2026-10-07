@@ -46,6 +46,7 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
     public DbSet<StockCount> StockCounts => Set<StockCount>();
     public DbSet<CostingSettings> CostingSettings => Set<CostingSettings>();
     public DbSet<SharedCost> SharedCosts => Set<SharedCost>();
+    public DbSet<MonthlyExpenses> MonthlyExpenses => Set<MonthlyExpenses>();
 
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<PrintJob> PrintJobs => Set<PrintJob>();

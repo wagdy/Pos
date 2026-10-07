@@ -70,6 +70,10 @@ export const routes: Routes = [
             loadComponent: () => import('./features/costing/variance-page').then((m) => m.VariancePage),
           },
           {
+            path: 'kpis',
+            loadComponent: () => import('./features/costing/kpis-page').then((m) => m.KpisPage),
+          },
+          {
             path: 'settings',
             loadComponent: () => import('./features/costing/settings-page').then((m) => m.SettingsPage),
           },

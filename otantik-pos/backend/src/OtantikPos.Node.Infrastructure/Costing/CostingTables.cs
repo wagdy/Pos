@@ -21,6 +21,45 @@ public sealed class CostingSettings
     // How far actual usage may stray from standard, either way, before the variance report calls
     // it unfavourable or favourable: the template's ±5%.
     public decimal VarianceTolerancePercent { get; set; } = DefaultVarianceTolerance;
+
+    // The menu categories that are drinks, by name: their sales and costs are the beverage cost %,
+    // the rest the food cost %. None set, everything is food.
+    public List<string> BeverageCategories { get; set; } = [];
+}
+
+// What a month cost beyond its ingredients, as the manager enters it: what the KPIs need besides
+// sales, and the income statement's lines for the break-even worksheet. Every figure is optional
+// until known; a KPI that needs a missing one says so rather than showing 0.
+public sealed class MonthlyExpenses
+{
+    public int Year { get; init; }
+    public int Month { get; init; }
+
+    // Wages, salaries and staff benefits: the labour cost %.
+    public decimal? WagesAndBenefits { get; set; }
+
+    // Hours worked by all staff in the month: sales per labour hour.
+    public decimal? LabourHours { get; set; }
+
+    // Utilities, marketing, repairs, supplies: the rest of the controllable costs.
+    public decimal? OtherControllableCosts { get; set; }
+
+    // Rent and the like.
+    public decimal? OccupationCost { get; set; }
+
+    public decimal? Interest { get; set; }
+    public decimal? Depreciation { get; set; }
+
+    public DateTime UpdatedAtUtc { get; set; }
+    public string? UpdatedBy { get; set; }
+
+    public void Validate()
+    {
+        if (Month is < 1 or > 12 || Year is < 2000 or > 2100)
+            throw new DomainException("Choose a month.");
+        if (new[] { WagesAndBenefits, LabourHours, OtherControllableCosts, OccupationCost, Interest, Depreciation }.Any(v => v < 0))
+            throw new DomainException("A month's costs and hours cannot be negative.");
+    }
 }
 
 // A cost no recipe names, spread over the meals that share it: frying oil, gas, takeaway boxes.
@@ -60,6 +99,7 @@ internal sealed class CostingSettingsConfiguration : IEntityTypeConfiguration<Co
         builder.Property(s => s.Id).ValueGeneratedNever();
         builder.Property(s => s.FoodCostTargetPercent).HasPrecision(5, 2);
         builder.Property(s => s.VarianceTolerancePercent).HasPrecision(5, 2).HasDefaultValue(CostingSettings.DefaultVarianceTolerance);
+        builder.Property(s => s.BeverageCategories).HasDefaultValueSql("'{}'::text[]");
     }
 }
 
@@ -73,5 +113,21 @@ internal sealed class SharedCostConfiguration : IEntityTypeConfiguration<SharedC
         builder.Property(c => c.Category).HasMaxLength(100);
         builder.Property(c => c.MonthlyAmount).HasPrecision(18, 2);
         builder.HasOne<RawMaterial>().WithMany().HasForeignKey(c => c.RawMaterialId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+internal sealed class MonthlyExpensesConfiguration : IEntityTypeConfiguration<MonthlyExpenses>
+{
+    public void Configure(EntityTypeBuilder<MonthlyExpenses> builder)
+    {
+        builder.ToTable("MonthlyExpenses", NodeDbContext.InventorySchema);
+        builder.HasKey(e => new { e.Year, e.Month });
+        builder.Property(e => e.WagesAndBenefits).HasPrecision(18, 2);
+        builder.Property(e => e.LabourHours).HasPrecision(10, 2);
+        builder.Property(e => e.OtherControllableCosts).HasPrecision(18, 2);
+        builder.Property(e => e.OccupationCost).HasPrecision(18, 2);
+        builder.Property(e => e.Interest).HasPrecision(18, 2);
+        builder.Property(e => e.Depreciation).HasPrecision(18, 2);
+        builder.Property(e => e.UpdatedBy).HasMaxLength(200);
     }
 }

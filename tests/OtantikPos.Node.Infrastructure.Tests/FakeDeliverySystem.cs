@@ -23,7 +23,7 @@ namespace OtantikPos.Node.Infrastructure.Tests;
 public sealed class FakeDeliverySystem : IAsyncDisposable
 {
     public const string NodeKey = "test-node-key";
-    public const int Burger = 1, Shawarma = 10, KiloTray = 101, Cheese = 7;
+    public const int Burger = 1, Shawarma = 10, KiloTray = 101, Cheese = 7, Lemonade = 20;
 
     private readonly WebApplication _app;
 
@@ -121,7 +121,7 @@ public sealed class FakeDeliverySystem : IAsyncDisposable
             14m,
             // Items name their category, as every item in the delivery system does: the till files
             // them under the category of that name.
-            [new Category { Id = 1, Name = "Mains" }],
+            [new Category { Id = 1, Name = "Mains" }, new Category { Id = 2, Name = "Drinks" }],
             [new SubCategory { Id = 11, Name = "Grill", CategoryId = 1 }],
             [cheese],
             [
@@ -135,6 +135,7 @@ public sealed class FakeDeliverySystem : IAsyncDisposable
                     Id = Shawarma, Name = "Shawarma", Price = 0, Category = "Mains", SubCategoryId = 11,
                     Variants = [new MenuItemVariant { Id = KiloTray, MenuItemId = Shawarma, Name = "Kilo tray", Price = 400 }],
                 },
+                new MenuItem { Id = Lemonade, Name = "Lemonade", Price = 30, Category = "Drinks" },
             ],
             [
                 new StaffAccount("staff-cashier", "Sara", UserRole.Cashier, true),

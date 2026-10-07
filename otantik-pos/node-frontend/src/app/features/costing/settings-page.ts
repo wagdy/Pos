@@ -75,6 +75,24 @@ interface Draft {
       </section>
 
       <section class="block">
+        <h2>Drinks <span class="inline-ar">المشروبات</span></h2>
+        <p class="note">The menu categories that are drinks: their sales and costs make the beverage cost %, the rest the food cost %.</p>
+        <div class="toolbar">
+          <mat-form-field subscriptSizing="dynamic" class="drinks">
+            <mat-label>Drinks categories · فئات المشروبات</mat-label>
+            <mat-select multiple [(ngModel)]="beverages" [disabled]="!canEdit()">
+              @for (c of categories(); track c) {
+                <mat-option [value]="c">{{ c }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+          @if (canEdit()) {
+            <button mat-flat-button (click)="saveBeverages()" [disabled]="sameBeverages() || busy()">Save</button>
+          }
+        </div>
+      </section>
+
+      <section class="block">
         <h2>Shared costs <span class="inline-ar">التكاليف المشتركة</span></h2>
         <p class="note">
           Each month's total is shared equally across the meals sold that month, and added to their cost.
@@ -103,7 +121,7 @@ interface Draft {
                       {{ cost.monthlyAmount | money }} a month
                     }
                   </td>
-                  <td>{{ cost.category ? cost.category + ' meals' : 'All meals' }}</td>
+                  <td>{{ cost.category ? cost.category + ' meals' : 'All meals (not drinks)' }}</td>
                   @if (canEdit()) {
                     <td class="num">
                       @if (confirming() === cost.id) {
@@ -155,7 +173,7 @@ interface Draft {
               <mat-form-field subscriptSizing="dynamic">
                 <mat-label>Shared across · موزعة على</mat-label>
                 <mat-select [(ngModel)]="d.category">
-                  <mat-option value="">All meals · كل الوجبات</mat-option>
+                  <mat-option value="">All meals, not drinks · كل الوجبات</mat-option>
                   @for (c of categories(); track c) {
                     <mat-option [value]="c">{{ c }}</mat-option>
                   }
@@ -183,6 +201,9 @@ interface Draft {
         margin: 0 0 4px;
         font: var(--mat-sys-title-medium);
       }
+    }
+    .drinks {
+      min-width: 280px;
     }
     .target {
       width: 200px;
@@ -236,6 +257,8 @@ export class SettingsPage {
   protected savedTarget = 30;
   protected tolerance = 5;
   protected savedTolerance = 5;
+  protected beverages: string[] = [];
+  private savedBeverages: string[] = [];
 
   constructor() {
     void this.load();
@@ -257,6 +280,26 @@ export class SettingsPage {
       this.notify.info('Targets saved.');
     } catch (error) {
       this.notify.error(error, 'The targets could not be saved.');
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  protected sameBeverages(): boolean {
+    return [...this.beverages].sort().join('|') === [...this.savedBeverages].sort().join('|');
+  }
+
+  protected async saveBeverages(): Promise<void> {
+    this.busy.set(true);
+    try {
+      const saved = await firstValueFrom(
+        this.api.saveSettings({ foodCostTargetPercent: this.savedTarget, beverageCategories: this.beverages }),
+      );
+      this.beverages = [...(saved.beverageCategories ?? [])];
+      this.savedBeverages = [...this.beverages];
+      this.notify.info('Drinks categories saved.');
+    } catch (error) {
+      this.notify.error(error, 'The drinks categories could not be saved.');
     } finally {
       this.busy.set(false);
     }
@@ -316,6 +359,8 @@ export class SettingsPage {
       ]);
       this.target = this.savedTarget = settings.foodCostTargetPercent;
       this.tolerance = this.savedTolerance = settings.varianceTolerancePercent ?? 5;
+      this.beverages = [...(settings.beverageCategories ?? [])];
+      this.savedBeverages = [...this.beverages];
       this.shared.set(shared);
       this.materials.set(materials);
     } catch (error) {

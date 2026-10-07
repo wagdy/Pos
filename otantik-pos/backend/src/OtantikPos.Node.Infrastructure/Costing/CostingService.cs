@@ -113,8 +113,9 @@ public sealed record TheoreticalCostReport(
     decimal TheoreticalCost,
     decimal? FoodCostPercent);
 
-// VarianceTolerancePercent: left out of a save, it stays as it is.
-public sealed record CostingSettingsDto(decimal FoodCostTargetPercent, decimal? VarianceTolerancePercent = null);
+// VarianceTolerancePercent and BeverageCategories: left out of a save, they stay as they are.
+public sealed record CostingSettingsDto(
+    decimal FoodCostTargetPercent, decimal? VarianceTolerancePercent = null, IReadOnlyList<string>? BeverageCategories = null);
 
 public sealed record SharedCostDto(Guid Id, string Name, Guid? RawMaterialId, string? RawMaterialName, decimal? MonthlyAmount, string? Category);
 
@@ -153,7 +154,7 @@ public sealed class CostingService(NodeDbContext db, RestaurantClock clock)
     public async Task<CostingSettingsDto> GetSettingsAsync(CancellationToken cancellationToken)
     {
         var settings = await SettingsAsync(cancellationToken);
-        return new(settings.FoodCostTargetPercent, settings.VarianceTolerancePercent);
+        return new(settings.FoodCostTargetPercent, settings.VarianceTolerancePercent, settings.BeverageCategories);
     }
 
     public async Task<CostingSettingsDto> SaveSettingsAsync(CostingSettingsDto settings, CancellationToken cancellationToken)
@@ -167,8 +168,10 @@ public sealed class CostingService(NodeDbContext db, RestaurantClock clock)
             throw new DomainException("The variance tolerance is a percentage between 0 and 100.");
         row.FoodCostTargetPercent = settings.FoodCostTargetPercent;
         row.VarianceTolerancePercent = settings.VarianceTolerancePercent ?? row.VarianceTolerancePercent;
+        if (settings.BeverageCategories is { } beverages)
+            row.BeverageCategories = beverages.Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c.Trim()).Distinct().ToList();
         await db.SaveChangesAsync(cancellationToken);
-        return new(row.FoodCostTargetPercent, row.VarianceTolerancePercent);
+        return new(row.FoodCostTargetPercent, row.VarianceTolerancePercent, row.BeverageCategories);
     }
 
     public async Task<IReadOnlyList<SharedCostDto>> GetSharedCostsAsync(CancellationToken cancellationToken)
@@ -407,13 +410,16 @@ public sealed class CostingService(NodeDbContext db, RestaurantClock clock)
         }).ToList();
     }
 
-    // Each shared cost's month, per meal sold that shares it.
-    private sealed class SharedPerMeal(decimal everyMeal, IReadOnlyDictionary<string, decimal> byCategory)
+    // Each shared cost's month, per meal sold that shares it. A meal is food: a shared cost for
+    // every meal (frying oil, gas, takeaway boxes) is not charged to a drink. One named for a
+    // drinks category is, to that category.
+    private sealed class SharedPerMeal(decimal everyMeal, IReadOnlyDictionary<string, decimal> byCategory, IReadOnlySet<string> drinks)
     {
-        public static readonly SharedPerMeal None = new(0, new Dictionary<string, decimal>());
+        public static readonly SharedPerMeal None = new(0, new Dictionary<string, decimal>(), new HashSet<string>());
 
         public decimal For(string? category) =>
-            everyMeal + (category is not null ? byCategory.GetValueOrDefault(category) : 0);
+            (category is not null && drinks.Contains(category) ? 0 : everyMeal)
+            + (category is not null ? byCategory.GetValueOrDefault(category) : 0);
     }
 
     private async Task<SharedPerMeal> SharedPerMealAsync(DateOnly first, DateOnly last, IReadOnlyList<SoldLine> sales, CancellationToken cancellationToken)
@@ -432,7 +438,8 @@ public sealed class CostingService(NodeDbContext db, RestaurantClock clock)
             .Select(g => new { RawMaterialId = g.Key, Cost = g.Sum(m => m.Quantity * (m.UnitCost ?? 0)) })
             .ToDictionaryAsync(p => p.RawMaterialId, p => p.Cost, cancellationToken);
 
-        var meals = sales.Sum(s => s.Quantity);
+        var drinks = (await SettingsAsync(cancellationToken)).BeverageCategories.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var meals = sales.Where(s => !drinks.Contains(s.Category)).Sum(s => s.Quantity);
         var mealsIn = sales.GroupBy(s => s.Category).ToDictionary(g => g.Key, g => g.Sum(s => s.Quantity));
         decimal everyMeal = 0;
         var byCategory = new Dictionary<string, decimal>();
@@ -444,7 +451,7 @@ public sealed class CostingService(NodeDbContext db, RestaurantClock clock)
             else if (mealsIn.GetValueOrDefault(cost.Category) is > 0 and var inCategory)
                 byCategory[cost.Category] = byCategory.GetValueOrDefault(cost.Category) + month / inCategory;
         }
-        return new SharedPerMeal(everyMeal, byCategory);
+        return new SharedPerMeal(everyMeal, byCategory, drinks);
     }
 
     private async Task<CostingSettings> SettingsAsync(CancellationToken cancellationToken) =>
