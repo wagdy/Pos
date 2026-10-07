@@ -12,7 +12,7 @@ namespace OtantikPos.Node.Api.Controllers;
 [ApiController]
 [Route("api/costing")]
 [Authorize(Policy = Permissions.CostingView)]
-public sealed class CostingController(CostingService costing) : ControllerBase
+public sealed class CostingController(CostingService costing, VarianceService variance) : ControllerBase
 {
     // Raw materials with their costs: what each costs per purchase unit, the last price paid, and
     // the stock's value.
@@ -35,6 +35,19 @@ public sealed class CostingController(CostingService costing) : ControllerBase
     [HttpGet("theoretical")]
     public Task<TheoreticalCostReport> GetTheoreticalCost([FromQuery] int year, [FromQuery] int month, CancellationToken cancellationToken) =>
         costing.GetTheoreticalCostAsync(year, month, cancellationToken);
+
+    // Actual usage against standard between two posted stock counts; the last two by default.
+    [HttpGet("variance")]
+    public Task<VarianceReport> GetVariance([FromQuery] Guid? fromCountId, [FromQuery] Guid? toCountId, CancellationToken cancellationToken) =>
+        variance.GetVarianceAsync(fromCountId, toCountId, cancellationToken);
+
+    // Spoilage recorded in the last so many days, with what it cost.
+    [HttpGet("spoilage")]
+    public Task<IReadOnlyList<SpoilageEntry>> GetSpoilage([FromQuery] int days = 30, CancellationToken cancellationToken = default)
+    {
+        var to = DateTime.UtcNow;
+        return variance.GetSpoilageAsync(to.AddDays(-Math.Clamp(days, 1, 366)), to.AddMinutes(1), cancellationToken);
+    }
 
     [HttpGet("settings")]
     public Task<CostingSettingsDto> GetSettings(CancellationToken cancellationToken) =>

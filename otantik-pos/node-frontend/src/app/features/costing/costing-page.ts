@@ -42,8 +42,11 @@ export class CostingPage {
   protected readonly tabs = [
     { path: 'materials', en: 'Raw materials', ar: 'الخامات' },
     { path: 'purchases', en: 'Purchases', ar: 'المشتريات' },
+    { path: 'waste', en: 'Waste', ar: 'الهالك' },
+    { path: 'counts', en: 'Stock counts', ar: 'الجرد' },
     { path: 'recipes', en: 'Recipes', ar: 'الوصفات' },
     { path: 'theoretical', en: 'Theoretical cost', ar: 'التكلفة النظرية' },
+    { path: 'variance', en: 'Variance', ar: 'الانحراف' },
     { path: 'settings', en: 'Settings', ar: 'الإعدادات' },
   ];
 }

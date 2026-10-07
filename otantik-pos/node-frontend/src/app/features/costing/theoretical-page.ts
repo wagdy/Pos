@@ -35,8 +35,9 @@ import { MoneyPipe } from '../../core/ui/money.pipe';
       <header class="report-head">
         <h2>Monthly theoretical cost <span class="inline-ar">التكلفة النظرية الشهرية</span></h2>
         <div class="muted">
-          From · من <strong>{{ r.from }}</strong> &nbsp; To · إلى <strong>{{ r.to }}</strong> &nbsp;·&nbsp;
-          Food cost target · النسبة المستهدفة <strong>{{ r.foodCostTargetPercent | number: '1.0-1' }}%</strong>
+          From<span class="inline-ar">من</span>: <strong>{{ r.from }}</strong> &nbsp; To<span class="inline-ar">إلى</span>:
+          <strong>{{ r.to }}</strong> &nbsp;·&nbsp; Food cost target<span class="inline-ar">النسبة المستهدفة</span>:
+          <strong>{{ r.foodCostTargetPercent | number: '1.0-1' }}%</strong>
         </div>
       </header>
       <div class="table-wrap">

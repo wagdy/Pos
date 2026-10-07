@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using Otantik.BuildingBlocks;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
+using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Costing;
@@ -56,11 +57,13 @@ public static class DependencyInjection
         services.AddScoped<IReceiptPrintQueue, ReceiptPrintQueue>();
         services.AddScoped<ICashReceived, CashReceivedRecord>();
         services.AddScoped<CostingService>();
+        services.AddScoped<VarianceService>();
 
         // Inventory.
         services.AddScoped<IRawMaterialRepository, RawMaterialRepository>();
         services.AddScoped<IRecipeRepository, RecipeRepository>();
         services.AddScoped<IStockMovementRepository, StockMovementRepository>();
+        services.AddScoped<IStockCountRepository, StockCountRepository>();
 
         // The delivery system. Short timeouts: a cashier is waiting on most of these calls, and
         // "the internet is down" has to come back in seconds, not after the default 30.

@@ -13,6 +13,7 @@ using Otantik.SharedKernel.Orders;
 using OtantikPos.Inventory.Application;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
+using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Ordering.Application;
 using OtantikPos.Ordering.Application.Catalog;
@@ -63,6 +64,7 @@ public sealed class TestPos
         services.AddSingleton<IRawMaterialRepository>(Inventory);
         services.AddSingleton<IRecipeRepository>(Inventory.Recipes);
         services.AddSingleton<IStockMovementRepository>(Inventory.Movements);
+        services.AddSingleton<IStockCountRepository>(Inventory.Counts);
 
         _services = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }
@@ -386,6 +388,7 @@ public sealed class InventoryStore : IRawMaterialRepository
 
     public RecipeStore Recipes { get; } = new();
     public MovementStore Movements { get; } = new();
+    public CountStore Counts { get; } = new();
 
     public RawMaterial Stock(string name, UnitOfMeasure unit, decimal onHand)
     {
@@ -420,4 +423,15 @@ public sealed class MovementStore : IStockMovementRepository
     public Task<StockMovement?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(All.SingleOrDefault(m => m.Id == id));
     public void Add(StockMovement aggregate) => All.Add(aggregate);
     public Task<bool> ExistsAsync(Guid sourceId, StockMovementReason reason, CancellationToken cancellationToken = default) => Task.FromResult(All.Any(m => m.SourceId == sourceId && m.Reason == reason));
+}
+
+public sealed class CountStore : IStockCountRepository
+{
+    private readonly List<StockCount> _counts = new();
+
+    public Task<StockCount?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(_counts.SingleOrDefault(c => c.Id == id));
+    public void Add(StockCount aggregate) => _counts.Add(aggregate);
+    public void Remove(StockCount draft) => _counts.Remove(draft);
+    public Task<StockCount?> GetDraftAsync(CancellationToken cancellationToken = default) => Task.FromResult(_counts.FirstOrDefault(c => c.Status == StockCountStatus.Draft));
+    public Task<IReadOnlyList<StockCount>> GetAllAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<StockCount>>(_counts.ToList());
 }

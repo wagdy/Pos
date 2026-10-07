@@ -41,6 +41,18 @@ export const routes: Routes = [
             loadComponent: () => import('./features/costing/purchases-page').then((m) => m.PurchasesPage),
           },
           {
+            path: 'waste',
+            loadComponent: () => import('./features/costing/waste-page').then((m) => m.WastePage),
+          },
+          {
+            path: 'counts',
+            loadComponent: () => import('./features/costing/counts-page').then((m) => m.CountsPage),
+          },
+          {
+            path: 'counts/:id',
+            loadComponent: () => import('./features/costing/count-sheet-page').then((m) => m.CountSheetPage),
+          },
+          {
             path: 'recipes',
             loadComponent: () => import('./features/costing/recipes-page').then((m) => m.RecipesPage),
           },
@@ -52,6 +64,10 @@ export const routes: Routes = [
           {
             path: 'theoretical',
             loadComponent: () => import('./features/costing/theoretical-page').then((m) => m.TheoreticalPage),
+          },
+          {
+            path: 'variance',
+            loadComponent: () => import('./features/costing/variance-page').then((m) => m.VariancePage),
           },
           {
             path: 'settings',

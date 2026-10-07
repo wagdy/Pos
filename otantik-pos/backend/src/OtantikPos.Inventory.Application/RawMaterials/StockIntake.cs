@@ -39,27 +39,28 @@ internal sealed class ReceivePurchaseCommandHandler(
     }
 }
 
-// Sets each listed material to what was physically counted. The difference is posted as a
-// CountAdjustment, which is also how a negative balance gets corrected.
-public sealed record RecordStockCountCommand(Guid StockCountId, IReadOnlyList<StockCountLine> Lines)
+// Thrown-away raw stock, as a manager records it. SpoilageId works as PurchaseId does, and
+// RecordedBy is set by the API from who is signed in.
+public sealed record RecordSpoilageCommand(Guid SpoilageId, IReadOnlyList<SpoilageLine> Lines, string RecordedBy = "")
     : IRequest<IReadOnlyList<RawMaterialDto>>;
 
-public sealed record StockCountLine(Guid RawMaterialId, decimal CountedQuantity);
+// Quantity in the material's own unit. Reason: expired, spoiled, dropped, damaged packaging.
+public sealed record SpoilageLine(Guid RawMaterialId, decimal Quantity, string Reason);
 
-internal sealed class RecordStockCountCommandHandler(
+internal sealed class RecordSpoilageCommandHandler(
     IRawMaterialRepository materials,
     IStockMovementRepository movements,
-    IUnitOfWork unitOfWork) : IRequestHandler<RecordStockCountCommand, IReadOnlyList<RawMaterialDto>>
+    IUnitOfWork unitOfWork) : IRequestHandler<RecordSpoilageCommand, IReadOnlyList<RawMaterialDto>>
 {
-    public async Task<IReadOnlyList<RawMaterialDto>> Handle(RecordStockCountCommand request, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<RawMaterialDto>> Handle(RecordSpoilageCommand request, CancellationToken cancellationToken)
     {
         var byId = await materials.GetRequiredByIdsAsync(
             request.Lines.Select(l => l.RawMaterialId).ToList(), cancellationToken);
 
-        if (!await movements.ExistsAsync(request.StockCountId, StockMovementReason.CountAdjustment, cancellationToken))
+        if (!await movements.ExistsAsync(request.SpoilageId, StockMovementReason.Spoilage, cancellationToken))
         {
             foreach (var line in request.Lines)
-                movements.Add(byId[line.RawMaterialId].AdjustToCount(line.CountedQuantity, request.StockCountId));
+                movements.Add(byId[line.RawMaterialId].RecordSpoilage(line.Quantity, request.SpoilageId, line.Reason, request.RecordedBy));
 
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }

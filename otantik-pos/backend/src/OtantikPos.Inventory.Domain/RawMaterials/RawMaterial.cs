@@ -126,6 +126,17 @@ public sealed class RawMaterial : AggregateRoot
         return Move(quantity, StockMovementReason.Purchase, purchaseId, unitCost);
     }
 
+    // Stock thrown away before it reached a dish. Why is required: the variance report sets it
+    // against the shortfall, and "expired" and "dropped" call for different fixes.
+    public StockMovement RecordSpoilage(decimal quantity, Guid spoilageId, string reason, string recordedBy)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+            throw new DomainException("Say why it was thrown away.");
+        if (reason.Trim().Length > 200)
+            throw new DomainException("Keep the reason under 200 characters.");
+        return Move(-Positive(quantity), StockMovementReason.Spoilage, spoilageId, AverageCost, reason.Trim(), recordedBy);
+    }
+
     public StockMovement AdjustToCount(decimal countedQuantity, Guid stockCountId)
     {
         if (countedQuantity < 0)
@@ -137,10 +148,11 @@ public sealed class RawMaterial : AggregateRoot
     // refusing it would not un-sell the dish; it would only lose the record. A negative
     // balance is the signal that a delivery was never booked in or a recipe quantity is wrong,
     // and a stock count puts it right.
-    private StockMovement Move(decimal delta, StockMovementReason reason, Guid sourceId, decimal? unitCost)
+    private StockMovement Move(
+        decimal delta, StockMovementReason reason, Guid sourceId, decimal? unitCost, string? note = null, string? recordedBy = null)
     {
         QuantityOnHand += delta;
-        return new StockMovement(Id, delta, reason, sourceId, unitCost);
+        return new StockMovement(Id, delta, reason, sourceId, unitCost, note, recordedBy);
     }
 
     private static decimal Positive(decimal quantity) =>

@@ -13,8 +13,14 @@ public sealed class CostingSettings
     public const int SingletonId = 1;
     public const decimal DefaultFoodCostTarget = 30;
 
+    public const decimal DefaultVarianceTolerance = 5;
+
     public int Id { get; init; } = SingletonId;
     public decimal FoodCostTargetPercent { get; set; } = DefaultFoodCostTarget;
+
+    // How far actual usage may stray from standard, either way, before the variance report calls
+    // it unfavourable or favourable: the template's ±5%.
+    public decimal VarianceTolerancePercent { get; set; } = DefaultVarianceTolerance;
 }
 
 // A cost no recipe names, spread over the meals that share it: frying oil, gas, takeaway boxes.
@@ -53,6 +59,7 @@ internal sealed class CostingSettingsConfiguration : IEntityTypeConfiguration<Co
         builder.ToTable("CostingSettings", NodeDbContext.InventorySchema);
         builder.Property(s => s.Id).ValueGeneratedNever();
         builder.Property(s => s.FoodCostTargetPercent).HasPrecision(5, 2);
+        builder.Property(s => s.VarianceTolerancePercent).HasPrecision(5, 2).HasDefaultValue(CostingSettings.DefaultVarianceTolerance);
     }
 }
 

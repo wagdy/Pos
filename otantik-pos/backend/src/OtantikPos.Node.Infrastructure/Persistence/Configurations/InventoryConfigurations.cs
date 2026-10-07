@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
+using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
 
 namespace OtantikPos.Node.Infrastructure.Persistence.Configurations;
@@ -78,6 +79,8 @@ internal sealed class StockMovementConfiguration : IEntityTypeConfiguration<Stoc
         builder.Property(m => m.Quantity).IsQuantity();
         builder.Property(m => m.Reason).IsEnumName();
         builder.Property(m => m.UnitCost).IsUnitCost();
+        builder.Property(m => m.Note).HasMaxLength(200);
+        builder.Property(m => m.RecordedBy).HasMaxLength(200);
 
         builder.HasOne<RawMaterial>()
             .WithMany()
@@ -89,5 +92,32 @@ internal sealed class StockMovementConfiguration : IEntityTypeConfiguration<Stoc
         // the order item's PublicId.
         builder.HasIndex(m => new { m.SourceId, m.Reason, m.RawMaterialId }).IsUnique();
         builder.HasIndex(m => new { m.RawMaterialId, m.OccurredAtUtc });
+    }
+}
+
+internal sealed class StockCountConfiguration : IEntityTypeConfiguration<StockCount>
+{
+    public void Configure(EntityTypeBuilder<StockCount> builder)
+    {
+        builder.ToTable("StockCounts", NodeDbContext.InventorySchema);
+        builder.Property(c => c.Status).IsEnumName();
+        builder.Property(c => c.StartedBy).HasMaxLength(200);
+        builder.Property(c => c.PostedBy).HasMaxLength(200);
+        builder.HasMany(c => c.Lines).WithOne().HasForeignKey(l => l.StockCountId).OnDelete(DeleteBehavior.Cascade);
+        builder.Navigation(c => c.Lines).HasField("_lines").UsePropertyAccessMode(PropertyAccessMode.Field);
+        builder.HasIndex(c => c.Status);
+    }
+}
+
+internal sealed class StockCountLineConfiguration : IEntityTypeConfiguration<StockCountLine>
+{
+    public void Configure(EntityTypeBuilder<StockCountLine> builder)
+    {
+        builder.ToTable("StockCountLines", NodeDbContext.InventorySchema);
+        builder.Property(l => l.CountedQuantity).IsQuantity();
+        builder.Property(l => l.BookQuantity).IsQuantity();
+        builder.Property(l => l.UnitCost).IsUnitCost();
+        builder.HasOne<RawMaterial>().WithMany().HasForeignKey(l => l.RawMaterialId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(l => new { l.StockCountId, l.RawMaterialId }).IsUnique();
     }
 }

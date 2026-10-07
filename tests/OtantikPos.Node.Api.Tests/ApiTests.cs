@@ -55,6 +55,17 @@ public class ApiTests
         Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync("/api/costing/menu", Cancel)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await manager.GetAsync("/api/costing/menu", Cancel)).StatusCode);
 
+        // So are counts, spoilage and the variance between counts. A cashier sees stock, not this.
+        foreach (var path in new[] { "/api/inventory/stock-counts", "/api/costing/variance", "/api/costing/spoilage" })
+            Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync(path, Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await manager.GetAsync("/api/inventory/stock-counts", Cancel)).StatusCode);
+        var spoilage = await cashier.PostAsJsonAsync("/api/inventory/spoilage", new { spoilageId = Guid.NewGuid(), lines = Array.Empty<object>() }, Cancel);
+        Assert.Equal(HttpStatusCode.Forbidden, spoilage.StatusCode);
+        // With no counts yet, the variance report says what it needs rather than failing.
+        var noCounts = await manager.GetAsync("/api/costing/variance", Cancel);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, noCounts.StatusCode);
+        Assert.Contains("Post a stock count first", await noCounts.Content.ReadAsStringAsync(Cancel));
+
         // A captain takes orders in the delivery app. Even with a PIN, not at the till.
         (await manager.PutAsJsonAsync("/api/staff/staff-captain/pin", new SetPinRequest("1357"), Cancel)).EnsureSuccessStatusCode();
         Assert.DoesNotContain((await anonymous.GetFromJsonAsync<List<SignInOption>>("/api/auth/staff", TestApi.Json, Cancel))!, s => s.Id == "staff-captain");

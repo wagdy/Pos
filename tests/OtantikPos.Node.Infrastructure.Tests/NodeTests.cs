@@ -7,8 +7,10 @@ using Otantik.SharedKernel.Identity;
 using Otantik.SharedKernel.Orders;
 using OtantikPos.Inventory.Application.RawMaterials;
 using OtantikPos.Inventory.Application.Recipes;
+using OtantikPos.Inventory.Application.StockCounts;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
+using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Costing;
@@ -148,6 +150,115 @@ public class NodeTests
         await costing.SaveSharedCostAsync(null, new SaveSharedCostRequest("Frying oil", null, 400, null), ct);
         burger = Assert.Single((await costing.GetTheoreticalCostAsync(today.Year, today.Month, ct)).Rows, r => r.MenuItemId == FakeDeliverySystem.Burger);
         Assert.Equal((300m, 381m, CostStatus.AboveTarget), (burger.SharedCost, burger.TheoreticalCost, burger.Status));
+    }
+
+    // Pillar 3 between two counts, after the templates' examples: fries short beyond what sales
+    // and records explain (red), mozzarella over despite spoilage (blue), a patty short by one.
+    [Fact]
+    public async Task The_variance_report_sets_what_left_the_stores_against_what_the_recipes_took()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        var ct = TestContext.Current.CancellationToken;
+        async Task<Guid> Material(string name, UnitOfMeasure unit) => (await node.Send(new CreateRawMaterialCommand(name, unit))).Id;
+        var fries = await Material("Farm frites", UnitOfMeasure.Gram);
+        var cheese = await Material("Mozzarella", UnitOfMeasure.Gram);
+        var patty = await Material("Beef patty", UnitOfMeasure.Piece);
+        var bun = await Material("Bun", UnitOfMeasure.Piece);
+        var lettuce = await Material("Lettuce", UnitOfMeasure.Gram);
+        var oil = await Material("Frying oil", UnitOfMeasure.Millilitre);
+        await node.Send(new SetRecipeCommand(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, [new(patty, 1), new(bun, 1), new(fries, 150)]));
+        await node.Send(new SetRecipeCommand(RecipeTargetKind.AddOn, FakeDeliverySystem.Cheese, null, [new(cheese, 30)]));
+        await node.Send(new ReceivePurchaseCommand(Guid.NewGuid(),
+            [new(fries, 10_000, 600), new(cheese, 5_000, 1_500), new(patty, 50, 1_000), new(bun, 50, 250), new(oil, 20_000, 1_900)]));
+
+        // The opening count, in one request; it matches the records.
+        var opening = Guid.NewGuid();
+        await node.Send(new RecordStockCountCommand(opening, [new(fries, 10_000), new(cheese, 5_000), new(patty, 50), new(bun, 50), new(oil, 20_000)], "Omar"));
+
+        // The week: more fries delivered, ten cheeseburgers and a tray with no recipe sold, cheese spoiled.
+        await node.Send(new ReceivePurchaseCommand(Guid.NewGuid(), [new(fries, 5_000, 300)]));
+        var order = await node.Send(new OpenOrderCommand(OrderType.DineIn, TableNumber: "V1"));
+        await node.Send(new AddOrderItemCommand(order.PublicId, FakeDeliverySystem.Burger, 10, AddOnIds: [FakeDeliverySystem.Cheese]));
+        await node.Send(new AddOrderItemCommand(order.PublicId, FakeDeliverySystem.Shawarma, VariantId: FakeDeliverySystem.KiloTray));
+        await node.Send(new SendToKitchenCommand(order.PublicId));
+        await node.Send(new CheckoutCommand(order.PublicId, PaymentMethod.Cash));
+        await node.Send(new RecordSpoilageCommand(Guid.NewGuid(), [new(cheese, 200, "Expired")], "Omar"));
+        Assert.True(await TestNode.WaitFor(async () => await node.Db(db => db.StockMovements.CountAsync(m => m.Reason == StockMovementReason.Sale)) == 4));
+
+        // The closing count, filled in as a draft and posted; lettuce counted for the first time.
+        var closing = Guid.NewGuid();
+        await node.Send(new SaveStockCountCommand(closing,
+            [new(fries, 12_000), new(cheese, 4_900), new(patty, 39), new(bun, 40), new(lettuce, 800), new(oil, 18_500)], "Omar"));
+        await node.Send(new PostStockCountCommand(closing, "Omar"));
+
+        using var scope = node.Scope();
+        // Frying oil is in no recipe: a shared cost, with no standard to fall short of.
+        await node.Service<CostingService>(scope).SaveSharedCostAsync(null, new SaveSharedCostRequest("Frying oil", oil, null, null), ct);
+        var report = await node.Service<VarianceService>(scope).GetVarianceAsync(null, null, ct);
+        Assert.Equal((opening, closing, 5m), (report.From.Id, report.To.Id, report.TolerancePercent));
+        Assert.Equal(["Farm frites", "Mozzarella", "Beef patty", "Bun", "Frying oil"], report.Rows.Select(r => r.Material));
+        Assert.Equal((1_500m, VarianceEvaluation.SharedCost), (report.Rows[4].ActualUsage, report.Rows[4].Evaluation));
+
+        // Fries: 10 kg + 5 kg − 12 kg left = 3 kg used, against 1.5 kg by the recipes.
+        var row = report.Rows[0];
+        Assert.Equal((10_000m, 5_000m, 1_500m, 13_500m, 12_000m, 3_000m, 1_500m, 100m, 1_500m, 0.06m, 90m, VarianceEvaluation.Unfavourable),
+            (row.Opening, row.Received, row.StandardUsage, row.ExpectedClosing, row.Closing, row.ActualUsage, row.VarianceQuantity,
+                row.VariancePercent, row.UnexplainedQuantity, row.UnitCost, row.VarianceValue, row.Evaluation));
+
+        // Mozzarella: 300 g by the recipes, 200 g recorded spoiled, yet only 100 g gone.
+        row = report.Rows[1];
+        Assert.Equal((300m, 200m, 4_500m, 100m, -200m, -66.7m, -400m, -60m, VarianceEvaluation.Favourable),
+            (row.StandardUsage, row.RawWaste, row.ExpectedClosing, row.ActualUsage, row.VarianceQuantity, row.VariancePercent,
+                row.UnexplainedQuantity, row.VarianceValue, row.Evaluation));
+
+        Assert.Equal((1m, 10m, 20m, VarianceEvaluation.Unfavourable),
+            (report.Rows[2].VarianceQuantity, report.Rows[2].VariancePercent, report.Rows[2].VarianceValue, report.Rows[2].Evaluation));
+        Assert.Equal(VarianceEvaluation.WithinLimit, report.Rows[3].Evaluation);
+
+        Assert.Equal((2, 50m, 60m, -10m, "Farm frites", 100m),
+            (report.UnfavourableCount, report.NetVarianceValue, report.RecordedWasteValue, report.UnexplainedValue,
+                report.LargestRelativeMaterial, report.LargestRelativePercent));
+        Assert.Equal(["Lettuce"], report.NotInBothCounts);
+        var tray = Assert.Single(report.SoldWithoutStock);
+        Assert.Equal(($"{FakeDeliverySystem.Shawarma}-{FakeDeliverySystem.KiloTray}", 1), (tray.ItemCode, tray.Quantity));
+
+        var spoiled = Assert.Single(await node.Service<VarianceService>(scope).GetSpoilageAsync(DateTime.UtcNow.AddDays(-1), DateTime.UtcNow.AddMinutes(1), ct));
+        Assert.Equal(("Omar", 60m, "Expired"), (spoiled.RecordedBy, spoiled.Value, Assert.Single(spoiled.Lines).Reason));
+    }
+
+    [Fact]
+    public async Task A_count_is_filled_in_as_one_draft_at_a_time_and_posted_once()
+    {
+        await using var node = await TestNode.StartAsync();
+        var oil = (await node.Send(new CreateRawMaterialCommand("Frying oil", UnitOfMeasure.Millilitre))).Id;
+        await node.Send(new ReceivePurchaseCommand(Guid.NewGuid(), [new(oil, 20_000)]));
+
+        var draft = Guid.NewGuid();
+        var saved = await node.Send(new SaveStockCountCommand(draft, [new(oil, 15_000)], "Omar"));
+        Assert.Equal((StockCountStatus.Draft, "Omar"), (saved.Status, saved.StartedBy));
+        // A draft does not show what the records expect: the counter counts the shelf.
+        Assert.Null(Assert.Single(saved.Lines).BookQuantity);
+
+        // A second count while this one is open is refused, naming it.
+        var second = await Assert.ThrowsAsync<DomainException>(() => node.Send(new SaveStockCountCommand(Guid.NewGuid(), [], "Sara")));
+        Assert.Contains("Omar started a count", second.Message);
+
+        // Saved again from another tablet, then posted twice, as a lost answer would make it.
+        await node.Send(new SaveStockCountCommand(draft, [new(oil, 16_000)], "Omar"));
+        var posted = await node.Send(new PostStockCountCommand(draft, "Omar"));
+        var again = await node.Send(new PostStockCountCommand(draft, "Omar"));
+        Assert.Equal((StockCountStatus.Posted, 20_000m, posted.PostedAtUtc), (again.Status, Assert.Single(again.Lines).BookQuantity, again.PostedAtUtc));
+        Assert.Equal(16_000m, await node.Db(db => db.RawMaterials.Where(m => m.Id == oil).Select(m => m.QuantityOnHand).SingleAsync()));
+        Assert.Equal(1, await node.Db(db => db.StockMovements.CountAsync(m => m.Reason == StockMovementReason.CountAdjustment)));
+
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new DiscardStockCountCommand(draft)));
+
+        // With nothing open, a new draft can start, and be discarded.
+        var next = Guid.NewGuid();
+        await node.Send(new SaveStockCountCommand(next, [new(oil, 1)], "Sara"));
+        await node.Send(new DiscardStockCountCommand(next));
+        Assert.Equal([draft], (await node.Send(new GetStockCountsQuery())).Select(c => c.Id));
     }
 
     // INSTALL.md, step 4: once a real manager has a PIN, the first manager's PIN comes out of .env

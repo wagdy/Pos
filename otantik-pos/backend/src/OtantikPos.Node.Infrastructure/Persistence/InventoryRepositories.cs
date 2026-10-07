@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
+using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
 
 namespace OtantikPos.Node.Infrastructure.Persistence;
@@ -61,4 +62,22 @@ internal sealed class StockMovementRepository(NodeDbContext db) : IStockMovement
 
     public Task<bool> ExistsAsync(Guid sourceId, StockMovementReason reason, CancellationToken cancellationToken = default) =>
         db.StockMovements.AnyAsync(m => m.SourceId == sourceId && m.Reason == reason, cancellationToken);
+}
+
+internal sealed class StockCountRepository(NodeDbContext db) : IStockCountRepository
+{
+    private IQueryable<StockCount> WithLines => db.StockCounts.Include(c => c.Lines);
+
+    public Task<StockCount?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        WithLines.SingleOrDefaultAsync(c => c.Id == id, cancellationToken);
+
+    public void Add(StockCount aggregate) => db.StockCounts.Add(aggregate);
+
+    public void Remove(StockCount draft) => db.StockCounts.Remove(draft);
+
+    public Task<StockCount?> GetDraftAsync(CancellationToken cancellationToken = default) =>
+        WithLines.FirstOrDefaultAsync(c => c.Status == StockCountStatus.Draft, cancellationToken);
+
+    public async Task<IReadOnlyList<StockCount>> GetAllAsync(CancellationToken cancellationToken = default) =>
+        await WithLines.AsNoTracking().ToListAsync(cancellationToken);
 }

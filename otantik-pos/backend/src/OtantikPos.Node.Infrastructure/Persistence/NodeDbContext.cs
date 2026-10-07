@@ -6,6 +6,7 @@ using Otantik.SharedKernel.Catalog;
 using Otantik.SharedKernel.Orders;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
+using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Costing;
@@ -42,6 +43,7 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
     public DbSet<RawMaterial> RawMaterials => Set<RawMaterial>();
     public DbSet<Recipe> Recipes => Set<Recipe>();
     public DbSet<StockMovement> StockMovements => Set<StockMovement>();
+    public DbSet<StockCount> StockCounts => Set<StockCount>();
     public DbSet<CostingSettings> CostingSettings => Set<CostingSettings>();
     public DbSet<SharedCost> SharedCosts => Set<SharedCost>();
 

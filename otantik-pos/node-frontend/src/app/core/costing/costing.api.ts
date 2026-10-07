@@ -101,6 +101,105 @@ export interface TheoreticalCostReport {
 
 export interface CostingSettings {
   foodCostTargetPercent: number;
+  // Left out of a save, it stays as it is.
+  varianceTolerancePercent?: number | null;
+}
+
+export type StockCountStatus = 'Draft' | 'Posted';
+
+export interface StockCountSummary {
+  id: string;
+  status: StockCountStatus;
+  startedAtUtc: string;
+  startedBy: string;
+  postedAtUtc: string | null;
+  postedBy: string | null;
+  materials: number;
+}
+
+// Quantities in the material's unit (grams, millilitres, pieces). Book quantity and cost are
+// filled in when the count is posted; a draft has neither.
+export interface StockCountLine {
+  rawMaterialId: string;
+  countedQuantity: number;
+  bookQuantity: number | null;
+  unitCost: number | null;
+}
+
+export interface StockCount {
+  id: string;
+  status: StockCountStatus;
+  startedAtUtc: string;
+  startedBy: string;
+  postedAtUtc: string | null;
+  postedBy: string | null;
+  lines: StockCountLine[];
+}
+
+export interface SpoilageLine {
+  rawMaterialId: string;
+  quantity: number;
+  reason: string;
+}
+
+export interface SpoilageEntry {
+  spoilageId: string;
+  recordedAtUtc: string;
+  recordedBy: string | null;
+  lines: {
+    rawMaterialId: string;
+    material: string;
+    unit: UnitOfMeasure;
+    purchaseUnitSize: number;
+    quantity: number;
+    reason: string | null;
+    value: number | null;
+  }[];
+  value: number | null;
+}
+
+export type VarianceEvaluation = 'WithinLimit' | 'Unfavourable' | 'Favourable' | 'SharedCost';
+
+// One material between two counts, in its unit. Variance = actual − standard: above zero, more
+// left the stores than the recipes account for.
+export interface VarianceRow {
+  rawMaterialId: string;
+  code: string | null;
+  material: string;
+  category: string | null;
+  unit: UnitOfMeasure;
+  purchaseUnitSize: number;
+  opening: number;
+  received: number;
+  rawWaste: number;
+  productWaste: number;
+  standardUsage: number;
+  expectedClosing: number;
+  closing: number;
+  actualUsage: number;
+  varianceQuantity: number;
+  variancePercent: number | null;
+  unexplainedQuantity: number;
+  unitCost: number | null;
+  varianceValue: number | null;
+  unexplainedValue: number | null;
+  evaluation: VarianceEvaluation;
+}
+
+export interface VarianceReport {
+  from: { id: string; postedAtUtc: string; postedBy: string | null };
+  to: { id: string; postedAtUtc: string; postedBy: string | null };
+  tolerancePercent: number;
+  rows: VarianceRow[];
+  unfavourableCount: number;
+  netVarianceValue: number;
+  recordedWasteValue: number;
+  unexplainedValue: number;
+  largestRelativeMaterial: string | null;
+  largestRelativePercent: number | null;
+  notInBothCounts: string[];
+  soldWithoutStock: { itemCode: string; menuItem: string; quantity: number }[];
+  missingPrices: string[];
 }
 
 export interface SharedCost {
@@ -218,6 +317,51 @@ export class CostingApi {
     return this.http.put('/api/inventory/recipes', recipe);
   }
 
+  stockCounts(): Observable<StockCountSummary[]> {
+    return this.http.get<StockCountSummary[]>('/api/inventory/stock-counts');
+  }
+
+  // Null for a count not saved yet (404, and only 404).
+  stockCount(id: string): Observable<StockCount | null> {
+    return this.http.get<StockCount>(`/api/inventory/stock-counts/${id}`).pipe(
+      catchError((error: unknown) => (error instanceof HttpErrorResponse && error.status === 404 ? of(null) : throwError(() => error))),
+    );
+  }
+
+  // The whole list each time: a material left out is not counted.
+  saveStockCount(id: string, lines: { rawMaterialId: string; countedQuantity: number }[]): Observable<StockCount> {
+    return this.http.put<StockCount>(`/api/inventory/stock-counts/${id}`, { lines });
+  }
+
+  postStockCount(id: string): Observable<StockCount> {
+    return this.http.post<StockCount>(`/api/inventory/stock-counts/${id}/post`, {});
+  }
+
+  discardStockCount(id: string): Observable<void> {
+    return this.http.delete<void>(`/api/inventory/stock-counts/${id}`);
+  }
+
+  // spoilageId is made here, once per entry, as purchaseId is.
+  recordSpoilage(spoilageId: string, lines: SpoilageLine[]): Observable<unknown> {
+    return this.http.post('/api/inventory/spoilage', { spoilageId, lines });
+  }
+
+  spoilage(days = 30): Observable<SpoilageEntry[]> {
+    return this.http.get<SpoilageEntry[]>('/api/costing/spoilage', { params: { days } });
+  }
+
+  // No ids: the last two posted counts.
+  variance(fromCountId: string | null, toCountId: string | null): Observable<VarianceReport> {
+    const params: Record<string, string> = {};
+    if (fromCountId) {
+      params['fromCountId'] = fromCountId;
+    }
+    if (toCountId) {
+      params['toCountId'] = toCountId;
+    }
+    return this.http.get<VarianceReport>('/api/costing/variance', { params });
+  }
+
   private target(kind: RecipeTargetKind, catalogItemId: number, variantId: number | null): Record<string, string | number> {
     return variantId === null ? { targetKind: kind, catalogItemId } : { targetKind: kind, catalogItemId, variantId };
   }
@@ -233,3 +377,24 @@ export const statusLabels: Record<CostStatus, { en: string; ar: string }> = {
 };
 
 export const unitLabels: Record<UnitOfMeasure, string> = { Gram: 'g', Millilitre: 'ml', Piece: 'pc' };
+
+// Stock is counted and reported in kg, litres and pieces, whatever it is bought in: a count of
+// 3.25 kg of cheese, not 0.13 of a 25 kg sack. What is bought by the gram or millilitre, such as
+// saffron, is counted so. The ledger keeps grams, millilitres and pieces.
+export function countUnit(unit: UnitOfMeasure, purchaseUnitSize: number): { label: string; size: number } {
+  switch (unit) {
+    case 'Gram':
+      return purchaseUnitSize < 1000 ? { label: 'g', size: 1 } : { label: 'kg', size: 1000 };
+    case 'Millilitre':
+      return purchaseUnitSize < 1000 ? { label: 'ml', size: 1 } : { label: 'L', size: 1000 };
+    default:
+      return { label: 'pc', size: 1 };
+  }
+}
+
+export const evaluationLabels: Record<VarianceEvaluation, { en: string; ar: string }> = {
+  Unfavourable: { en: 'Unfavourable', ar: 'غير مواتٍ' },
+  Favourable: { en: 'Favourable', ar: 'مواتٍ' },
+  WithinLimit: { en: 'Within limit', ar: 'ضمن الحد' },
+  SharedCost: { en: 'Shared cost', ar: 'تكلفة مشتركة' },
+};

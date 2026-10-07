@@ -4,7 +4,9 @@ using Microsoft.AspNetCore.Mvc;
 using Otantik.SharedKernel.Authorization;
 using OtantikPos.Inventory.Application.RawMaterials;
 using OtantikPos.Inventory.Application.Recipes;
+using OtantikPos.Inventory.Application.StockCounts;
 using OtantikPos.Inventory.Domain.Recipes;
+using OtantikPos.Node.Api.Auth;
 
 namespace OtantikPos.Node.Api.Controllers;
 
@@ -45,12 +47,53 @@ public sealed class InventoryController(ISender sender) : ControllerBase
     public Task<IReadOnlyList<RawMaterialDto>> ReceivePurchase(ReceivePurchaseCommand command, CancellationToken cancellationToken) =>
         sender.Send(command, cancellationToken);
 
-    // A physical count: sets stock to what is on the shelf and records the difference.
-    // StockCountId makes a retry harmless, as PurchaseId does above.
+    // Thrown-away raw stock: expired, spoiled, dropped. SpoilageId makes a retry harmless.
+    [HttpPost("spoilage")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public Task<IReadOnlyList<RawMaterialDto>> RecordSpoilage(RecordSpoilageCommand command, CancellationToken cancellationToken) =>
+        sender.Send(command with { RecordedBy = StaffName }, cancellationToken);
+
+    // A whole physical count in one request, recorded and posted at once: sets stock to what is
+    // on the shelf and records the difference. StockCountId makes a retry harmless, as PurchaseId
+    // does above. The screens fill in a draft instead, below.
     [HttpPost("stock-counts")]
     [Authorize(Policy = Permissions.InventoryManage)]
     public Task<IReadOnlyList<RawMaterialDto>> RecordStockCount(RecordStockCountCommand command, CancellationToken cancellationToken) =>
-        sender.Send(command, cancellationToken);
+        sender.Send(command with { StaffName = StaffName }, cancellationToken);
+
+    // Counts are a manager's: a count sheet shows what is on the shelves, and a posted one what the
+    // records expected.
+    [HttpGet("stock-counts")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public Task<IReadOnlyList<StockCountSummaryDto>> GetStockCounts(CancellationToken cancellationToken) =>
+        sender.Send(new GetStockCountsQuery(), cancellationToken);
+
+    [HttpGet("stock-counts/{stockCountId:guid}")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public async Task<ActionResult<StockCountDto>> GetStockCount(Guid stockCountId, CancellationToken cancellationToken) =>
+        await sender.Send(new GetStockCountQuery(stockCountId), cancellationToken) is { } count ? count : NotFound();
+
+    // Saves the draft as it stands, creating it on the first save. The whole list each time: a
+    // material left out is not counted.
+    [HttpPut("stock-counts/{stockCountId:guid}")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public Task<StockCountDto> SaveStockCount(Guid stockCountId, SaveStockCountRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new SaveStockCountCommand(stockCountId, request.Lines, StaffName), cancellationToken);
+
+    // Sets stock to what was counted. Posting again returns the posted count.
+    [HttpPost("stock-counts/{stockCountId:guid}/post")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public Task<StockCountDto> PostStockCount(Guid stockCountId, CancellationToken cancellationToken) =>
+        sender.Send(new PostStockCountCommand(stockCountId, StaffName), cancellationToken);
+
+    // Discards a draft. A posted count cannot be removed.
+    [HttpDelete("stock-counts/{stockCountId:guid}")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public async Task<IActionResult> DiscardStockCount(Guid stockCountId, CancellationToken cancellationToken)
+    {
+        await sender.Send(new DiscardStockCountCommand(stockCountId), cancellationToken);
+        return NoContent();
+    }
 
     // A menu item's, variant's or add-on's recipe. 404 means it has none yet, and only 404:
     // the till must not show an empty recipe for a request that merely failed.
@@ -70,7 +113,12 @@ public sealed class InventoryController(ISender sender) : ControllerBase
         var recipe = await sender.Send(command, cancellationToken);
         return recipe is null ? NoContent() : recipe;
     }
+
+    // Who is signed in, as their name: kept on counts and spoilage, which have no order to audit them.
+    private string StaffName => User.FindFirst(StaffClaims.Name)?.Value ?? string.Empty;
 }
+
+public sealed record SaveStockCountRequest(IReadOnlyList<StockCountLine> Lines);
 
 public sealed record UpdateRawMaterialRequest(
     string Name,

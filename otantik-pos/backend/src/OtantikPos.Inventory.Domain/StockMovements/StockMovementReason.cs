@@ -14,4 +14,7 @@ public enum StockMovementReason
     Purchase = 4,
 
     CountAdjustment = 5,
+
+    // Raw stock thrown away, recorded by hand: expired, spoiled, dropped, damaged packaging.
+    Spoilage = 6,
 }

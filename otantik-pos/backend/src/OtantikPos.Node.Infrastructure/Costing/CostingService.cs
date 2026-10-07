@@ -113,7 +113,8 @@ public sealed record TheoreticalCostReport(
     decimal TheoreticalCost,
     decimal? FoodCostPercent);
 
-public sealed record CostingSettingsDto(decimal FoodCostTargetPercent);
+// VarianceTolerancePercent: left out of a save, it stays as it is.
+public sealed record CostingSettingsDto(decimal FoodCostTargetPercent, decimal? VarianceTolerancePercent = null);
 
 public sealed record SharedCostDto(Guid Id, string Name, Guid? RawMaterialId, string? RawMaterialName, decimal? MonthlyAmount, string? Category);
 
@@ -149,8 +150,11 @@ public sealed class CostingService(NodeDbContext db, RestaurantClock clock)
 
     // ---- Settings and shared costs ----
 
-    public async Task<CostingSettingsDto> GetSettingsAsync(CancellationToken cancellationToken) =>
-        new((await SettingsAsync(cancellationToken)).FoodCostTargetPercent);
+    public async Task<CostingSettingsDto> GetSettingsAsync(CancellationToken cancellationToken)
+    {
+        var settings = await SettingsAsync(cancellationToken);
+        return new(settings.FoodCostTargetPercent, settings.VarianceTolerancePercent);
+    }
 
     public async Task<CostingSettingsDto> SaveSettingsAsync(CostingSettingsDto settings, CancellationToken cancellationToken)
     {
@@ -159,9 +163,12 @@ public sealed class CostingService(NodeDbContext db, RestaurantClock clock)
         var row = await db.CostingSettings.SingleOrDefaultAsync(cancellationToken);
         if (row is null)
             db.CostingSettings.Add(row = new CostingSettings());
+        if (settings.VarianceTolerancePercent is <= 0 or >= 100)
+            throw new DomainException("The variance tolerance is a percentage between 0 and 100.");
         row.FoodCostTargetPercent = settings.FoodCostTargetPercent;
+        row.VarianceTolerancePercent = settings.VarianceTolerancePercent ?? row.VarianceTolerancePercent;
         await db.SaveChangesAsync(cancellationToken);
-        return new(row.FoodCostTargetPercent);
+        return new(row.FoodCostTargetPercent, row.VarianceTolerancePercent);
     }
 
     public async Task<IReadOnlyList<SharedCostDto>> GetSharedCostsAsync(CancellationToken cancellationToken)
@@ -444,12 +451,12 @@ public sealed class CostingService(NodeDbContext db, RestaurantClock clock)
         await db.CostingSettings.AsNoTracking().SingleOrDefaultAsync(cancellationToken) ?? new CostingSettings();
 
     // The menu's own numbers: the dish's, and the size's after it.
-    private static string ItemCode(int menuItemId, int? variantId) =>
+    internal static string ItemCode(int menuItemId, int? variantId) =>
         variantId is { } v ? $"{menuItemId}-{v}" : menuItemId.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-    private static decimal Money(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
+    internal static decimal Money(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
 
-    private static decimal? Money(decimal? value) => value is { } v ? Money(v) : null;
+    internal static decimal? Money(decimal? value) => value is { } v ? Money(v) : null;
 
-    private static decimal Percent(decimal share) => Math.Round(share * 100, 1, MidpointRounding.AwayFromZero);
+    internal static decimal Percent(decimal share) => Math.Round(share * 100, 1, MidpointRounding.AwayFromZero);
 }

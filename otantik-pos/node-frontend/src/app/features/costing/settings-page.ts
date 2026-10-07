@@ -49,16 +49,27 @@ interface Draft {
       <p class="error">{{ error() }}</p>
     } @else {
       <section class="block">
-        <h2>Food cost target <span class="inline-ar">نسبة تكلفة الطعام المستهدفة</span></h2>
-        <p class="note">A dish whose ingredients cost more than this share of its price is marked above target.</p>
+        <h2>Targets <span class="inline-ar">الأهداف</span></h2>
+        <p class="note">
+          A dish whose ingredients cost more than the food cost target's share of its price is marked above target. A material whose
+          actual usage strays further than the tolerance from standard, either way, is marked in the variance report.
+        </p>
         <div class="toolbar">
           <mat-form-field subscriptSizing="dynamic" class="target">
-            <mat-label>Target · الهدف</mat-label>
+            <mat-label>Food cost target · نسبة التكلفة</mat-label>
             <input matInput type="number" min="1" max="100" step="0.5" [(ngModel)]="target" [disabled]="!canEdit()" />
             <span matTextSuffix>%</span>
           </mat-form-field>
+          <mat-form-field subscriptSizing="dynamic" class="target">
+            <mat-label>Variance tolerance · الحد المسموح</mat-label>
+            <span matTextPrefix>±&nbsp;</span>
+            <input matInput type="number" min="0.5" max="50" step="0.5" [(ngModel)]="tolerance" [disabled]="!canEdit()" />
+            <span matTextSuffix>%</span>
+          </mat-form-field>
           @if (canEdit()) {
-            <button mat-flat-button (click)="saveTarget()" [disabled]="!targetValid() || target === savedTarget || busy()">Save</button>
+            <button mat-flat-button (click)="saveTarget()" [disabled]="!targetValid() || (target === savedTarget && tolerance === savedTolerance) || busy()">
+              Save
+            </button>
           }
         </div>
       </section>
@@ -174,7 +185,7 @@ interface Draft {
       }
     }
     .target {
-      width: 160px;
+      width: 200px;
     }
     .add {
       margin-top: 8px;
@@ -223,23 +234,29 @@ export class SettingsPage {
 
   protected target = 30;
   protected savedTarget = 30;
+  protected tolerance = 5;
+  protected savedTolerance = 5;
 
   constructor() {
     void this.load();
   }
 
   protected targetValid(): boolean {
-    return typeof this.target === 'number' && this.target > 0 && this.target <= 100;
+    const percent = (value: unknown) => typeof value === 'number' && value > 0 && value < 100;
+    return percent(this.target) && percent(this.tolerance);
   }
 
   protected async saveTarget(): Promise<void> {
     this.busy.set(true);
     try {
-      const saved = await firstValueFrom(this.api.saveSettings({ foodCostTargetPercent: this.target }));
+      const saved = await firstValueFrom(
+        this.api.saveSettings({ foodCostTargetPercent: this.target, varianceTolerancePercent: this.tolerance }),
+      );
       this.target = this.savedTarget = saved.foodCostTargetPercent;
-      this.notify.info('Food cost target saved.');
+      this.tolerance = this.savedTolerance = saved.varianceTolerancePercent ?? this.tolerance;
+      this.notify.info('Targets saved.');
     } catch (error) {
-      this.notify.error(error, 'The target could not be saved.');
+      this.notify.error(error, 'The targets could not be saved.');
     } finally {
       this.busy.set(false);
     }
@@ -298,6 +315,7 @@ export class SettingsPage {
         firstValueFrom(this.api.materials()),
       ]);
       this.target = this.savedTarget = settings.foodCostTargetPercent;
+      this.tolerance = this.savedTolerance = settings.varianceTolerancePercent ?? 5;
       this.shared.set(shared);
       this.materials.set(materials);
     } catch (error) {

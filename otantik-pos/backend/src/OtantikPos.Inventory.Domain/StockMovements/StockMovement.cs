@@ -11,13 +11,17 @@ public sealed class StockMovement : AggregateRoot
 
     // Internal: entries are created only by RawMaterial, together with the balance change
     // they explain.
-    internal StockMovement(Guid rawMaterialId, decimal quantity, StockMovementReason reason, Guid sourceId, decimal? unitCost)
+    internal StockMovement(
+        Guid rawMaterialId, decimal quantity, StockMovementReason reason, Guid sourceId, decimal? unitCost,
+        string? note = null, string? recordedBy = null)
     {
         RawMaterialId = rawMaterialId;
         Quantity = quantity;
         Reason = reason;
         SourceId = sourceId;
         UnitCost = unitCost;
+        Note = note;
+        RecordedBy = recordedBy;
         OccurredAtUtc = DateTime.UtcNow;
     }
 
@@ -39,4 +43,9 @@ public sealed class StockMovement : AggregateRoot
     // the average cost otherwise. Null while the material had no price. Quantity × UnitCost is
     // what the movement was worth, so a month's food cost is the sum of its sales' worth.
     public decimal? UnitCost { get; private set; }
+
+    // For an entry made by hand (spoilage): why, and who recorded it. Null for the rest, whose
+    // SourceId already says.
+    public string? Note { get; private set; }
+    public string? RecordedBy { get; private set; }
 }
