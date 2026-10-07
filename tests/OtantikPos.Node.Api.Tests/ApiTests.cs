@@ -50,6 +50,11 @@ public class ApiTests
         Assert.Contains(Permissions.VoidAfterPayment, me.Permissions);
         Assert.DoesNotContain(Permissions.StaffManage, me.Permissions);
 
+        // What dishes cost is a manager's: not on a cashier's screens, and refused if asked for.
+        Assert.DoesNotContain(Permissions.CostingView, me.Permissions);
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync("/api/costing/menu", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await manager.GetAsync("/api/costing/menu", Cancel)).StatusCode);
+
         // A captain takes orders in the delivery app. Even with a PIN, not at the till.
         (await manager.PutAsJsonAsync("/api/staff/staff-captain/pin", new SetPinRequest("1357"), Cancel)).EnsureSuccessStatusCode();
         Assert.DoesNotContain((await anonymous.GetFromJsonAsync<List<SignInOption>>("/api/auth/staff", TestApi.Json, Cancel))!, s => s.Id == "staff-captain");

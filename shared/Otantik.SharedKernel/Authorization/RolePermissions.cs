@@ -37,7 +37,7 @@ public static class RolePermissions
 
     private static readonly IReadOnlySet<string> Manager = new HashSet<string>(Cashier)
     {
-        InventoryManage, MenuManage, StaffManage,
+        InventoryManage, MenuManage, StaffManage, CostingView,
     };
 
     // Everything. In the delivery system an Admin can additionally be narrowed by a custom

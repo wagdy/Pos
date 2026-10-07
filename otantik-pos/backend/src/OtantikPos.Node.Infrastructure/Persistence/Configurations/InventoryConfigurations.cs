@@ -15,6 +15,13 @@ internal sealed class RawMaterialConfiguration : IEntityTypeConfiguration<RawMat
         builder.Property(m => m.Unit).IsEnumName();
         builder.Property(m => m.QuantityOnHand).IsQuantity();
         builder.Property(m => m.ReorderLevel).IsQuantity();
+        builder.Property(m => m.Code).HasMaxLength(32);
+        builder.Property(m => m.Category).HasMaxLength(100);
+        builder.Property(m => m.PurchaseUnit).HasMaxLength(32);
+        builder.Property(m => m.PurchaseUnitSize).IsQuantity();
+        builder.Property(m => m.AverageCost).IsUnitCost();
+        builder.Property(m => m.DefaultYieldPercent).HasPrecision(5, 2).HasDefaultValue(100m);
+        builder.Ignore(m => m.CostPerPurchaseUnit);
     }
 }
 
@@ -25,6 +32,7 @@ internal sealed class RecipeConfiguration : IEntityTypeConfiguration<Recipe>
         builder.ToTable("Recipes", NodeDbContext.InventorySchema);
         builder.Ignore(r => r.Target);
         builder.Property(r => r.TargetKind).IsEnumName();
+        builder.Property(r => r.Portions).HasDefaultValue(1);
 
         // One recipe per target. NULLS NOT DISTINCT because VariantId is null for a base recipe
         // and an add-on, and PostgreSQL otherwise treats every null as different from every
@@ -49,7 +57,9 @@ internal sealed class RecipeIngredientConfiguration : IEntityTypeConfiguration<R
     public void Configure(EntityTypeBuilder<RecipeIngredient> builder)
     {
         builder.ToTable("RecipeIngredients", NodeDbContext.InventorySchema);
-        builder.Property(i => i.QuantityPerPortion).IsQuantity();
+        builder.Property(i => i.Quantity).IsQuantity();
+        builder.Property(i => i.YieldPercent).HasPrecision(5, 2).HasDefaultValue(100m);
+        builder.Ignore(i => i.AsPurchasedQuantity);
 
         builder.HasOne<RawMaterial>()
             .WithMany()
@@ -67,6 +77,7 @@ internal sealed class StockMovementConfiguration : IEntityTypeConfiguration<Stoc
         builder.ToTable("StockMovements", NodeDbContext.InventorySchema);
         builder.Property(m => m.Quantity).IsQuantity();
         builder.Property(m => m.Reason).IsEnumName();
+        builder.Property(m => m.UnitCost).IsUnitCost();
 
         builder.HasOne<RawMaterial>()
             .WithMany()

@@ -34,7 +34,9 @@ public sealed class InventoryController(ISender sender) : ControllerBase
     [HttpPut("raw-materials/{rawMaterialId:guid}")]
     [Authorize(Policy = Permissions.InventoryManage)]
     public Task<RawMaterialDto> UpdateRawMaterial(Guid rawMaterialId, UpdateRawMaterialRequest request, CancellationToken cancellationToken) =>
-        sender.Send(new UpdateRawMaterialCommand(rawMaterialId, request.Name, request.ReorderLevel), cancellationToken);
+        sender.Send(new UpdateRawMaterialCommand(
+            rawMaterialId, request.Name, request.ReorderLevel, request.Code, request.Category,
+            request.PurchaseUnit, request.PurchaseUnitSize, request.DefaultYieldPercent, request.CostPerPurchaseUnit), cancellationToken);
 
     // Goods received. PurchaseId is made by the till, so a retry after a lost response books
     // the delivery once, not twice.
@@ -70,4 +72,12 @@ public sealed class InventoryController(ISender sender) : ControllerBase
     }
 }
 
-public sealed record UpdateRawMaterialRequest(string Name, decimal ReorderLevel);
+public sealed record UpdateRawMaterialRequest(
+    string Name,
+    decimal ReorderLevel,
+    string? Code = null,
+    string? Category = null,
+    string? PurchaseUnit = null,
+    decimal? PurchaseUnitSize = null,
+    decimal? DefaultYieldPercent = null,
+    decimal? CostPerPurchaseUnit = null);

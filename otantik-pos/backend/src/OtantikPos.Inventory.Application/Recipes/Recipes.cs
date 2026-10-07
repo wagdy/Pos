@@ -6,15 +6,19 @@ using OtantikPos.Inventory.Domain.Recipes;
 
 namespace OtantikPos.Inventory.Application.Recipes;
 
-public sealed record RecipeIngredientDto(Guid RawMaterialId, decimal QuantityPerPortion);
+// Quantity: the Edible Portion for the whole recipe, in the material's own unit. YieldPercent:
+// null takes the material's default.
+public sealed record RecipeIngredientDto(Guid RawMaterialId, decimal Quantity, decimal? YieldPercent = null);
 
-public sealed record RecipeDto(RecipeTargetKind TargetKind, int CatalogItemId, int? VariantId, IReadOnlyList<RecipeIngredientDto> Ingredients)
+public sealed record RecipeDto(
+    RecipeTargetKind TargetKind, int CatalogItemId, int? VariantId, IReadOnlyList<RecipeIngredientDto> Ingredients, int Portions = 1)
 {
     public static RecipeDto From(Recipe recipe) => new(
         recipe.TargetKind,
         recipe.CatalogItemId,
         recipe.VariantId,
-        recipe.Ingredients.Select(i => new RecipeIngredientDto(i.RawMaterialId, i.QuantityPerPortion)).ToList());
+        recipe.Ingredients.Select(i => new RecipeIngredientDto(i.RawMaterialId, i.Quantity, i.YieldPercent)).ToList(),
+        recipe.Portions);
 }
 
 // Replaces the whole recipe of a menu item, one of its variants, or an add-on. An empty list
@@ -30,7 +34,8 @@ public sealed record SetRecipeCommand(
     RecipeTargetKind TargetKind,
     int CatalogItemId,
     int? VariantId,
-    IReadOnlyList<RecipeIngredientDto> Ingredients) : IRequest<RecipeDto?>;
+    IReadOnlyList<RecipeIngredientDto> Ingredients,
+    int Portions = 1) : IRequest<RecipeDto?>;
 
 internal sealed class SetRecipeHandler(IRecipeRepository recipes, IRawMaterialRepository materials, IUnitOfWork unitOfWork)
     : IRequestHandler<SetRecipeCommand, RecipeDto?>
@@ -61,8 +66,9 @@ internal sealed class SetRecipeHandler(IRecipeRepository recipes, IRawMaterialRe
         foreach (var dropped in recipe.Ingredients.Where(i => !byId.ContainsKey(i.RawMaterialId)).ToList())
             recipe.RemoveIngredient(dropped.RawMaterialId);
 
+        recipe.SetPortions(request.Portions);
         foreach (var ingredient in request.Ingredients)
-            recipe.SetIngredient(byId[ingredient.RawMaterialId], ingredient.QuantityPerPortion);
+            recipe.SetIngredient(byId[ingredient.RawMaterialId], ingredient.Quantity, ingredient.YieldPercent);
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return RecipeDto.From(recipe);

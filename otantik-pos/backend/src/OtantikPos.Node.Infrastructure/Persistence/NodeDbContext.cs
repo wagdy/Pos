@@ -8,6 +8,7 @@ using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Node.Infrastructure.Common;
+using OtantikPos.Node.Infrastructure.Costing;
 using OtantikPos.Node.Infrastructure.Identity;
 using OtantikPos.Node.Infrastructure.Messaging;
 using OtantikPos.Node.Infrastructure.Printing;
@@ -41,6 +42,8 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
     public DbSet<RawMaterial> RawMaterials => Set<RawMaterial>();
     public DbSet<Recipe> Recipes => Set<Recipe>();
     public DbSet<StockMovement> StockMovements => Set<StockMovement>();
+    public DbSet<CostingSettings> CostingSettings => Set<CostingSettings>();
+    public DbSet<SharedCost> SharedCosts => Set<SharedCost>();
 
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<PrintJob> PrintJobs => Set<PrintJob>();

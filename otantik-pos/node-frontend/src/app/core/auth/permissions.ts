@@ -18,6 +18,7 @@ export const Permissions = {
   InventoryManage: 'inventory.manage',
   MenuManage: 'menu.manage',
   StaffManage: 'staff.manage',
+  CostingView: 'costing.view',
 } as const;
 
 export type Permission = (typeof Permissions)[keyof typeof Permissions];

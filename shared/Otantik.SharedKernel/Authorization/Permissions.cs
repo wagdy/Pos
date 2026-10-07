@@ -38,6 +38,9 @@ public static class Permissions
     public const string MenuManage = "menu.manage";
     public const string StaffManage = "staff.manage";
 
+    // What dishes and ingredients cost, and the food cost reports: a manager's, not a cashier's.
+    public const string CostingView = "costing.view";
+
     public static string ForVoid(VoidType type) => type switch
     {
         VoidType.BeforeKitchen => VoidBeforeKitchen,

@@ -11,12 +11,13 @@ public sealed class StockMovement : AggregateRoot
 
     // Internal: entries are created only by RawMaterial, together with the balance change
     // they explain.
-    internal StockMovement(Guid rawMaterialId, decimal quantity, StockMovementReason reason, Guid sourceId)
+    internal StockMovement(Guid rawMaterialId, decimal quantity, StockMovementReason reason, Guid sourceId, decimal? unitCost)
     {
         RawMaterialId = rawMaterialId;
         Quantity = quantity;
         Reason = reason;
         SourceId = sourceId;
+        UnitCost = unitCost;
         OccurredAtUtc = DateTime.UtcNow;
     }
 
@@ -33,4 +34,9 @@ public sealed class StockMovement : AggregateRoot
     public Guid SourceId { get; private set; }
 
     public DateTime OccurredAtUtc { get; private set; }
+
+    // The cost of one unit (gram, millilitre, piece) at that moment: the price paid on a purchase,
+    // the average cost otherwise. Null while the material had no price. Quantity × UnitCost is
+    // what the movement was worth, so a month's food cost is the sum of its sales' worth.
+    public decimal? UnitCost { get; private set; }
 }

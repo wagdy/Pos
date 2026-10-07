@@ -1,10 +1,13 @@
+import { BreakpointObserver } from '@angular/cdk/layout';
 import { Component, OnDestroy, OnInit, computed, inject } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatMenuModule } from '@angular/material/menu';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { map } from 'rxjs';
 import { Order, PrinterProblem } from '../../core/api/models';
 import { AuthService } from '../../core/auth/auth.service';
 import { CanDirective } from '../../core/auth/can.directive';
@@ -43,6 +46,14 @@ export class Shell implements OnInit, OnDestroy {
   private readonly menu = inject(MenuService);
   private readonly notify = inject(NotifyService);
   private readonly router = inject(Router);
+
+  // Narrower than this, the nav shows its icons only (shell.scss), and tooltips name them.
+  protected readonly compactNav = toSignal(
+    inject(BreakpointObserver)
+      .observe('(max-width: 999.98px)')
+      .pipe(map((state) => state.matches)),
+    { initialValue: false },
+  );
 
   // A role with none of the money rights: a captain who reached the till, say. Told plainly
   // rather than left wondering where the buttons went.

@@ -13,7 +13,9 @@ namespace OtantikPos.Inventory.Application.RawMaterials;
 public sealed record ReceivePurchaseCommand(Guid PurchaseId, IReadOnlyList<PurchaseLine> Lines)
     : IRequest<IReadOnlyList<RawMaterialDto>>;
 
-public sealed record PurchaseLine(Guid RawMaterialId, decimal Quantity);
+// Quantity in the material's own unit (grams, millilitres, pieces). Cost: what the line cost in
+// all, from the invoice; it moves the material's average cost. Without it, only stock changes.
+public sealed record PurchaseLine(Guid RawMaterialId, decimal Quantity, decimal? Cost = null);
 
 internal sealed class ReceivePurchaseCommandHandler(
     IRawMaterialRepository materials,
@@ -28,7 +30,7 @@ internal sealed class ReceivePurchaseCommandHandler(
         if (!await movements.ExistsAsync(request.PurchaseId, StockMovementReason.Purchase, cancellationToken))
         {
             foreach (var line in request.Lines)
-                movements.Add(byId[line.RawMaterialId].ReceivePurchase(line.Quantity, request.PurchaseId));
+                movements.Add(byId[line.RawMaterialId].ReceivePurchase(line.Quantity, request.PurchaseId, line.Cost));
 
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }

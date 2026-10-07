@@ -1,21 +1,25 @@
 <mat-toolbar class="toolbar">
-  <button mat-button class="brand" (click)="openOrders()">
+  <button mat-button class="brand" (click)="openOrders()" aria-label="Otantik POS: open orders">
     <mat-icon>point_of_sale</mat-icon>
-    Otantik POS
+    <span class="brand-text">Otantik POS</span>
   </button>
 
   <nav>
-    <a mat-button routerLink="/orders" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
+    <a mat-button routerLink="/orders" routerLinkActive="active" aria-label="Open orders" matTooltip="Open orders" [matTooltipDisabled]="!compactNav()" [routerLinkActiveOptions]="{ exact: true }">
       <mat-icon>receipt_long</mat-icon>
-      Open orders
+      <span class="nav-text">Open orders</span>
     </a>
-    <a *appCan="Permissions.OrderViewAll" mat-button routerLink="/reports" routerLinkActive="active">
+    <a *appCan="Permissions.OrderViewAll" mat-button routerLink="/reports" routerLinkActive="active" aria-label="Reports" matTooltip="Reports" [matTooltipDisabled]="!compactNav()">
       <mat-icon>bar_chart</mat-icon>
-      Reports
+      <span class="nav-text">Reports</span>
     </a>
-    <a *appCan="Permissions.StaffManage" mat-button routerLink="/staff" routerLinkActive="active">
+    <a *appCan="Permissions.StaffManage" mat-button routerLink="/staff" routerLinkActive="active" aria-label="Staff" matTooltip="Staff" [matTooltipDisabled]="!compactNav()">
       <mat-icon>badge</mat-icon>
-      Staff
+      <span class="nav-text">Staff</span>
+    </a>
+    <a *appCan="Permissions.CostingView" mat-button routerLink="/costing" routerLinkActive="active" aria-label="Costing" matTooltip="Costing" [matTooltipDisabled]="!compactNav()">
+      <mat-icon>calculate</mat-icon>
+      <span class="nav-text">Costing</span>
     </a>
   </nav>
 

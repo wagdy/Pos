@@ -91,7 +91,21 @@ nav .active {
   margin: 0 auto;
 }
 
+// A manager has four sections: below this their names would crowd the connection badges.
+@media (max-width: 999.98px) {
+  .nav-text {
+    display: none;
+  }
+}
+
 @media (max-width: 720px) {
+  // Icons only by now: without Material's 64px minimum a manager's buttons fit a phone.
+  .toolbar .mat-mdc-button {
+    min-width: 0;
+    padding: 0 10px;
+  }
+
+  .brand-text,
   .link-text,
   .user-name,
   .badge {

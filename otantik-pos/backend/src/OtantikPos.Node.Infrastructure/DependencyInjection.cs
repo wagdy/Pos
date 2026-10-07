@@ -9,6 +9,7 @@ using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Node.Infrastructure.Common;
+using OtantikPos.Node.Infrastructure.Costing;
 using OtantikPos.Node.Infrastructure.DeliverySystem;
 using OtantikPos.Node.Infrastructure.Identity;
 using OtantikPos.Node.Infrastructure.Messaging;
@@ -54,6 +55,7 @@ public static class DependencyInjection
         services.AddScoped<IKitchenPrintQueue, KitchenPrintQueue>();
         services.AddScoped<IReceiptPrintQueue, ReceiptPrintQueue>();
         services.AddScoped<ICashReceived, CashReceivedRecord>();
+        services.AddScoped<CostingService>();
 
         // Inventory.
         services.AddScoped<IRawMaterialRepository, RawMaterialRepository>();

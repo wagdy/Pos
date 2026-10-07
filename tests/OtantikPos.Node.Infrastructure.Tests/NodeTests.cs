@@ -9,6 +9,9 @@ using OtantikPos.Inventory.Application.RawMaterials;
 using OtantikPos.Inventory.Application.Recipes;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
+using OtantikPos.Inventory.Domain.StockMovements;
+using OtantikPos.Node.Infrastructure.Common;
+using OtantikPos.Node.Infrastructure.Costing;
 using OtantikPos.Node.Infrastructure.DeliverySystem;
 using OtantikPos.Node.Infrastructure.Identity;
 using OtantikPos.Node.Infrastructure.Messaging;
@@ -49,6 +52,102 @@ public class NodeTests
             FakeDeliverySystem.ReferenceData() with { RedemptionValuePer100Points = 12.5m }, DateTime.UtcNow, TestContext.Current.CancellationToken);
         Assert.NotNull((await staff.SignInAsync("staff-cashier", "2468", TestContext.Current.CancellationToken)).Staff);
         Assert.Equal(12.5m, await node.Db(db => db.Settings.Select(s => s.RedemptionValuePer100Points).SingleAsync()));
+    }
+
+    // The Recipe Costing Template's own example, Breakfast Strata for 15, on the burger: the card
+    // comes to its figures. Its half-and-half has no price; the template counted it as nothing,
+    // the card says so.
+    [Fact]
+    public async Task The_recipe_card_works_out_the_templates_breakfast_strata()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        async Task<Guid> Material(string name, UnitOfMeasure unit, decimal? cost) =>
+            (await node.Send(new CreateRawMaterialCommand(name, unit, CostPerPurchaseUnit: cost,
+                PurchaseUnit: unit == UnitOfMeasure.Piece ? "piece" : null, PurchaseUnitSize: unit == UnitOfMeasure.Piece ? 1 : null))).Id;
+        var rolls = await Material("French rolls", UnitOfMeasure.Piece, 0.29m);
+        var eggs = await Material("Eggs", UnitOfMeasure.Piece, 0.05m);
+        var sausage = await Material("Sausage", UnitOfMeasure.Piece, 0.24m);
+        var provolone = await Material("Provolone", UnitOfMeasure.Piece, 0.16m);
+        var halfAndHalf = await Material("Half and half", UnitOfMeasure.Millilitre, null);
+        await node.Send(new SetRecipeCommand(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null,
+            [new(rolls, 2), new(eggs, 12, 98), new(sausage, 5.30m), new(provolone, 1), new(halfAndHalf, 473)], Portions: 15));
+
+        using var scope = node.Scope();
+        var card = await node.Service<CostingService>(scope)
+            .GetRecipeCardAsync(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(15, card.Portions);
+        Assert.Equal(0.61m, card.Lines.Single(l => l.Ingredient == "Eggs").RecipeCost);
+        Assert.Equal(1.27m, card.Lines.Single(l => l.Ingredient == "Sausage").RecipeCost);
+        Assert.Equal(2.62m, card.CostPerRecipe);
+        Assert.Equal(0.17m, card.CostPerPortion);
+        Assert.Equal(0.58m, card.IdealSellingPrice);
+        Assert.Equal(120m - 0.17m, card.MarginPerPortion);
+        Assert.Equal(["Half and half"], card.MissingPrices);
+        Assert.Equal(CostStatus.MissingPrices, card.Status);
+    }
+
+    // The Monthly Theoretical Cost report: each dish sold this month, its net sales, and what its
+    // recipe says it cost, from the cost each sale recorded. A refund is not a sale; a dish with
+    // no recipe is said to have none rather than shown at 0%; a shared cost is spread per meal.
+    [Fact]
+    public async Task The_monthly_theoretical_cost_comes_from_what_was_sold()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        var ct = TestContext.Current.CancellationToken;
+        async Task<Guid> Piece(string name, decimal cost) =>
+            (await node.Send(new CreateRawMaterialCommand(name, UnitOfMeasure.Piece, PurchaseUnit: "piece", PurchaseUnitSize: 1, CostPerPurchaseUnit: cost))).Id;
+        var patty = await Piece("Beef patty", 20);
+        var bun = await Piece("Bun", 5);
+        var cheese = await Piece("Cheese slice", 3);
+        await node.Send(new SetRecipeCommand(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, [new(patty, 1), new(bun, 1)]));
+        await node.Send(new SetRecipeCommand(RecipeTargetKind.AddOn, FakeDeliverySystem.Cheese, null, [new(cheese, 1)]));
+
+        async Task<Order> Paid(Func<Order, Task> fill)
+        {
+            var order = await node.Send(new OpenOrderCommand(OrderType.DineIn, TableNumber: Guid.NewGuid().ToString()[..6]));
+            await fill(order);
+            await node.Send(new SendToKitchenCommand(order.PublicId));
+            return await node.Send(new CheckoutCommand(order.PublicId, PaymentMethod.Cash));
+        }
+        await Paid(o => node.Send(new AddOrderItemCommand(o.PublicId, FakeDeliverySystem.Burger, 2, AddOnIds: [FakeDeliverySystem.Cheese])));
+        await Paid(async o =>
+        {
+            await node.Send(new AddOrderItemCommand(o.PublicId, FakeDeliverySystem.Burger, 1));
+            await node.Send(new AddOrderItemCommand(o.PublicId, FakeDeliverySystem.Shawarma, VariantId: FakeDeliverySystem.KiloTray));
+        });
+        var refunded = await Paid(o => node.Send(new AddOrderItemCommand(o.PublicId, FakeDeliverySystem.Burger, 1)));
+        await node.Send(new VoidOrderCommand(refunded.PublicId, "Wrong table"));
+
+        // The sales' stock movements are posted by the outbox, just after each order closes.
+        Assert.True(await TestNode.WaitFor(async () => await node.Db(db => db.StockMovements.CountAsync(m => m.Reason == StockMovementReason.Sale)) == 7));
+
+        using var scope = node.Scope();
+        var costing = node.Service<CostingService>(scope);
+        var today = node.Service<RestaurantClock>(scope).BusinessDateOf(DateTime.UtcNow);
+        var report = await costing.GetTheoreticalCostAsync(today.Year, today.Month, ct);
+
+        var burger = Assert.Single(report.Rows, r => r.MenuItemId == FakeDeliverySystem.Burger);
+        Assert.Equal((3, 390m, 81m, 27m, 20.8m, CostStatus.WithinTarget),
+            (burger.QuantitySold, burger.NetSales, burger.TheoreticalCost, burger.RecipeCostPerUnit, burger.FoodCostPercent, burger.Status));
+        var tray = Assert.Single(report.Rows, r => r.VariantId == FakeDeliverySystem.KiloTray);
+        Assert.Equal(($"{FakeDeliverySystem.Shawarma}-{FakeDeliverySystem.KiloTray}", 400m, CostStatus.NoRecipe), (tray.ItemCode, tray.NetSales, tray.Status));
+        Assert.Equal((4, 790m, 81m, 10.3m), (report.QuantitySold, report.NetSales, report.TheoreticalCost, report.FoodCostPercent));
+        Assert.Equal(0, burger.QuantityCostedNow);
+
+        // The tray was sold before the shawarma had a recipe. Given one now, the tray is costed by
+        // it as a sale today would be (a size without its own takes the dish's), at today's prices,
+        // and the row says how many were costed so.
+        await node.Send(new SetRecipeCommand(RecipeTargetKind.MenuItem, FakeDeliverySystem.Shawarma, null, [new(patty, 2)]));
+        tray = Assert.Single((await costing.GetTheoreticalCostAsync(today.Year, today.Month, ct)).Rows, r => r.VariantId == FakeDeliverySystem.KiloTray);
+        Assert.Equal((40m, 10m, CostStatus.WithinTarget, 1), (tray.TheoreticalCost, tray.FoodCostPercent, tray.Status, tray.QuantityCostedNow));
+
+        // Frying oil, 400 a month across every meal: 100 a meal, which puts the burger above target.
+        await costing.SaveSharedCostAsync(null, new SaveSharedCostRequest("Frying oil", null, 400, null), ct);
+        burger = Assert.Single((await costing.GetTheoreticalCostAsync(today.Year, today.Month, ct)).Rows, r => r.MenuItemId == FakeDeliverySystem.Burger);
+        Assert.Equal((300m, 381m, CostStatus.AboveTarget), (burger.SharedCost, burger.TheoreticalCost, burger.Status));
     }
 
     // INSTALL.md, step 4: once a real manager has a PIN, the first manager's PIN comes out of .env

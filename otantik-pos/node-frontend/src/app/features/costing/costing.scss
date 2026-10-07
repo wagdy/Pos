@@ -1,0 +1,130 @@
+// Shared by the costing screens. Labels carry English and Arabic, as the templates do.
+
+:host {
+  display: block;
+}
+
+// Under the English, on the same side: start and end would flip inside right-to-left text.
+.ar {
+  display: block;
+  direction: rtl;
+  text-align: left;
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+.num .ar {
+  text-align: right;
+}
+
+// Beside English: the gap is on the left whatever the span's own direction.
+.inline-ar {
+  direction: rtl;
+  unicode-bidi: isolate;
+  opacity: 0.75;
+  margin-left: 6px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+
+  .spacer {
+    flex: 1;
+  }
+}
+
+.note {
+  color: var(--mat-sys-on-surface-variant);
+  margin: 0 0 12px;
+}
+
+.error {
+  color: var(--mat-sys-error);
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border-radius: 12px;
+  border: 1px solid var(--mat-sys-outline-variant);
+  background: var(--mat-sys-surface);
+}
+
+table.grid {
+  width: 100%;
+  border-collapse: collapse;
+
+  th,
+  td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--mat-sys-outline-variant);
+    text-align: start;
+    vertical-align: middle;
+  }
+
+  th {
+    font: var(--mat-sys-label-medium);
+    color: var(--mat-sys-on-surface-variant);
+    background: var(--mat-sys-surface-container);
+  }
+
+  .num,
+  .code {
+    white-space: nowrap;
+  }
+
+  .num {
+    text-align: end;
+  }
+
+  tr.clickable {
+    cursor: pointer;
+
+    &:hover {
+      background: var(--mat-sys-surface-container-low);
+    }
+  }
+
+  tfoot td {
+    font-weight: 600;
+    background: var(--mat-sys-surface-container);
+  }
+}
+
+.status {
+  display: inline-flex;
+  flex-direction: column;
+  padding: 2px 8px;
+  border-radius: 8px;
+  font: var(--mat-sys-label-small);
+  white-space: nowrap;
+
+  &.WithinTarget {
+    background: color-mix(in srgb, var(--till-ok) 18%, transparent);
+  }
+
+  &.AboveTarget,
+  &.MissingPrices {
+    background: color-mix(in srgb, var(--mat-sys-error) 16%, transparent);
+    color: var(--mat-sys-error);
+  }
+
+  &.NoRecipe,
+  &.NoPrice {
+    background: var(--mat-sys-surface-container-high);
+  }
+}
+
+.muted {
+  color: var(--mat-sys-on-surface-variant);
+}
+
+@media print {
+  .toolbar,
+  .no-print {
+    display: none !important;
+  }
+}
