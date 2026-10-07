@@ -59,6 +59,7 @@ public static class DependencyInjection
         services.AddScoped<CostingService>();
         services.AddScoped<VarianceService>();
         services.AddScoped<KpiService>();
+        services.AddScoped<BreakEvenService>();
 
         // Inventory.
         services.AddScoped<IRawMaterialRepository, RawMaterialRepository>();

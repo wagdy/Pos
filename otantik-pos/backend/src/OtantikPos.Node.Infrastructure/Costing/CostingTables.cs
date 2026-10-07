@@ -25,6 +25,10 @@ public sealed class CostingSettings
     // The menu categories that are drinks, by name: their sales and costs are the beverage cost %,
     // the rest the food cost %. None set, everything is food.
     public List<string> BeverageCategories { get; set; } = [];
+
+    // The break-even worksheet's four options: weekly sales to try against this year's costs.
+    // Empty until the manager sets them.
+    public List<decimal> BreakEvenScenarios { get; set; } = [];
 }
 
 // What a month cost beyond its ingredients, as the manager enters it: what the KPIs need besides
@@ -100,6 +104,7 @@ internal sealed class CostingSettingsConfiguration : IEntityTypeConfiguration<Co
         builder.Property(s => s.FoodCostTargetPercent).HasPrecision(5, 2);
         builder.Property(s => s.VarianceTolerancePercent).HasPrecision(5, 2).HasDefaultValue(CostingSettings.DefaultVarianceTolerance);
         builder.Property(s => s.BeverageCategories).HasDefaultValueSql("'{}'::text[]");
+        builder.Property(s => s.BreakEvenScenarios).HasDefaultValueSql("'{}'::numeric[]");
     }
 }
 

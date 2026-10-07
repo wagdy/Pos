@@ -74,6 +74,10 @@ export const routes: Routes = [
             loadComponent: () => import('./features/costing/kpis-page').then((m) => m.KpisPage),
           },
           {
+            path: 'break-even',
+            loadComponent: () => import('./features/costing/break-even-page').then((m) => m.BreakEvenPage),
+          },
+          {
             path: 'settings',
             loadComponent: () => import('./features/costing/settings-page').then((m) => m.SettingsPage),
           },

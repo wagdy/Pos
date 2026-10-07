@@ -48,6 +48,7 @@ export class CostingPage {
     { path: 'theoretical', en: 'Theoretical cost', ar: 'التكلفة النظرية' },
     { path: 'variance', en: 'Variance', ar: 'الانحراف' },
     { path: 'kpis', en: 'KPIs', ar: 'المؤشرات' },
+    { path: 'break-even', en: 'Break-even', ar: 'نقطة التعادل' },
     { path: 'settings', en: 'Settings', ar: 'الإعدادات' },
   ];
 }

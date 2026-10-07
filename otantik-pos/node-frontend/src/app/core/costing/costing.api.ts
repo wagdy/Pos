@@ -178,6 +178,64 @@ export interface ItemProfit {
   marginPercent: number | null;
 }
 
+// The break-even worksheet's Income Statement column: the chosen months at a year's pace.
+export interface BreakEvenWorksheet {
+  from: string;
+  to: string;
+  days: number;
+  weeklySales: number;
+  grossSales: number;
+  costOfSales: number;
+  costOfSalesRatio: number;
+  grossProfit: number;
+  controllableCosts: number;
+  occupationCost: number;
+  interest: number;
+  depreciation: number;
+  totalFixedCosts: number;
+  restaurantProfit: number;
+  breakEvenYearlySales: number | null;
+  breakEvenWeeklySales: number | null;
+  monthsWithoutCosts: string[];
+  scenarios: number[];
+}
+
+// One column of the worksheet: weekly sales tried against the year's costs.
+export interface BreakEvenColumn {
+  weeklySales: number;
+  grossSales: number;
+  costOfSales: number;
+  grossProfit: number;
+  profitMarginPercent: number | null;
+  controllableCosts: number;
+  occupationCost: number;
+  interest: number;
+  depreciation: number;
+  totalFixedCosts: number;
+  restaurantProfit: number;
+}
+
+// The template's arithmetic for an option: gross sales = weekly × 52, cost of sales at the
+// income statement's ratio, the same fixed costs.
+export function breakEvenColumn(sheet: BreakEvenWorksheet, weeklySales: number): BreakEvenColumn {
+  const grossSales = weeklySales * 52;
+  const costOfSales = grossSales * sheet.costOfSalesRatio;
+  const grossProfit = grossSales - costOfSales;
+  return {
+    weeklySales,
+    grossSales,
+    costOfSales,
+    grossProfit,
+    profitMarginPercent: grossSales > 0 ? (grossProfit / grossSales) * 100 : null,
+    controllableCosts: sheet.controllableCosts,
+    occupationCost: sheet.occupationCost,
+    interest: sheet.interest,
+    depreciation: sheet.depreciation,
+    totalFixedCosts: sheet.totalFixedCosts,
+    restaurantProfit: grossProfit - sheet.totalFixedCosts,
+  };
+}
+
 export interface KpiReport {
   year: number;
   month: number;
@@ -411,6 +469,17 @@ export class CostingApi {
   // The whole month each time: a figure left empty is not known yet.
   saveExpenses(year: number, month: number, expenses: MonthlyExpenses): Observable<MonthlyExpenses> {
     return this.http.put<MonthlyExpenses>(`/api/costing/expenses/${year}/${month}`, expenses);
+  }
+
+  // A run of months, inclusive; one month is from = to. Months are 'YYYY-MM'.
+  breakEven(from: string, to: string): Observable<BreakEvenWorksheet> {
+    const [fromYear, fromMonth] = from.split('-').map(Number);
+    const [toYear, toMonth] = to.split('-').map(Number);
+    return this.http.get<BreakEvenWorksheet>('/api/costing/break-even', { params: { fromYear, fromMonth, toYear, toMonth } });
+  }
+
+  saveBreakEvenScenarios(scenarios: number[]): Observable<number[]> {
+    return this.http.put<number[]>('/api/costing/break-even/scenarios', scenarios);
   }
 
   stockCounts(): Observable<StockCountSummary[]> {

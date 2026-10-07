@@ -13,7 +13,7 @@ namespace OtantikPos.Node.Api.Controllers;
 [ApiController]
 [Route("api/costing")]
 [Authorize(Policy = Permissions.CostingView)]
-public sealed class CostingController(CostingService costing, VarianceService variance, KpiService kpis) : ControllerBase
+public sealed class CostingController(CostingService costing, VarianceService variance, KpiService kpis, BreakEvenService breakEven) : ControllerBase
 {
     // Raw materials with their costs: what each costs per purchase unit, the last price paid, and
     // the stock's value.
@@ -62,6 +62,18 @@ public sealed class CostingController(CostingService costing, VarianceService va
     [Authorize(Policy = Permissions.InventoryManage)]
     public Task<MonthlyExpensesDto> SaveExpenses(int year, int month, MonthlyExpensesDto expenses, CancellationToken cancellationToken) =>
         kpis.SaveExpensesAsync(year, month, expenses, User.FindFirst(StaffClaims.Name)?.Value, cancellationToken);
+
+    // The break-even worksheet over a run of months (one month: from = to), at a year's pace.
+    [HttpGet("break-even")]
+    public Task<BreakEvenWorksheet> GetBreakEven(
+        [FromQuery] int fromYear, [FromQuery] int fromMonth, [FromQuery] int toYear, [FromQuery] int toMonth, CancellationToken cancellationToken) =>
+        breakEven.GetAsync(fromYear, fromMonth, toYear, toMonth, cancellationToken);
+
+    // The worksheet's four options, weekly sales to try, kept for next time.
+    [HttpPut("break-even/scenarios")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public Task<IReadOnlyList<decimal>> SaveBreakEvenScenarios(IReadOnlyList<decimal> scenarios, CancellationToken cancellationToken) =>
+        breakEven.SaveScenariosAsync(scenarios, cancellationToken);
 
     [HttpGet("settings")]
     public Task<CostingSettingsDto> GetSettings(CancellationToken cancellationToken) =>

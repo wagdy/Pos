@@ -56,7 +56,7 @@ public class ApiTests
         Assert.Equal(HttpStatusCode.OK, (await manager.GetAsync("/api/costing/menu", Cancel)).StatusCode);
 
         // So are counts, spoilage and the variance between counts. A cashier sees stock, not this.
-        foreach (var path in new[] { "/api/inventory/stock-counts", "/api/costing/variance", "/api/costing/spoilage", "/api/costing/kpis?year=2026&month=10" })
+        foreach (var path in new[] { "/api/inventory/stock-counts", "/api/costing/variance", "/api/costing/spoilage", "/api/costing/kpis?year=2026&month=10", "/api/costing/break-even?fromYear=2026&fromMonth=10&toYear=2026&toMonth=10" })
             Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync(path, Cancel)).StatusCode);
         // Wages are a manager's to see and enter.
         var wages = await cashier.PutAsJsonAsync("/api/costing/expenses/2026/10", new { wagesAndBenefits = 1 }, Cancel);

@@ -334,6 +334,54 @@ public class NodeTests
         Assert.Equal((135m, 12m), (s.FoodRecipeCost, s.BeverageRecipeCost));
     }
 
+    // The break-even worksheet: the month's sales at a year's pace, cost of sales at its ratio, the
+    // month's costs × 12 as fixed costs, and the sales at which profit is nil.
+    [Fact]
+    public async Task The_break_even_worksheet_puts_the_months_at_a_years_pace()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        var ct = TestContext.Current.CancellationToken;
+        async Task<Guid> Piece(string name, decimal cost) =>
+            (await node.Send(new CreateRawMaterialCommand(name, UnitOfMeasure.Piece, PurchaseUnit: "piece", PurchaseUnitSize: 1, CostPerPurchaseUnit: cost))).Id;
+        var patty = await Piece("Beef patty", 20);
+        var bun = await Piece("Bun", 5);
+        await node.Send(new ReceivePurchaseCommand(Guid.NewGuid(), [new(patty, 50), new(bun, 50)]));
+        await node.Send(new SetRecipeCommand(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, [new(patty, 1), new(bun, 1)]));
+
+        // Four burgers at 120, costing 25 each: 480 of sales, 100 of cost.
+        var order = await node.Send(new OpenOrderCommand(OrderType.DineIn, TableNumber: "B1"));
+        await node.Send(new AddOrderItemCommand(order.PublicId, FakeDeliverySystem.Burger, 4));
+        await node.Send(new CheckoutCommand(order.PublicId, PaymentMethod.Cash));
+        Assert.True(await TestNode.WaitFor(async () => await node.Db(db => db.StockMovements.CountAsync(m => m.Reason == StockMovementReason.Sale)) == 2));
+
+        using var scope = node.Scope();
+        var today = node.Service<RestaurantClock>(scope).BusinessDateOf(DateTime.UtcNow);
+        await node.Service<KpiService>(scope).SaveExpensesAsync(today.Year, today.Month, new MonthlyExpensesDto(1_000, 160, 200, 500, 50, 100), "Omar", ct);
+        var breakEven = node.Service<BreakEvenService>(scope);
+
+        var sheet = await breakEven.GetAsync(today.Year, today.Month, today.Year, today.Month, ct);
+        Assert.Equal(today.Day, sheet.Days);
+        Assert.Equal(Math.Round(480m / today.Day * 7, 2, MidpointRounding.AwayFromZero), sheet.WeeklySales);
+        // Wages and other controllable costs are the controllable costs; each line × 12.
+        Assert.Equal((14_400m, 6_000m, 600m, 1_200m, 22_200m),
+            (sheet.ControllableCosts, sheet.OccupationCost, sheet.Interest, sheet.Depreciation, sheet.TotalFixedCosts));
+        // 22,200 ÷ (1 − 100/480): each L.E of sales leaves 0.79 towards the fixed costs.
+        Assert.Equal((28_042.11m, 539.27m), (sheet.BreakEvenYearlySales, sheet.BreakEvenWeeklySales));
+        // Each figure is rounded on its own, so the profit can differ from the sum by a piastre or two.
+        Assert.InRange(sheet.RestaurantProfit - (sheet.GrossSales - sheet.CostOfSales - sheet.TotalFixedCosts), -0.02m, 0.02m);
+
+        // Last month too, which has no costs entered: named, and not counted as a month of nothing.
+        var last = today.AddMonths(-1);
+        sheet = await breakEven.GetAsync(last.Year, last.Month, today.Year, today.Month, ct);
+        Assert.Equal([last.ToString("MMMM yyyy", System.Globalization.CultureInfo.InvariantCulture)], sheet.MonthsWithoutCosts);
+        Assert.Equal(22_200m, sheet.TotalFixedCosts);
+
+        await Assert.ThrowsAsync<DomainException>(() => breakEven.GetAsync(today.Year + 1, 1, today.Year + 1, 1, ct));
+        await breakEven.SaveScenariosAsync([32_000m, 40_000m, 20_000m, 15_000m], ct);
+        Assert.Equal([32_000m, 40_000m, 20_000m, 15_000m], (await breakEven.GetAsync(today.Year, today.Month, today.Year, today.Month, ct)).Scenarios);
+    }
+
     // A delivery, spoilage or count entered by hand can collide with the outbox taking a sale's
     // stock from the same material. Those are run again rather than refused; anything else still
     // reports the conflict.
