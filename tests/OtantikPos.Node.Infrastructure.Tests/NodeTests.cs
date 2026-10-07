@@ -291,7 +291,10 @@ public class NodeTests
         await node.Send(new VoidOrderItemCommand(second.PublicId, second.OrderItems.Single().PublicId, 1, "Dropped"));
         await node.Send(new CheckoutCommand(second.PublicId, PaymentMethod.Cash));
         await node.Send(new RecordSpoilageCommand(Guid.NewGuid(), [new(bun, 2, "Stale")], "Omar"));
-        Assert.True(await TestNode.WaitFor(async () => await node.Db(db => db.StockMovements.CountAsync(m => m.Reason == StockMovementReason.Sale)) == 5));
+        // The outbox posts the sales' stock and the voided burger's waste each in its own time.
+        Assert.True(await TestNode.WaitFor(async () =>
+            await node.Db(db => db.StockMovements.CountAsync(m => m.Reason == StockMovementReason.Sale)) == 5
+            && await node.Db(db => db.StockMovements.CountAsync(m => m.Reason == StockMovementReason.Waste)) == 2));
 
         using var scope = node.Scope();
         await node.Service<CostingService>(scope).SaveSettingsAsync(new CostingSettingsDto(30, BeverageCategories: ["Drinks"]), ct);
