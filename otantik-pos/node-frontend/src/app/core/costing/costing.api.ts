@@ -7,6 +7,8 @@ import { Observable, catchError, of, throwError } from 'rxjs';
 export type UnitOfMeasure = 'Gram' | 'Millilitre' | 'Piece';
 export type RecipeTargetKind = 'MenuItem' | 'AddOn';
 export type CostStatus = 'WithinTarget' | 'AboveTarget' | 'NoRecipe' | 'MissingPrices' | 'NoPrice';
+// Bought from a supplier, or made in the kitchen (a prep item: dough, a house sauce).
+export type MaterialKind = 'Purchased' | 'Prep';
 
 // A raw material with its costs. Quantities are in its unit (grams, millilitres, pieces); costs
 // are per purchase unit (a kg, a carton), as prices are written.
@@ -14,7 +16,9 @@ export interface MaterialCost {
   id: string;
   code: string | null;
   name: string;
+  // Its purchase category's name, and the category.
   category: string | null;
+  categoryId: string;
   unit: UnitOfMeasure;
   purchaseUnit: string;
   purchaseUnitSize: number;
@@ -27,6 +31,7 @@ export interface MaterialCost {
   lastPurchasedAtUtc: string | null;
   // Per gram, millilitre or piece, unrounded: what recipe costs are worked out from.
   costPerUnit: number | null;
+  kind: MaterialKind;
 }
 
 export interface RecipeCostLine {
@@ -44,9 +49,12 @@ export interface RecipeCostLine {
 }
 
 // The Recipe Costing Template for one dish, size or add-on.
+// One recipe's costing card, or a menu item's by the recipe it sells by. recipe is the name it
+// goes by (its own, or its menu item's); menuPrice what it is costed against (the menu's, or an
+// off-menu recipe's planned price). No target: an off-menu (R&D) recipe.
 export interface RecipeCostCard {
-  targetKind: RecipeTargetKind;
-  catalogItemId: number;
+  targetKind: RecipeTargetKind | null;
+  catalogItemId: number | null;
   variantId: number | null;
   itemCode: string;
   recipe: string;
@@ -66,6 +74,44 @@ export interface RecipeCostCard {
   idealSellingPrice: number;
   missingPrices: string[];
   status: CostStatus;
+  recipeId: string | null;
+  // Its own name, when it has one.
+  recipeName: string | null;
+  // The menu item it is linked to, by name.
+  linkedTo: string | null;
+  isStandalone: boolean;
+  plannedPrice: number | null;
+  // A size with no recipe of its own, costed by the dish's.
+  usesBaseRecipe: boolean;
+  isDeleted: boolean;
+  deletedAtUtc: string | null;
+  deletedBy: string | null;
+  // The kitchen's own category for it, apart from the menu's; null until it is sorted.
+  recipeCategoryId: string | null;
+  recipeCategory: string | null;
+  recipeCategoryAr: string | null;
+}
+
+// The kitchen's own grouping of its recipes: Sauces, Staff meals, Catering orders.
+export interface RecipeCategory {
+  id: string;
+  name: string;
+  nameAr: string | null;
+  // Active recipes in it.
+  recipes: number;
+}
+
+// A recipe as written: name and link optional on the menu, the name required off it; the
+// category always.
+export interface SaveRecipe {
+  name: string | null;
+  recipeCategoryId: string | null;
+  plannedPrice: number | null;
+  targetKind: RecipeTargetKind | null;
+  catalogItemId: number | null;
+  variantId: number | null;
+  portions: number;
+  ingredients: RecipeLine[];
 }
 
 export interface TheoreticalCostRow {
@@ -84,6 +130,11 @@ export interface TheoreticalCostRow {
   status: CostStatus;
   // Sold before the dish had a recipe: costed by today's recipe at today's prices.
   quantityCostedNow: number;
+  // Entered by hand: a prep item's unit (kg, L), its quantity being in it rather than portions;
+  // and which recipe or prep item the row is, for one off the menu (menuItemId 0).
+  unit?: string | null;
+  recipeId?: string | null;
+  prepItemId?: string | null;
 }
 
 export interface TheoreticalCostReport {
@@ -97,6 +148,44 @@ export interface TheoreticalCostReport {
   netSales: number;
   theoreticalCost: number;
   foodCostPercent: number | null;
+  // Pos: the till's sales. Manual: the quantities typed in for the month, by whom and when.
+  source: TheoreticalSource;
+  enteredBy: string | null;
+  enteredAtUtc: string | null;
+}
+
+export type TheoreticalSource = 'Pos' | 'Manual';
+
+export type ManualSalesItemKind = 'Recipe' | 'PrepItem';
+
+// A row of the month's sales sheet: an active recipe, in portions, or a prep item, in its unit.
+// costPerUnit is null when it cannot be costed; price is null off the menu with no planned price,
+// and for prep items. quantity is what was saved for the month.
+export interface ManualSalesItem {
+  kind: ManualSalesItemKind;
+  itemId: string;
+  code: string | null;
+  name: string;
+  nameAr: string | null;
+  group: string;
+  unit: string;
+  costPerUnit: number | null;
+  price: number | null;
+  quantity: number | null;
+}
+
+export interface ManualSalesSheet {
+  year: number;
+  month: number;
+  items: ManualSalesItem[];
+  enteredBy: string | null;
+  enteredAtUtc: string | null;
+}
+
+export interface ManualSalesLine {
+  kind: ManualSalesItemKind;
+  itemId: string;
+  quantity: number;
 }
 
 export interface CostingSettings {
@@ -150,6 +239,21 @@ export interface MonthStatement {
   interest: number | null;
   depreciation: number | null;
   netProfit: number | null;
+  // Expense items on the month's posted purchase invoices, on each category's line, on top of
+  // what is entered by hand; and each category's part. totalExpenses: every overhead together.
+  loggedControllableCosts: number;
+  loggedOccupationCost: number;
+  loggedOtherFixedCosts: number;
+  loggedExpenses: LoggedExpense[] | null;
+  totalExpenses: number;
+}
+
+export interface LoggedExpense {
+  categoryId: string;
+  category: string;
+  categoryAr: string | null;
+  expenseLine: ExpenseLine;
+  amount: number;
 }
 
 // What a month cost beyond its ingredients, as entered; null is not known yet.
@@ -192,12 +296,17 @@ export interface BreakEvenWorksheet {
   occupationCost: number;
   interest: number;
   depreciation: number;
+  // Logged expenses whose category counts them as other fixed costs.
+  otherFixedCosts: number;
   totalFixedCosts: number;
   restaurantProfit: number;
   breakEvenYearlySales: number | null;
   breakEvenWeeklySales: number | null;
   monthsWithoutCosts: string[];
   scenarios: number[];
+  // Of controllableCosts and occupationCost, what came from expense invoices rather than typed in.
+  controllableFromInvoices: number;
+  occupationFromInvoices: number;
 }
 
 // One column of the worksheet: weekly sales tried against the year's costs.
@@ -211,6 +320,7 @@ export interface BreakEvenColumn {
   occupationCost: number;
   interest: number;
   depreciation: number;
+  otherFixedCosts: number;
   totalFixedCosts: number;
   restaurantProfit: number;
 }
@@ -231,6 +341,7 @@ export function breakEvenColumn(sheet: BreakEvenWorksheet, weeklySales: number):
     occupationCost: sheet.occupationCost,
     interest: sheet.interest,
     depreciation: sheet.depreciation,
+    otherFixedCosts: sheet.otherFixedCosts,
     totalFixedCosts: sheet.totalFixedCosts,
     restaurantProfit: grossProfit - sheet.totalFixedCosts,
   };
@@ -370,7 +481,8 @@ export interface SaveMaterial {
   unit?: UnitOfMeasure;
   reorderLevel: number;
   code: string | null;
-  category: string | null;
+  // None: General.
+  categoryId: string | null;
   purchaseUnit: string;
   purchaseUnitSize: number;
   defaultYieldPercent: number;
@@ -383,18 +495,318 @@ export interface RecipeLine {
   yieldPercent: number | null;
 }
 
-export interface Recipe {
-  targetKind: RecipeTargetKind;
-  catalogItemId: number;
-  variantId: number | null;
-  ingredients: RecipeLine[];
-  portions: number;
-}
+export type PurchaseInvoiceStatus = 'Draft' | 'Posted';
 
-export interface PurchaseLine {
-  rawMaterialId: string;
+export type PurchaseItemType = 'Inventory' | 'Expense';
+
+// A line as written on the invoice (5, in kg of 1000 g) and what it comes to in the material's
+// own unit (5,000 g). An expense line names its expense item instead, has no unit of stock, and
+// is only its cost. material: the line's name, the material's or the expense's.
+export interface PurchaseInvoiceLine {
+  rawMaterialId: string | null;
+  material: string;
+  unit: UnitOfMeasure | null;
+  enteredQuantity: number;
+  unitLabel: string;
+  unitSize: number;
   quantity: number;
   cost: number | null;
+  itemType: PurchaseItemType;
+  expenseItemId: string | null;
+  categoryId: string | null;
+  category: string | null;
+  categoryAr: string | null;
+}
+
+export interface PurchaseAttachment {
+  fileName: string;
+  contentType: string;
+  bytes: number;
+  attachedAtUtc: string;
+  attachedBy: string | null;
+}
+
+export interface PurchaseInvoice {
+  id: string;
+  status: PurchaseInvoiceStatus;
+  supplierId: string | null;
+  // The supplier's name now, archived or not.
+  supplierName: string | null;
+  supplierInvoiceNumber: string | null;
+  invoiceDate: string | null;
+  createdAtUtc: string;
+  createdBy: string;
+  postedAtUtc: string | null;
+  postedBy: string | null;
+  total: number;
+  attachment: PurchaseAttachment | null;
+  lines: PurchaseInvoiceLine[];
+  // total, split: what went into stock, and what was expenses.
+  inventoryTotal: number;
+  expenseTotal: number;
+}
+
+export interface PurchaseInvoiceSummary {
+  id: string;
+  status: PurchaseInvoiceStatus;
+  supplierId: string | null;
+  // The supplier's name now, archived or not.
+  supplierName: string | null;
+  supplierInvoiceNumber: string | null;
+  invoiceDate: string | null;
+  createdAtUtc: string;
+  createdBy: string;
+  postedAtUtc: string | null;
+  postedBy: string | null;
+  total: number;
+  lines: number;
+  // Null while no paper is attached.
+  attachmentFileName: string | null;
+  inventoryTotal: number;
+  expenseTotal: number;
+}
+
+// One ingredient of a prep item's batch, costed at its average now: what it adds to a batch, and
+// its share of the batch's cost.
+export interface PrepIngredientCost {
+  rawMaterialId: string;
+  code: string | null;
+  name: string;
+  isPrepItem: boolean;
+  unit: UnitOfMeasure;
+  purchaseUnit: string;
+  purchaseUnitSize: number;
+  // The Edible Portion for one batch, in the ingredient's unit; and what that takes off stock.
+  quantity: number;
+  yieldPercent: number;
+  asPurchasedQuantity: number;
+  costPerPurchaseUnit: number | null;
+  batchCost: number | null;
+  sharePercent: number | null;
+}
+
+// A prep item: made from a recipe for one batch, kept in stock. Quantities in its unit (grams,
+// millilitres); costs per its display unit (a kg, a litre). The standard cost is the recipe's at
+// today's prices; the average is what the batches on the shelf cost.
+export interface PrepItem {
+  id: string;
+  code: string | null;
+  name: string;
+  category: string | null;
+  categoryId: string;
+  unit: UnitOfMeasure;
+  displayUnit: string;
+  displayUnitSize: number;
+  reorderLevel: number;
+  batchQuantity: number;
+  ingredients: PrepIngredientCost[];
+  standardBatchCost: number | null;
+  standardCostPerDisplayUnit: number | null;
+  missingPrices: string[];
+  quantityOnHand: number;
+  averageCostPerDisplayUnit: number | null;
+  stockValue: number | null;
+  lastProducedAtUtc: string | null;
+  lastBatchCostPerDisplayUnit: number | null;
+  recent: ProductionOrder[];
+}
+
+export interface SavePrepItem {
+  name: string;
+  unit: UnitOfMeasure;
+  batchQuantity: number;
+  ingredients: { rawMaterialId: string; quantity: number; yieldPercent: number | null }[];
+  code: string | null;
+  categoryId: string | null;
+  displayUnit: string;
+  displayUnitSize: number;
+  reorderLevel: number;
+}
+
+// An ingredient of a batch. onHand and short on a preview only.
+export interface ProductionLine {
+  rawMaterialId: string;
+  code: string | null;
+  material: string;
+  isPrepItem: boolean;
+  unit: UnitOfMeasure;
+  purchaseUnit: string;
+  purchaseUnitSize: number;
+  quantity: number;
+  onHand: number | null;
+  short: number | null;
+  costPerPurchaseUnit: number | null;
+  cost: number | null;
+}
+
+// A batch made: planned (which set the ingredients), produced (what came out), and what it cost.
+export interface ProductionOrder {
+  id: string;
+  prepItemId: string;
+  prepItem: string;
+  unit: UnitOfMeasure;
+  displayUnit: string;
+  displayUnitSize: number;
+  plannedQuantity: number;
+  producedQuantity: number;
+  yieldPercent: number;
+  totalCost: number;
+  unitCostPerDisplayUnit: number;
+  producedAtUtc: string;
+  producedBy: string;
+  notes: string | null;
+  lines: ProductionLine[];
+}
+
+// A batch as it would be made now: the review before posting.
+export interface ProductionPreview {
+  prepItemId: string;
+  prepItem: string;
+  unit: UnitOfMeasure;
+  displayUnit: string;
+  displayUnitSize: number;
+  plannedQuantity: number;
+  producedQuantity: number;
+  lines: ProductionLine[];
+  totalCost: number | null;
+  unitCostPerDisplayUnit: number | null;
+  missingPrices: string[];
+  shortages: string[];
+}
+
+export interface MakeProductionOrder {
+  prepItemId: string;
+  plannedQuantity: number;
+  producedQuantity: number;
+  notes: string | null;
+}
+
+// Who the restaurant buys from. Invoices, drafts included, decide what deleting it does: on
+// none it goes, on any it is archived.
+export interface Supplier {
+  id: string;
+  name: string;
+  contactPerson: string | null;
+  phone: string | null;
+  email: string | null;
+  notes: string | null;
+  isArchived: boolean;
+  invoices: number;
+  postedTotal: number;
+  lastPostedAtUtc: string | null;
+}
+
+export interface SaveSupplier {
+  name: string;
+  contactPerson: string | null;
+  phone: string | null;
+  email: string | null;
+  notes: string | null;
+}
+
+export type SupplierRemoval = 'Deleted' | 'Archived';
+
+export interface SavePurchaseInvoice {
+  supplierId: string | null;
+  supplierInvoiceNumber: string | null;
+  invoiceDate: string | null;
+  lines: SavePurchaseLine[];
+}
+
+// A stock line names its material; an expense line its expense item, in units of 1, with its cost.
+export interface SavePurchaseLine {
+  itemType: PurchaseItemType;
+  rawMaterialId: string | null;
+  expenseItemId: string | null;
+  enteredQuantity: number;
+  unitLabel: string | null;
+  unitSize: number;
+  cost: number | null;
+}
+
+// Where an expense filed under a category counts in the profit and loss.
+export type ExpenseLine = 'Controllable' | 'Occupation' | 'OtherFixed';
+
+export const expenseLineLabels: Record<ExpenseLine, { en: string; ar: string; hint: string }> = {
+  Controllable: { en: 'Controllable costs', ar: 'تكاليف قابلة للتحكم', hint: 'Utilities, cleaning, maintenance, marketing' },
+  Occupation: { en: 'Occupation (rent)', ar: 'الإشغال (الإيجار)', hint: 'Rent and what comes with the premises' },
+  OtherFixed: { en: 'Other fixed costs', ar: 'تكاليف ثابتة أخرى', hint: 'Insurance, licences, subscriptions' },
+};
+
+// What the restaurant buys, grouped: raw materials and expense items are each in one. General is
+// always there and cannot be deleted.
+export interface PurchaseCategory {
+  id: string;
+  name: string;
+  nameAr: string | null;
+  expenseLine: ExpenseLine;
+  isGeneral: boolean;
+  materials: number;
+  expenseItems: number;
+}
+
+export interface SavePurchaseCategory {
+  name: string;
+  nameAr: string | null;
+  expenseLine: ExpenseLine;
+}
+
+// Bought but never stock: only a cost, under its category.
+export interface ExpenseItem {
+  id: string;
+  name: string;
+  nameAr: string | null;
+  categoryId: string;
+  category: string;
+  categoryAr: string | null;
+  unit: string | null;
+  isArchived: boolean;
+  invoices: number;
+  postedTotal: number;
+  lastPostedAtUtc: string | null;
+}
+
+export interface SaveExpenseItem {
+  name: string;
+  nameAr: string | null;
+  categoryId: string | null;
+  unit: string | null;
+}
+
+export type ExpenseItemRemoval = 'Deleted' | 'Archived';
+
+export interface ItemSpending {
+  itemType: PurchaseItemType;
+  itemId: string;
+  name: string;
+  quantity: number;
+  unit: string;
+  total: number;
+  lines: number;
+}
+
+export interface CategorySpending {
+  categoryId: string;
+  category: string;
+  categoryAr: string | null;
+  expenseLine: ExpenseLine;
+  inventory: number;
+  expenses: number;
+  total: number;
+  sharePercent: number | null;
+  items: ItemSpending[];
+}
+
+// Purchases by category over a period, from the posted invoices, each on its invoice date.
+export interface SpendingReport {
+  from: string;
+  to: string;
+  total: number;
+  inventory: number;
+  expenses: number;
+  invoices: number;
+  unpricedLines: number;
+  categories: CategorySpending[];
 }
 
 @Injectable({ providedIn: 'root' })
@@ -405,6 +817,46 @@ export class CostingApi {
     return this.http.get<MaterialCost[]>('/api/costing/materials');
   }
 
+  recipeCategories(): Observable<RecipeCategory[]> {
+    return this.http.get<RecipeCategory[]>('/api/inventory/recipe-categories');
+  }
+
+  // Adds it on the first save, under the id made here; renames it after.
+  saveRecipeCategory(id: string, category: { name: string; nameAr: string | null }): Observable<RecipeCategory> {
+    return this.http.put<RecipeCategory>(`/api/inventory/recipe-categories/${id}`, category);
+  }
+
+  // moveTo: where its recipes go; required while it has any.
+  deleteRecipeCategory(id: string, moveTo: string | null): Observable<void> {
+    return this.http.delete<void>(`/api/inventory/recipe-categories/${id}`, { params: moveTo ? { moveTo } : {} });
+  }
+
+  // Every recipe, on the menu or off it; the deleted ones too when asked for.
+  recipes(includeDeleted = false): Observable<RecipeCostCard[]> {
+    return this.http.get<RecipeCostCard[]>('/api/costing/recipes', { params: { includeDeleted } });
+  }
+
+  recipeCardById(recipeId: string): Observable<RecipeCostCard> {
+    return this.http.get<RecipeCostCard>(`/api/costing/recipes/${recipeId}`);
+  }
+
+  // Adds it without an id, changes it with one.
+  writeRecipe(recipeId: string | null, recipe: SaveRecipe): Observable<{ id: string }> {
+    return recipeId
+      ? this.http.put<{ id: string }>(`/api/inventory/recipes/${recipeId}`, recipe)
+      : this.http.post<{ id: string }>('/api/inventory/recipes', recipe);
+  }
+
+  // Marked deleted, kept for the record.
+  deleteRecipe(recipeId: string): Observable<void> {
+    return this.http.delete<void>(`/api/inventory/recipes/${recipeId}`);
+  }
+
+  // name: what to call it if it comes back off the menu, its menu item having another recipe now.
+  restoreRecipe(recipeId: string, name: string | null): Observable<{ id: string; catalogItemId: number | null }> {
+    return this.http.post<{ id: string; catalogItemId: number | null }>(`/api/inventory/recipes/${recipeId}/restore`, { name });
+  }
+
   menu(): Observable<RecipeCostCard[]> {
     return this.http.get<RecipeCostCard[]>('/api/costing/menu');
   }
@@ -413,8 +865,17 @@ export class CostingApi {
     return this.http.get<RecipeCostCard>('/api/costing/recipe-card', { params: this.target(kind, catalogItemId, variantId) });
   }
 
-  theoretical(year: number, month: number): Observable<TheoreticalCostReport> {
-    return this.http.get<TheoreticalCostReport>('/api/costing/theoretical', { params: { year, month } });
+  theoretical(year: number, month: number, source: TheoreticalSource = 'Pos'): Observable<TheoreticalCostReport> {
+    return this.http.get<TheoreticalCostReport>('/api/costing/theoretical', { params: { year, month, source } });
+  }
+
+  manualSales(year: number, month: number): Observable<ManualSalesSheet> {
+    return this.http.get<ManualSalesSheet>(`/api/costing/manual-sales/${year}/${month}`);
+  }
+
+  // The whole sheet: what is left out is cleared. Answers with the report from it.
+  saveManualSales(year: number, month: number, lines: ManualSalesLine[]): Observable<TheoreticalCostReport> {
+    return this.http.put<TheoreticalCostReport>(`/api/costing/manual-sales/${year}/${month}`, { lines });
   }
 
   settings(): Observable<CostingSettings> {
@@ -439,27 +900,46 @@ export class CostingApi {
     return this.http.delete<void>(`/api/costing/shared-costs/${id}`);
   }
 
+  purchaseCategories(): Observable<PurchaseCategory[]> {
+    return this.http.get<PurchaseCategory[]>('/api/inventory/purchase-categories');
+  }
+
+  // Adds it on the first save, under the id made here; changes it after.
+  savePurchaseCategory(id: string, category: SavePurchaseCategory): Observable<PurchaseCategory> {
+    return this.http.put<PurchaseCategory>(`/api/inventory/purchase-categories/${id}`, category);
+  }
+
+  // moveTo: where what is in it goes, needed while it holds anything.
+  deletePurchaseCategory(id: string, moveTo: string | null): Observable<void> {
+    return this.http.delete<void>(`/api/inventory/purchase-categories/${id}`, { params: moveTo ? { moveTo } : {} });
+  }
+
+  expenseItems(includeArchived = false): Observable<ExpenseItem[]> {
+    return this.http.get<ExpenseItem[]>('/api/inventory/expense-items', { params: { includeArchived } });
+  }
+
+  saveExpenseItem(id: string, item: SaveExpenseItem): Observable<ExpenseItem> {
+    return this.http.put<ExpenseItem>(`/api/inventory/expense-items/${id}`, item);
+  }
+
+  // Deleted if it is on no invoice, archived if it is.
+  deleteExpenseItem(id: string): Observable<{ outcome: ExpenseItemRemoval }> {
+    return this.http.delete<{ outcome: ExpenseItemRemoval }>(`/api/inventory/expense-items/${id}`);
+  }
+
+  restoreExpenseItem(id: string): Observable<ExpenseItem> {
+    return this.http.post<ExpenseItem>(`/api/inventory/expense-items/${id}/restore`, {});
+  }
+
+  // Both days included, as yyyy-mm-dd.
+  spending(from: string, to: string): Observable<SpendingReport> {
+    return this.http.get<SpendingReport>('/api/costing/purchases/spending', { params: { from, to } });
+  }
+
   saveMaterial(id: string | null, material: SaveMaterial): Observable<unknown> {
     return id
       ? this.http.put(`/api/inventory/raw-materials/${id}`, material)
       : this.http.post('/api/inventory/raw-materials', material);
-  }
-
-  // purchaseId is made here, once per delivery: a retry after a lost answer books it once.
-  receivePurchase(purchaseId: string, lines: PurchaseLine[]): Observable<unknown> {
-    return this.http.post('/api/inventory/purchases', { purchaseId, lines });
-  }
-
-  // Null when the dish has no recipe yet (404, and only 404).
-  recipe(kind: RecipeTargetKind, catalogItemId: number, variantId: number | null): Observable<Recipe | null> {
-    return this.http.get<Recipe>('/api/inventory/recipes', { params: this.target(kind, catalogItemId, variantId) }).pipe(
-      catchError((error: unknown) => (error instanceof HttpErrorResponse && error.status === 404 ? of(null) : throwError(() => error))),
-    );
-  }
-
-  // No ingredients removes the recipe.
-  saveRecipe(recipe: Recipe): Observable<unknown> {
-    return this.http.put('/api/inventory/recipes', recipe);
   }
 
   kpis(year: number, month: number): Observable<KpiReport> {
@@ -484,6 +964,97 @@ export class CostingApi {
 
   stockCounts(): Observable<StockCountSummary[]> {
     return this.http.get<StockCountSummary[]>('/api/inventory/stock-counts');
+  }
+
+  // Posted invoices for the history, newest first, or the drafts.
+  purchaseInvoices(status: PurchaseInvoiceStatus): Observable<PurchaseInvoiceSummary[]> {
+    return this.http.get<PurchaseInvoiceSummary[]>('/api/inventory/purchase-invoices', { params: { status } });
+  }
+
+  // Null for an invoice not saved yet (404, and only 404).
+  purchaseInvoice(id: string): Observable<PurchaseInvoice | null> {
+    return this.http.get<PurchaseInvoice>(`/api/inventory/purchase-invoices/${id}`).pipe(
+      catchError((error: unknown) => (error instanceof HttpErrorResponse && error.status === 404 ? of(null) : throwError(() => error))),
+    );
+  }
+
+  // Step one: kept as a draft. The id is made here, once per invoice.
+  savePurchaseInvoice(id: string, invoice: SavePurchaseInvoice): Observable<PurchaseInvoice> {
+    return this.http.put<PurchaseInvoice>(`/api/inventory/purchase-invoices/${id}`, invoice);
+  }
+
+  // Step two, after the review: the stock goes in.
+  postPurchaseInvoice(id: string): Observable<PurchaseInvoice> {
+    return this.http.post<PurchaseInvoice>(`/api/inventory/purchase-invoices/${id}/post`, {});
+  }
+
+  discardPurchaseInvoice(id: string): Observable<void> {
+    return this.http.delete<void>(`/api/inventory/purchase-invoices/${id}`);
+  }
+
+  attachPurchaseInvoiceFile(id: string, file: File): Observable<PurchaseInvoice> {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return this.http.put<PurchaseInvoice>(`/api/inventory/purchase-invoices/${id}/attachment`, form);
+  }
+
+  // The paper itself, fetched with the manager's sign-in, to show or save.
+  purchaseInvoiceFile(id: string): Observable<Blob> {
+    return this.http.get(`/api/inventory/purchase-invoices/${id}/attachment`, { responseType: 'blob' });
+  }
+
+  prepItems(): Observable<PrepItem[]> {
+    return this.http.get<PrepItem[]>('/api/inventory/prep-items');
+  }
+
+  // Null for one that is not there (404, and only 404).
+  prepItem(id: string): Observable<PrepItem | null> {
+    return this.http.get<PrepItem>(`/api/inventory/prep-items/${id}`).pipe(
+      catchError((error: unknown) => (error instanceof HttpErrorResponse && error.status === 404 ? of(null) : throwError(() => error))),
+    );
+  }
+
+  // Adds it without an id; changes it with one.
+  savePrepItem(id: string | null, item: SavePrepItem): Observable<PrepItem> {
+    return id
+      ? this.http.put<PrepItem>(`/api/inventory/prep-items/${id}`, item)
+      : this.http.post<PrepItem>('/api/inventory/prep-items', item);
+  }
+
+  previewProduction(prepItemId: string, planned: number, produced: number): Observable<ProductionPreview> {
+    return this.http.get<ProductionPreview>('/api/inventory/production-orders/preview', { params: { prepItemId, planned, produced } });
+  }
+
+  productionOrders(prepItemId?: string): Observable<ProductionOrder[]> {
+    return this.http.get<ProductionOrder[]>('/api/inventory/production-orders', { params: prepItemId ? { prepItemId } : {} });
+  }
+
+  productionOrder(id: string): Observable<ProductionOrder | null> {
+    return this.http.get<ProductionOrder>(`/api/inventory/production-orders/${id}`).pipe(
+      catchError((error: unknown) => (error instanceof HttpErrorResponse && error.status === 404 ? of(null) : throwError(() => error))),
+    );
+  }
+
+  // Makes the batch under the id made here: a retry after a lost answer makes it once.
+  makeProductionOrder(id: string, order: MakeProductionOrder): Observable<ProductionOrder> {
+    return this.http.put<ProductionOrder>(`/api/inventory/production-orders/${id}`, order);
+  }
+
+  suppliers(includeArchived = false): Observable<Supplier[]> {
+    return this.http.get<Supplier[]>('/api/inventory/suppliers', { params: { includeArchived } });
+  }
+
+  // Adds it on the first save, under the id made here; changes it after.
+  saveSupplier(id: string, supplier: SaveSupplier): Observable<Supplier> {
+    return this.http.put<Supplier>(`/api/inventory/suppliers/${id}`, supplier);
+  }
+
+  deleteSupplier(id: string): Observable<{ outcome: SupplierRemoval }> {
+    return this.http.delete<{ outcome: SupplierRemoval }>(`/api/inventory/suppliers/${id}`);
+  }
+
+  restoreSupplier(id: string): Observable<Supplier> {
+    return this.http.post<Supplier>(`/api/inventory/suppliers/${id}/restore`, {});
   }
 
   // Null for a count not saved yet (404, and only 404).
@@ -555,6 +1126,19 @@ export function countUnit(unit: UnitOfMeasure, purchaseUnitSize: number): { labe
     default:
       return { label: 'pc', size: 1 };
   }
+}
+
+// The units a delivery of this material can be entered in, each with how many of its own units
+// (grams, millilitres, pieces) one holds: what it is bought by first, then the kilogram or litre,
+// then the gram, millilitre or piece itself. 5 kg is 5,000 g whichever is chosen.
+export function purchaseUnits(material: MaterialCost): { label: string; size: number }[] {
+  const units = [
+    { label: material.purchaseUnit, size: material.purchaseUnitSize },
+    ...(material.unit === 'Gram' ? [{ label: 'kg', size: 1000 }, { label: 'g', size: 1 }] : []),
+    ...(material.unit === 'Millilitre' ? [{ label: 'L', size: 1000 }, { label: 'ml', size: 1 }] : []),
+    ...(material.unit === 'Piece' ? [{ label: 'pc', size: 1 }] : []),
+  ];
+  return units.filter((u, i) => units.findIndex((other) => other.size === u.size) === i);
 }
 
 export const evaluationLabels: Record<VarianceEvaluation, { en: string; ar: string }> = {

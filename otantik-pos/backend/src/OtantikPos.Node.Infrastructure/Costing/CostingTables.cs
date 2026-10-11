@@ -95,6 +95,59 @@ public sealed class SharedCost
     }
 }
 
+// A month's sales as an accountant types them, for the theoretical cost report when the till's
+// own are not to be used (the till was down, or a what-if): how many of each recipe, and how much
+// of each prep item. Kept for the month, with who last entered it, so the report says whose
+// figures it shows.
+public sealed class ManualSalesSheet
+{
+    public int Year { get; init; }
+    public int Month { get; init; }
+    public List<ManualSalesLine> Lines { get; set; } = [];
+    public DateTime UpdatedAtUtc { get; set; }
+    public string? UpdatedBy { get; set; }
+}
+
+public enum ManualSalesItemKind
+{
+    Recipe = 1,
+    PrepItem = 2,
+}
+
+// Portions of a recipe; for a prep item, its display unit (kg, L), as the sheet shows it.
+public sealed class ManualSalesLine
+{
+    public int Year { get; init; }
+    public int Month { get; init; }
+    public ManualSalesItemKind Kind { get; init; }
+    public Guid ItemId { get; init; }
+    public decimal Quantity { get; set; }
+}
+
+internal sealed class ManualSalesSheetConfiguration : IEntityTypeConfiguration<ManualSalesSheet>
+{
+    public void Configure(EntityTypeBuilder<ManualSalesSheet> builder)
+    {
+        builder.ToTable("ManualSalesSheets", NodeDbContext.InventorySchema);
+        builder.HasKey(s => new { s.Year, s.Month });
+        builder.Property(s => s.UpdatedBy).HasMaxLength(200);
+        builder.HasMany(s => s.Lines).WithOne().HasForeignKey(l => new { l.Year, l.Month }).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+// ItemId names a recipe or a prep item by its Kind: no foreign key, and one since removed is
+// left out of the report.
+internal sealed class ManualSalesLineConfiguration : IEntityTypeConfiguration<ManualSalesLine>
+{
+    public void Configure(EntityTypeBuilder<ManualSalesLine> builder)
+    {
+        builder.ToTable("ManualSalesLines", NodeDbContext.InventorySchema);
+        builder.HasKey(l => new { l.Year, l.Month, l.Kind, l.ItemId });
+        builder.Property(l => l.Kind).HasConversion<string>().HasMaxLength(32);
+        builder.Property(l => l.Quantity).HasPrecision(18, 3);
+    }
+}
+
 internal sealed class CostingSettingsConfiguration : IEntityTypeConfiguration<CostingSettings>
 {
     public void Configure(EntityTypeBuilder<CostingSettings> builder)

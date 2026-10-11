@@ -37,6 +37,27 @@ public class CostingTests
         Assert.Equal(360m, beef.CostPerPurchaseUnit);
     }
 
+    // The invoice as written: 5 kg of tomatoes for L.E 100. Stock is kept in grams, so 5,000 g go
+    // in at L.E 0.02 a gram, which is L.E 20 a kg. A second delivery, entered in grams, averages in
+    // to the cent: (5,000 × 0.02 + 2,500 × 0.025) ÷ 7,500 g = 0.0216… a gram, L.E 21.67 a kg.
+    [Fact]
+    public void Five_kilograms_bought_are_five_thousand_grams_at_their_cost_per_gram()
+    {
+        var tomatoes = new RawMaterial("Tomatoes", UnitOfMeasure.Gram);
+        Assert.Equal(("kg", 1000m), (tomatoes.PurchaseUnit, tomatoes.PurchaseUnitSize));
+
+        var delivery = tomatoes.ReceivePurchase(5 * tomatoes.PurchaseUnitSize, Guid.NewGuid(), lineCost: 100);
+
+        Assert.Equal((5000m, 5000m, 0.02m, 0.02m, 20m),
+            (tomatoes.QuantityOnHand, delivery.Quantity, delivery.UnitCost, tomatoes.AverageCost, tomatoes.CostPerPurchaseUnit));
+
+        tomatoes.ReceivePurchase(2500, Guid.NewGuid(), lineCost: 62.50m);
+
+        Assert.Equal(7500m, tomatoes.QuantityOnHand);
+        Assert.Equal(21.67m, Math.Round(tomatoes.CostPerPurchaseUnit!.Value, 2, MidpointRounding.AwayFromZero));
+        Assert.Equal(162.50m, Math.Round(tomatoes.AverageCost!.Value * tomatoes.QuantityOnHand, 2, MidpointRounding.AwayFromZero));
+    }
+
     // Stock below zero is nothing to average with: the new price stands alone.
     [Fact]
     public void After_stock_went_negative_the_next_price_is_the_cost()

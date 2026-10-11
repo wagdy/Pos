@@ -56,7 +56,12 @@ import { MaterialDialog } from './material-dialog';
             @for (m of shown(); track m.id) {
               <tr class="clickable" (click)="edit(m)">
                 <td class="code">{{ m.code ?? '' }}</td>
-                <td>{{ m.name }}</td>
+                <td>
+                  {{ m.name }}
+                  @if (m.kind === 'Prep') {
+                    <span class="badge" title="Made in the kitchen: its cost comes from its batches">Prep · نصف مصنع</span>
+                  }
+                </td>
                 <td>{{ m.category ?? '' }}</td>
                 <td>{{ m.purchaseUnit }} <span class="muted">({{ m.purchaseUnitSize | number: '1.0-3' }} {{ unit(m) }})</span></td>
                 <td class="num">

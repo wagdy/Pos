@@ -1,20 +1,101 @@
 import { TestBed } from '@angular/core/testing';
+import { MatDialog } from '@angular/material/dialog';
+import { provideRouter } from '@angular/router';
 import { of, throwError } from 'rxjs';
-import { CostingApi, MaterialCost } from '../../core/costing/costing.api';
+import {
+  CostingApi,
+  ExpenseItem,
+  MaterialCost,
+  PurchaseInvoice,
+  PurchaseInvoiceSummary,
+  SavePurchaseInvoice,
+  Supplier,
+  purchaseUnits,
+} from '../../core/costing/costing.api';
 import { NotifyService } from '../../core/ui/notify.service';
+import { ExpenseItemDialog } from './expense-item-dialog';
 import { PurchasesPage } from './purchases-page';
 
 const oil = { id: 'oil', name: 'Frying oil', unit: 'Millilitre', purchaseUnit: 'L', purchaseUnitSize: 1000 } as MaterialCost;
 const bun = { id: 'bun', name: 'Burger bun', unit: 'Piece', purchaseUnit: 'piece', purchaseUnitSize: 1 } as MaterialCost;
+const tomatoes = { id: 'tomatoes', name: 'Tomatoes', unit: 'Gram', purchaseUnit: 'kg', purchaseUnitSize: 1000 } as MaterialCost;
+const all = [oil, bun, tomatoes];
 
-describe('receiving a delivery', () => {
-  const receivePurchase = vi.fn();
+function expenseItem(id: string, name: string, unit: string | null = null): ExpenseItem {
+  return {
+    id, name, nameAr: null, categoryId: 'utilities', category: 'Utilities', categoryAr: null, unit,
+    isArchived: false, invoices: 0, postedTotal: 0, lastPostedAtUtc: null,
+  };
+}
+const power = expenseItem('power', 'Electricity');
+const spray = expenseItem('spray', 'Cleaning spray', 'bottle');
+
+function supplier(id: string, name: string): Supplier {
+  return { id, name, contactPerson: null, phone: null, email: null, notes: null, isArchived: false, invoices: 0, postedTotal: 0, lastPostedAtUtc: null };
+}
+const nileFarms = supplier('nile', 'Nile Farms');
+const deltaOils = supplier('delta', 'Delta Oils');
+
+// What the till answers with: the invoice as saved, each line also in the material's own unit.
+function asInvoice(id: string, body: SavePurchaseInvoice, status: PurchaseInvoice['status'] = 'Draft'): PurchaseInvoice {
+  return {
+    id,
+    status,
+    ...body,
+    supplierName: [nileFarms, deltaOils].find((s) => s.id === body.supplierId)?.name ?? null,
+    createdAtUtc: '2026-10-07T09:00:00Z',
+    createdBy: 'Omar',
+    postedAtUtc: status === 'Posted' ? '2026-10-07T09:05:00Z' : null,
+    postedBy: status === 'Posted' ? 'Omar' : null,
+    total: body.lines.reduce((sum, l) => sum + (l.cost ?? 0), 0),
+    inventoryTotal: body.lines.filter((l) => l.itemType === 'Inventory').reduce((sum, l) => sum + (l.cost ?? 0), 0),
+    expenseTotal: body.lines.filter((l) => l.itemType === 'Expense').reduce((sum, l) => sum + (l.cost ?? 0), 0),
+    attachment: null,
+    lines: body.lines.map((l) => {
+      const filed = { categoryId: null, category: null, categoryAr: null };
+      if (l.itemType === 'Expense') {
+        const item = [power, spray].find((e) => e.id === l.expenseItemId)!;
+        return { ...l, ...filed, unitLabel: l.unitLabel ?? 'unit', material: item.name, unit: null, quantity: l.enteredQuantity };
+      }
+      const material = all.find((m) => m.id === l.rawMaterialId)!;
+      return { ...l, ...filed, unitLabel: l.unitLabel ?? '', material: material.name, unit: material.unit, quantity: Math.round(l.enteredQuantity * l.unitSize * 1000) / 1000 };
+    }),
+  };
+}
+
+describe('entering a supplier invoice', () => {
+  const materials = vi.fn();
+  const purchaseInvoices = vi.fn();
+  const purchaseInvoice = vi.fn();
+  const suppliers = vi.fn();
+  const expenseItems = vi.fn();
+  const savePurchaseInvoice = vi.fn();
+  const postPurchaseInvoice = vi.fn();
+  const discardPurchaseInvoice = vi.fn();
+  const attachPurchaseInvoiceFile = vi.fn();
+  const open = vi.fn();
+  const notify = { info: vi.fn(), error: vi.fn() };
 
   async function render() {
     TestBed.configureTestingModule({
       providers: [
-        { provide: CostingApi, useValue: { receivePurchase, materials: () => of([oil, bun]) } },
-        { provide: NotifyService, useValue: { info: vi.fn(), error: vi.fn() } },
+        provideRouter([]),
+        {
+          provide: CostingApi,
+          useValue: {
+            materials,
+            purchaseInvoices,
+            purchaseInvoice,
+            suppliers,
+            expenseItems,
+            savePurchaseInvoice,
+            postPurchaseInvoice,
+            discardPurchaseInvoice,
+            attachPurchaseInvoiceFile,
+          },
+        },
+        { provide: MatDialog, useValue: { open } },
+        { provide: NotifyService, useValue: notify },
       ],
     });
     const fixture = TestBed.createComponent(PurchasesPage);
@@ -22,45 +103,173 @@ describe('receiving a delivery', () => {
     return fixture.componentInstance as unknown as Record<string, any>;
   }
 
-  function fill(page: Record<string, any>, lines: { rawMaterialId: string; quantity: number; cost: number | null }[]) {
-    page['lines'].set(lines.map((l) => ({ ...l })));
+  function fill(page: Record<string, any>, lines: { rawMaterialId: string | null; quantity: number; cost: number | null; unitSize?: number }[]) {
+    page['lines'].set(
+      lines.map((l) => ({ itemType: l.rawMaterialId ? 'Inventory' : null, expenseItemId: null, unitSize: null, unitLabel: '', ...l })),
+    );
     page['touch']();
   }
 
-  beforeEach(() => receivePurchase.mockReset().mockReturnValue(of([])));
+  const blank = { itemType: null, rawMaterialId: null, expenseItemId: null, quantity: null, unitSize: null, unitLabel: '', cost: null };
 
-  it('books it in the materials own units, as bought: 20 L is 20,000 ml', async () => {
+  // The lines of the last draft saved.
+  const savedLines = () => (savePurchaseInvoice.mock.lastCall![1] as SavePurchaseInvoice).lines;
+
+  beforeEach(() => {
+    materials.mockReset().mockReturnValue(of(all));
+    purchaseInvoices.mockReset().mockReturnValue(of([]));
+    purchaseInvoice.mockReset();
+    suppliers.mockReset().mockReturnValue(of([deltaOils, nileFarms]));
+    expenseItems.mockReset().mockReturnValue(of([power, spray]));
+    savePurchaseInvoice.mockReset().mockImplementation((id: string, body: SavePurchaseInvoice) => of(asInvoice(id, body)));
+    postPurchaseInvoice
+      .mockReset()
+      .mockImplementation((id: string) => of(asInvoice(id, savePurchaseInvoice.mock.lastCall![1], 'Posted')));
+    discardPurchaseInvoice.mockReset().mockReturnValue(of(undefined));
+    attachPurchaseInvoiceFile.mockReset();
+    open.mockReset();
+    notify.info.mockReset();
+    notify.error.mockReset();
+  });
+
+  it('saves a draft and shows it for review; only Confirm & post takes the stock in', async () => {
     const page = await render();
+    page['supplierEntered'](deltaOils);
+    page['supplierInvoiceNumber'] = 'D-77';
+    page['invoiceDate'] = '2026-10-06';
     fill(page, [
       { rawMaterialId: 'oil', quantity: 20, cost: 1900 },
       { rawMaterialId: 'bun', quantity: 50, cost: null },
     ]);
-
+    const id = page['invoiceId'];
     expect(page['total']()).toBe(1900);
+
     await page['save']();
 
-    expect(receivePurchase).toHaveBeenCalledWith(expect.any(String), [
-      { rawMaterialId: 'oil', quantity: 20000, cost: 1900 },
-      { rawMaterialId: 'bun', quantity: 50, cost: null },
+    expect(savePurchaseInvoice).toHaveBeenCalledWith(id, {
+      supplierId: 'delta',
+      supplierInvoiceNumber: 'D-77',
+      invoiceDate: '2026-10-06',
+      lines: [
+        { itemType: 'Inventory', rawMaterialId: 'oil', expenseItemId: null, enteredQuantity: 20, unitLabel: 'L', unitSize: 1000, cost: 1900 },
+        { itemType: 'Inventory', rawMaterialId: 'bun', expenseItemId: null, enteredQuantity: 50, unitLabel: 'piece', unitSize: 1, cost: null },
+      ],
+    });
+    expect(postPurchaseInvoice).not.toHaveBeenCalled();
+    expect(page['review']()).toMatchObject({ id, status: 'Draft', total: 1900, supplierName: 'Delta Oils' });
+    expect(page['review']().lines.map((l: { quantity: number }) => l.quantity)).toEqual([20000, 50]);
+
+    await page['confirm']();
+
+    expect(postPurchaseInvoice).toHaveBeenCalledExactlyOnceWith(id);
+    expect(notify.info).toHaveBeenCalledWith(expect.stringContaining('Posted: 2 lines'));
+    // A clean, new invoice for the next delivery.
+    expect(page['review']()).toBeNull();
+    expect(page['invoiceId']).not.toBe(id);
+    expect([page['supplierEntry'], page['supplierId']]).toEqual(['', null]);
+    expect(page['lines']()).toEqual([blank]);
+  });
+
+  it('goes back to edit with nothing lost, and saves the same draft again', async () => {
+    const page = await render();
+    fill(page, [{ rawMaterialId: 'tomatoes', quantity: 5, cost: 100 }]);
+    const id = page['invoiceId'];
+
+    await page['save']();
+    page['backToEdit']();
+    expect(page['review']()).toBeNull();
+    expect(page['lines']()[0]).toMatchObject({ rawMaterialId: 'tomatoes', quantity: 5, cost: 100 });
+
+    page['lines']()[0].cost = 110;
+    page['touch']();
+    await page['save']();
+
+    expect(savePurchaseInvoice.mock.calls.map((call) => call[0])).toEqual([id, id]);
+    expect(savedLines()[0].cost).toBe(110);
+    expect(postPurchaseInvoice).not.toHaveBeenCalled();
+  });
+
+  it('stays on the review when posting fails, and posts the same invoice on the retry', async () => {
+    const page = await render();
+    fill(page, [{ rawMaterialId: 'oil', quantity: 1, cost: 95 }]);
+    await page['save']();
+    const id = page['invoiceId'];
+
+    postPurchaseInvoice.mockReturnValueOnce(throwError(() => new Error('lost')));
+    await page['confirm']();
+    expect(notify.error).toHaveBeenCalled();
+    expect(page['review']()).not.toBeNull();
+
+    await page['confirm']();
+    expect(postPurchaseInvoice.mock.calls.map((call) => call[0])).toEqual([id, id]);
+    expect(page['invoiceId']).not.toBe(id);
+  });
+
+  it('keeps the review on screen when the draft cannot be saved', async () => {
+    const page = await render();
+    fill(page, [{ rawMaterialId: 'oil', quantity: 1, cost: 95 }]);
+    savePurchaseInvoice.mockReturnValueOnce(throwError(() => new Error('refused')));
+
+    await page['save']();
+
+    expect(page['review']()).toBeNull();
+    expect(notify.error).toHaveBeenCalled();
+    expect(page['lines']()[0]).toMatchObject({ rawMaterialId: 'oil', quantity: 1 });
+  });
+
+  it('takes the invoice as written: 5 kg for L.E 100 is 5,000 g at L.E 20 a kg', async () => {
+    const page = await render();
+    fill(page, [{ rawMaterialId: 'tomatoes', quantity: 5, cost: 100 }]);
+
+    expect(page['stockAdded'](page['lines']()[0])).toBe('5,000 g');
+    expect(page['unitPrice'](page['lines']()[0])).toBe(20);
+    await page['save']();
+
+    expect(savedLines()).toEqual([{ itemType: 'Inventory', rawMaterialId: 'tomatoes', expenseItemId: null, enteredQuantity: 5, unitLabel: 'kg', unitSize: 1000, cost: 100 }]);
+    expect(page['review']().lines[0].quantity).toBe(5000);
+  });
+
+  it('takes a line billed in grams as it is, and prices it per kg beside the average', async () => {
+    const page = await render();
+    fill(page, [
+      { rawMaterialId: 'tomatoes', quantity: 2500, cost: 62.5, unitSize: 1 },
+      { rawMaterialId: 'oil', quantity: 0.1, cost: 9.5 },
+    ]);
+
+    expect(page['unitPrice'](page['lines']()[0])).toBe(25);
+    // 0.1 L is 100 ml exactly, not 100.00000000000001.
+    expect(page['baseQuantity'](page['lines']()[1])).toBe(100);
+    await page['save']();
+
+    expect(savedLines()).toEqual([
+      { itemType: 'Inventory', rawMaterialId: 'tomatoes', expenseItemId: null, enteredQuantity: 2500, unitLabel: 'g', unitSize: 1, cost: 62.5 },
+      { itemType: 'Inventory', rawMaterialId: 'oil', expenseItemId: null, enteredQuantity: 0.1, unitLabel: 'L', unitSize: 1000, cost: 9.5 },
     ]);
   });
 
-  it('sends a retry under the same delivery id, and the next delivery under a new one', async () => {
+  it('does not offer prep items: they are made in the kitchen, not bought', async () => {
+    const dough = { id: 'dough', name: 'Pizza dough', unit: 'Gram', purchaseUnit: 'kg', purchaseUnitSize: 1000, kind: 'Prep' } as MaterialCost;
+    materials.mockReturnValue(of([...all, dough]));
     const page = await render();
-    fill(page, [{ rawMaterialId: 'oil', quantity: 1, cost: 95 }]);
 
-    receivePurchase.mockReturnValueOnce(throwError(() => new Error('lost')));
-    await page['save']();
-    await page['save']();
-    const [first, retry] = receivePurchase.mock.calls.map((call) => call[0]);
-    expect(retry).toBe(first);
-
-    fill(page, [{ rawMaterialId: 'oil', quantity: 1, cost: 95 }]);
-    await page['save']();
-    expect(receivePurchase.mock.calls[2][0]).not.toBe(first);
+    expect(page['materials']().map((m: MaterialCost) => m.id)).toEqual(['oil', 'bun', 'tomatoes']);
   });
 
-  it('will not send a line without a material or a quantity, or a material twice', async () => {
+  it('starts a line in what the material is bought by, and offers its own unit too', async () => {
+    const page = await render();
+    page['lines'].set([{ ...blank }]);
+    page['entered'](page['lines']()[0], tomatoes);
+
+    expect(page['lines']()[0].unitSize).toBe(1000);
+    const labels = (m: Partial<MaterialCost>) => purchaseUnits(m as MaterialCost).map((u) => u.label);
+    expect(labels(tomatoes)).toEqual(['kg', 'g']);
+    expect(labels({ unit: 'Gram', purchaseUnit: 'g', purchaseUnitSize: 1 })).toEqual(['g', 'kg']);
+    expect(labels({ unit: 'Gram', purchaseUnit: 'sack', purchaseUnitSize: 25000 })).toEqual(['sack', 'kg', 'g']);
+    expect(labels({ unit: 'Piece', purchaseUnit: 'pack of 20', purchaseUnitSize: 20 })).toEqual(['pack of 20', 'pc']);
+    expect(labels(oil)).toEqual(['L', 'ml']);
+  });
+
+  it('will not save a line without a material or a quantity, or a material twice', async () => {
     const page = await render();
 
     fill(page, [{ rawMaterialId: 'oil', quantity: 0, cost: 10 }]);
@@ -72,6 +281,322 @@ describe('receiving a delivery', () => {
     expect(page['ready']()).toBe(false);
 
     await page['save']();
-    expect(receivePurchase).not.toHaveBeenCalled();
+    expect(savePurchaseInvoice).not.toHaveBeenCalled();
+  });
+
+  describe('the supplier', () => {
+    it('is chosen from the list, which narrows as a name is typed', async () => {
+      const page = await render();
+
+      expect(page['supplierMatches']()).toEqual([deltaOils, nileFarms]);
+      page['supplierEntry'] = 'nil';
+      page['supplierEntered']('nil');
+      expect(page['supplierMatches']()).toEqual([nileFarms]);
+      expect(page['typedNewSupplier']()).toBe('nil');
+
+      page['supplierEntry'] = nileFarms;
+      page['supplierEntered'](nileFarms);
+      expect(page['supplierId']).toBe('nile');
+    });
+
+    it('is the one named when its name is typed in full, capitals and spaces aside', async () => {
+      const page = await render();
+
+      page['supplierEntry'] = '  nile   FARMS ';
+      page['supplierEntered']('  nile   FARMS ');
+
+      expect(page['supplierId']).toBe('nile');
+      expect(page['typedNewSupplier']()).toBeNull();
+    });
+
+    it('holds the save while a typed name is neither chosen nor added', async () => {
+      const page = await render();
+      fill(page, [{ rawMaterialId: 'oil', quantity: 1, cost: 95 }]);
+      expect(page['ready']()).toBe(true);
+
+      page['supplierEntry'] = 'Sinai Dairy';
+      page['supplierEntered']('Sinai Dairy');
+
+      expect(page['supplierUnresolved']()).toBe(true);
+      expect(page['ready']()).toBe(false);
+      await page['save']();
+      expect(savePurchaseInvoice).not.toHaveBeenCalled();
+    });
+
+    it('is added from the invoice in a quick dialog, chosen, and the lines kept', async () => {
+      const sinai = supplier('sinai', 'Sinai Dairy');
+      open.mockReturnValue({ afterClosed: () => of(sinai) });
+      const page = await render();
+      fill(page, [
+        { rawMaterialId: 'oil', quantity: 20, cost: 1900 },
+        { rawMaterialId: 'bun', quantity: 50, cost: null },
+      ]);
+      const id = page['invoiceId'];
+      suppliers.mockReturnValue(of([deltaOils, nileFarms, sinai]));
+
+      page['supplierEntered']({ addNew: 'Sinai Dairy' });
+      await vi.waitFor(() => expect(page['supplierId']).toBe('sinai'));
+
+      expect(open).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ data: { name: 'Sinai Dairy', fromInvoice: true } }));
+      expect(page['supplierEntry']).toEqual(sinai);
+      expect(page['lines']().map((l: { rawMaterialId: string; quantity: number }) => [l.rawMaterialId, l.quantity])).toEqual([
+        ['oil', 20],
+        ['bun', 50],
+      ]);
+      expect(page['invoiceId']).toBe(id);
+      expect(page['supplierMatches']()).toContainEqual(sinai);
+
+      await page['save']();
+      expect(savePurchaseInvoice).toHaveBeenCalledWith(id, expect.objectContaining({ supplierId: 'sinai' }));
+    });
+
+    it('keeps the typed name when adding it is cancelled', async () => {
+      open.mockReturnValue({ afterClosed: () => of(undefined) });
+      const page = await render();
+
+      await page['addSupplier']('Sinai Dairy');
+
+      expect([page['supplierEntry'], page['supplierId']]).toEqual(['Sinai Dairy', null]);
+      expect(page['supplierUnresolved']()).toBe(true);
+    });
+  });
+
+  describe('the paper', () => {
+    const photo = () => new File(['\xff\xd8\xff'], 'invoice.jpg', { type: 'image/jpeg' });
+    const picker = (file: unknown) => ({ files: [file], value: 'C:\\fakepath\\invoice.jpg' }) as unknown as HTMLInputElement;
+
+    it('saves the invoice as a draft first, so the photo has one to belong to', async () => {
+      attachPurchaseInvoiceFile.mockImplementation((id: string) =>
+        of({ ...asInvoice(id, { supplierId: null, supplierInvoiceNumber: null, invoiceDate: null, lines: [] }), attachment: { fileName: 'invoice.jpg' } }),
+      );
+      const page = await render();
+      // One line done, one still being entered: the draft holds the finished one.
+      fill(page, [
+        { rawMaterialId: 'oil', quantity: 20, cost: 1900 },
+        { rawMaterialId: null, quantity: 2, cost: null },
+      ]);
+      const id = page['invoiceId'];
+      const input = picker(photo());
+
+      await page['attach'](input);
+
+      expect(savePurchaseInvoice).toHaveBeenCalledWith(id, expect.objectContaining({ lines: [expect.objectContaining({ rawMaterialId: 'oil' })] }));
+      expect(attachPurchaseInvoiceFile).toHaveBeenCalledWith(id, expect.any(File));
+      expect(savePurchaseInvoice.mock.invocationCallOrder[0]).toBeLessThan(attachPurchaseInvoiceFile.mock.invocationCallOrder[0]);
+      expect(page['paper']()).toBe('invoice.jpg');
+      // Picked again, the same file still fires.
+      expect(input.value).toBe('');
+      expect(postPurchaseInvoice).not.toHaveBeenCalled();
+    });
+
+    it('refuses a file over 10 MB before sending anything', async () => {
+      const page = await render();
+
+      await page['attach'](picker({ name: 'scan.pdf', size: 11 * 1024 * 1024 }));
+
+      expect(notify.error).toHaveBeenCalledWith(null, 'The file must be under 10 MB.');
+      expect(savePurchaseInvoice).not.toHaveBeenCalled();
+      expect(attachPurchaseInvoiceFile).not.toHaveBeenCalled();
+    });
+
+    it('says so when the till refuses the file, and keeps the invoice as it was', async () => {
+      attachPurchaseInvoiceFile.mockReturnValue(throwError(() => new Error('not an image')));
+      const page = await render();
+      fill(page, [{ rawMaterialId: 'oil', quantity: 1, cost: 95 }]);
+
+      await page['attach'](picker(photo()));
+
+      expect(notify.error).toHaveBeenCalled();
+      expect(page['paper']()).toBeNull();
+      expect(page['lines']()[0]).toMatchObject({ rawMaterialId: 'oil', quantity: 1 });
+    });
+  });
+
+  describe('unfinished drafts', () => {
+    const draft: PurchaseInvoiceSummary = {
+      id: 'draft-1',
+      status: 'Draft',
+      supplierId: 'nile',
+      supplierName: 'Nile Farms',
+      supplierInvoiceNumber: 'F-1001',
+      invoiceDate: '2026-10-05',
+      createdAtUtc: '2026-10-05T08:00:00Z',
+      createdBy: 'Sara',
+      postedAtUtc: null,
+      postedBy: null,
+      total: 100,
+      lines: 1,
+      attachmentFileName: 'farm.jpg',
+      inventoryTotal: 100,
+      expenseTotal: 0,
+    };
+
+    it('are listed, and one continued comes back as it was entered', async () => {
+      purchaseInvoices.mockReturnValue(of([draft]));
+      purchaseInvoice.mockReturnValue(
+        of({
+          ...asInvoice('draft-1', {
+            supplierId: 'nile',
+            supplierInvoiceNumber: 'F-1001',
+            invoiceDate: '2026-10-05',
+            lines: [{ itemType: 'Inventory', rawMaterialId: 'tomatoes', expenseItemId: null, enteredQuantity: 5, unitLabel: 'kg', unitSize: 1000, cost: 100 }],
+          }),
+          attachment: { fileName: 'farm.jpg' },
+        }),
+      );
+      const page = await render();
+      expect(purchaseInvoices).toHaveBeenCalledWith('Draft');
+      expect(page['drafts']()).toEqual([draft]);
+
+      await page['continueDraft']('draft-1');
+
+      expect(page['invoiceId']).toBe('draft-1');
+      // Open, it is no longer offered; left, it is again.
+      expect(page['drafts']()).toEqual([]);
+      expect([page['supplierEntry'], page['supplierId'], page['supplierInvoiceNumber'], page['invoiceDate'], page['paper']()]).toEqual([
+        nileFarms,
+        'nile',
+        'F-1001',
+        '2026-10-05',
+        'farm.jpg',
+      ]);
+      expect(page['lines']()).toEqual([
+        { entry: tomatoes, itemType: 'Inventory', rawMaterialId: 'tomatoes', expenseItemId: null, quantity: 5, unitSize: 1000, unitLabel: '', cost: 100 },
+      ]);
+
+      await page['save']();
+      expect(savePurchaseInvoice).toHaveBeenCalledWith('draft-1', expect.objectContaining({ supplierId: 'nile' }));
+      page['reset']();
+      expect(page['drafts']()).toEqual([draft]);
+    });
+
+    it('can be discarded', async () => {
+      purchaseInvoices.mockReturnValueOnce(of([draft])).mockReturnValue(of([]));
+      const page = await render();
+
+      await page['discardDraft']('draft-1');
+
+      expect(discardPurchaseInvoice).toHaveBeenCalledWith('draft-1');
+      expect(page['drafts']()).toEqual([]);
+    });
+  });
+
+  describe('a material not on the list yet', () => {
+    it('is found as it is typed, or offered to be added', async () => {
+      const page = await render();
+      const line = { entry: 'tom', rawMaterialId: null, quantity: null, unitSize: null, cost: null };
+
+      expect(page['matches'](line).materials.map((m: MaterialCost) => m.name)).toEqual(['Tomatoes']);
+      expect(page['typedNew'](line)).toBe('tom');
+      expect(page['typedNew']({ ...line, entry: 'TOMATOES ' })).toBeNull();
+      expect(page['typedNew']({ ...line, entry: '  ' })).toBeNull();
+    });
+
+    it('is added from the invoice and put on that line, the rest untouched', async () => {
+      const sumac = { id: 'sumac', name: 'Sumac', unit: 'Gram', purchaseUnit: 'kg', purchaseUnitSize: 1000 } as MaterialCost;
+      open.mockReturnValue({ afterClosed: () => of({ id: 'sumac', name: 'Sumac' }) });
+      const page = await render();
+      fill(page, [
+        { rawMaterialId: 'oil', quantity: 20, cost: 1900 },
+        { rawMaterialId: null, quantity: 2, cost: 300 },
+      ]);
+      const id = page['invoiceId'];
+      materials.mockReturnValue(of([...all, sumac]));
+
+      page['entered'](page['lines']()[1], { addNew: 'Sumac' });
+      await vi.waitFor(() => expect(page['lines']()[1].rawMaterialId).toBe('sumac'));
+
+      expect(open).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ data: { name: 'Sumac' } }));
+      expect(page['lines']()[1]).toMatchObject({ quantity: 2, cost: 300, unitSize: 1000, entry: sumac });
+      expect(page['lines']()[0]).toMatchObject({ rawMaterialId: 'oil', quantity: 20, cost: 1900 });
+      expect(page['invoiceId']).toBe(id);
+      expect(page['ready']()).toBe(true);
+      expect(postPurchaseInvoice).not.toHaveBeenCalled();
+    });
+
+    it('keeps what was typed when adding is cancelled', async () => {
+      open.mockReturnValue({ afterClosed: () => of(undefined) });
+      const page = await render();
+      fill(page, [{ rawMaterialId: null, quantity: 1, cost: 10 }]);
+
+      await page['addMaterial'](page['lines']()[0], 'Sumac');
+
+      expect(page['lines']()[0]).toMatchObject({ entry: 'Sumac', rawMaterialId: null, quantity: 1, cost: 10 });
+    });
+  });
+  describe('expense lines', () => {
+    it('go on the invoice beside the stock, need their amount, and are saved as expenses', async () => {
+      const page = await render();
+      fill(page, [{ rawMaterialId: 'oil', quantity: 20, cost: 1900 }]);
+      page['add']();
+      const line = page['lines']()[1];
+      expect(page['matches']({ ...line, entry: 'elec' })).toEqual({ materials: [], expenses: [power] });
+      expect(page['matches']({ ...line, entry: 'utilities' }).expenses).toEqual([power, spray]);
+
+      page['entered'](line, power);
+      expect(line).toMatchObject({ itemType: 'Expense', expenseItemId: 'power', rawMaterialId: null, quantity: 1, unitSize: 1, unitLabel: '' });
+      // An expense is its amount, or nothing.
+      expect(page['ready']()).toBe(false);
+      line.cost = 1500;
+      page['touch']();
+      expect(page['ready']()).toBe(true);
+      expect(page['totals']()).toEqual({ stock: 1900, expenses: 1500 });
+      expect(page['total']()).toBe(3400);
+
+      await page['save']();
+      expect(savedLines()).toEqual([
+        { itemType: 'Inventory', rawMaterialId: 'oil', expenseItemId: null, enteredQuantity: 20, unitLabel: 'L', unitSize: 1000, cost: 1900 },
+        { itemType: 'Expense', rawMaterialId: null, expenseItemId: 'power', enteredQuantity: 1, unitLabel: null, unitSize: 1, cost: 1500 },
+      ]);
+      await page['confirm']();
+      expect(notify.info).toHaveBeenCalledWith(expect.stringContaining('1 line into stock, 1 expense recorded'));
+    });
+
+    it('start in the unit the expense is usually counted in, as many as were typed', async () => {
+      const page = await render();
+      fill(page, [{ rawMaterialId: null, quantity: 4, cost: 200 }]);
+      const line = page['lines']()[0];
+
+      page['entered'](line, spray);
+      await page['save']();
+
+      expect(line).toMatchObject({ quantity: 4, unitLabel: 'bottle' });
+      expect(page['unitPrice'](line)).toBe(50);
+      expect(savedLines()[0]).toMatchObject({ itemType: 'Expense', expenseItemId: 'spray', enteredQuantity: 4, unitLabel: 'bottle' });
+    });
+
+    it('are offered for a new name beside a new material, and added from the invoice', async () => {
+      const gas = expenseItem('gas', 'Gas', 'cylinder');
+      open.mockReturnValue({ afterClosed: () => of(gas) });
+      const page = await render();
+      const line = page['lines']()[0];
+      expect(page['typedNew']({ ...line, entry: 'Gas' })).toBe('Gas');
+      expect(page['typedNew']({ ...line, entry: 'electricity' })).toBeNull();
+      expenseItems.mockReturnValue(of([power, spray, gas]));
+
+      page['entered'](line, { addNew: 'Gas', as: 'Expense' });
+      await vi.waitFor(() => expect(line.expenseItemId).toBe('gas'));
+
+      expect(open).toHaveBeenCalledWith(ExpenseItemDialog, expect.objectContaining({ data: { name: 'Gas', fromInvoice: true } }));
+      expect(line).toMatchObject({ itemType: 'Expense', unitLabel: 'cylinder', quantity: 1, entry: gas });
+    });
+
+    it('come back as they were when a draft is continued', async () => {
+      purchaseInvoice.mockReturnValue(
+        of(
+          asInvoice('draft-2', {
+            supplierId: null,
+            supplierInvoiceNumber: null,
+            invoiceDate: '2026-10-05',
+            lines: [{ itemType: 'Expense', rawMaterialId: null, expenseItemId: 'spray', enteredQuantity: 4, unitLabel: 'bottle', unitSize: 1, cost: 200 }],
+          }),
+        ),
+      );
+      const page = await render();
+
+      await page['continueDraft']('draft-2');
+
+      expect(page['lines']()[0]).toMatchObject({ entry: spray, itemType: 'Expense', expenseItemId: 'spray', quantity: 4, unitLabel: 'bottle', cost: 200 });
+    });
   });
 });

@@ -6,13 +6,14 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatSelectModule } from '@angular/material/select';
 import { MaterialCost, SaveMaterial, UnitOfMeasure, unitLabels } from '../../core/costing/costing.api';
+import { PurchaseCategoryField } from './purchase-category-field';
 
 // A raw material, new or to change. Its unit is fixed once it exists: every recipe and stock
 // entry for it is in that unit. Cost and reorder level are entered per purchase unit (a kg, a
 // carton), as they are bought.
 @Component({
   selector: 'app-material-dialog',
-  imports: [MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule, MatSelectModule, ReactiveFormsModule],
+  imports: [MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule, MatSelectModule, PurchaseCategoryField, ReactiveFormsModule],
   template: `
     <h2 mat-dialog-title>{{ data ? 'Change ' + data.name : 'New raw material' }}</h2>
     <mat-dialog-content>
@@ -25,10 +26,7 @@ import { MaterialCost, SaveMaterial, UnitOfMeasure, unitLabels } from '../../cor
           <mat-label>Code · الكود</mat-label>
           <input matInput formControlName="code" placeholder="ING-001" />
         </mat-form-field>
-        <mat-form-field>
-          <mat-label>Category · الفئة</mat-label>
-          <input matInput formControlName="category" placeholder="Dairy" />
-        </mat-form-field>
+        <app-purchase-category-field formControlName="categoryId" />
         <mat-form-field>
           <mat-label>Counted in · وحدة العد</mat-label>
           <mat-select formControlName="unit" (selectionChange)="unitChanged($event.value)">
@@ -95,7 +93,7 @@ export class MaterialDialog {
   protected readonly form = new FormGroup({
     name: new FormControl(this.data?.name ?? '', { nonNullable: true, validators: [Validators.required] }),
     code: new FormControl(this.data?.code ?? '', { nonNullable: true }),
-    category: new FormControl(this.data?.category ?? '', { nonNullable: true }),
+    categoryId: new FormControl<string | null>(this.data?.categoryId ?? null),
     unit: new FormControl<UnitOfMeasure>({ value: this.data?.unit ?? 'Gram', disabled: !!this.data }, { nonNullable: true }),
     purchaseUnit: new FormControl(this.data?.purchaseUnit ?? 'kg', { nonNullable: true, validators: [Validators.required] }),
     purchaseUnitSize: new FormControl(this.data?.purchaseUnitSize ?? 1000, {
@@ -133,7 +131,7 @@ export class MaterialDialog {
       name: v.name.trim(),
       unit: this.data ? undefined : v.unit,
       code: v.code.trim() || null,
-      category: v.category.trim() || null,
+      categoryId: v.categoryId,
       purchaseUnit: v.purchaseUnit.trim(),
       purchaseUnitSize: v.purchaseUnitSize,
       defaultYieldPercent: v.yield,

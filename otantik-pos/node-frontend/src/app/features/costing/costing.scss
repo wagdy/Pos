@@ -47,6 +47,9 @@
 }
 
 .table-wrap {
+  // Its own box for anything positioned inside (a hidden column label): clipped with the table,
+  // not widening the page.
+  position: relative;
   overflow-x: auto;
   border-radius: 12px;
   border: 1px solid var(--mat-sys-outline-variant);
@@ -182,4 +185,15 @@ tr.surplus td.strong,
   .no-print {
     display: none !important;
   }
+}
+
+// A small tag beside a name: a prep item, an archived supplier.
+.badge {
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font: var(--mat-sys-label-small);
+  background: var(--mat-sys-tertiary-container);
+  color: var(--mat-sys-on-tertiary-container);
+  white-space: nowrap;
 }

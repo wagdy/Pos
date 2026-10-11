@@ -530,6 +530,357 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.ToTable("OrderItemAddOns", "pos");
                 });
 
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Categories.PurchaseCategory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ExpenseLine")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("NameAr")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedName")
+                        .IsUnique();
+
+                    b.ToTable("PurchaseCategories", "inventory");
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Expenses.ExpenseItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ArchivedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CategoryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsArchived")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("NameAr")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Unit")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CategoryId");
+
+                    b.HasIndex("NormalizedName")
+                        .IsUnique();
+
+                    b.ToTable("ExpenseItems", "inventory");
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Production.PrepIngredient", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("PrepRecipeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(18, 3)
+                        .HasColumnType("numeric(18,3)");
+
+                    b.Property<Guid>("RawMaterialId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("YieldPercent")
+                        .HasPrecision(5, 2)
+                        .HasColumnType("numeric(5,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RawMaterialId");
+
+                    b.HasIndex("PrepRecipeId", "RawMaterialId")
+                        .IsUnique();
+
+                    b.ToTable("PrepRecipeIngredients", "inventory");
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Production.PrepRecipe", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("BatchQuantity")
+                        .HasPrecision(18, 3)
+                        .HasColumnType("numeric(18,3)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("PrepRecipes", "inventory");
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Production.ProductionOrder", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<decimal>("PlannedQuantity")
+                        .HasPrecision(18, 3)
+                        .HasColumnType("numeric(18,3)");
+
+                    b.Property<Guid>("PrepItemId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("ProducedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ProducedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<decimal>("ProducedQuantity")
+                        .HasPrecision(18, 3)
+                        .HasColumnType("numeric(18,3)");
+
+                    b.Property<decimal>("TotalCost")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("UnitCost")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("numeric(18,6)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProducedAtUtc");
+
+                    b.HasIndex("PrepItemId", "ProducedAtUtc");
+
+                    b.ToTable("ProductionOrders", "inventory");
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Production.ProductionOrderLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Cost")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<Guid>("ProductionOrderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(18, 3)
+                        .HasColumnType("numeric(18,3)");
+
+                    b.Property<Guid>("RawMaterialId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("UnitCost")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("numeric(18,6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RawMaterialId");
+
+                    b.HasIndex("ProductionOrderId", "RawMaterialId")
+                        .IsUnique();
+
+                    b.ToTable("ProductionOrderLines", "inventory");
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Purchases.PurchaseInvoice", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("AttachedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("AttachedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<int?>("AttachmentBytes")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("AttachmentContentType")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("AttachmentFileName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateOnly?>("InvoiceDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("PostedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("PostedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<Guid?>("SupplierId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SupplierInvoiceNumber")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SupplierId");
+
+                    b.HasIndex("Status", "PostedAtUtc");
+
+                    b.ToTable("PurchaseInvoices", "inventory");
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Purchases.PurchaseInvoiceLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("Cost")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("EnteredQuantity")
+                        .HasPrecision(18, 3)
+                        .HasColumnType("numeric(18,3)");
+
+                    b.Property<Guid?>("ExpenseItemId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("InvoiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ItemType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(18, 3)
+                        .HasColumnType("numeric(18,3)");
+
+                    b.Property<Guid?>("RawMaterialId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("UnitLabel")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<decimal>("UnitSize")
+                        .HasPrecision(18, 3)
+                        .HasColumnType("numeric(18,3)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpenseItemId");
+
+                    b.HasIndex("RawMaterialId");
+
+                    b.HasIndex("InvoiceId", "ExpenseItemId")
+                        .IsUnique();
+
+                    b.HasIndex("InvoiceId", "RawMaterialId")
+                        .IsUnique();
+
+                    b.ToTable("PurchaseInvoiceLines", "inventory", t =>
+                        {
+                            t.HasCheckConstraint("CK_PurchaseInvoiceLines_Item", "(\"ItemType\" = 'Inventory' AND \"RawMaterialId\" IS NOT NULL AND \"ExpenseItemId\" IS NULL) OR (\"ItemType\" = 'Expense' AND \"ExpenseItemId\" IS NOT NULL AND \"RawMaterialId\" IS NULL)");
+                        });
+                });
+
             modelBuilder.Entity("OtantikPos.Inventory.Domain.RawMaterials.RawMaterial", b =>
                 {
                     b.Property<Guid>("Id")
@@ -539,9 +890,8 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasPrecision(18, 6)
                         .HasColumnType("numeric(18,6)");
 
-                    b.Property<string>("Category")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
+                    b.Property<Guid>("CategoryId")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("Code")
                         .HasMaxLength(32)
@@ -552,6 +902,11 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasPrecision(5, 2)
                         .HasColumnType("numeric(5,2)")
                         .HasDefaultValue(100m);
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -588,6 +943,8 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CategoryId");
+
                     b.ToTable("RawMaterials", "inventory");
                 });
 
@@ -596,16 +953,36 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
-                    b.Property<int>("CatalogItemId")
+                    b.Property<int?>("CatalogItemId")
                         .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeletedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Name")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<decimal?>("PlannedPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
 
                     b.Property<int>("Portions")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
                         .HasDefaultValue(1);
 
+                    b.Property<Guid?>("RecipeCategoryId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("TargetKind")
-                        .IsRequired()
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
@@ -620,12 +997,51 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("RecipeCategoryId");
+
                     b.HasIndex("TargetKind", "CatalogItemId", "VariantId")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("\"DeletedAtUtc\" IS NULL AND \"CatalogItemId\" IS NOT NULL");
 
                     NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("TargetKind", "CatalogItemId", "VariantId"), false);
 
                     b.ToTable("Recipes", "inventory");
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Recipes.RecipeCategory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("NameAr")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedName")
+                        .IsUnique();
+
+                    b.ToTable("RecipeCategories", "inventory");
                 });
 
             modelBuilder.Entity("OtantikPos.Inventory.Domain.Recipes.RecipeIngredient", b =>
@@ -781,6 +1197,60 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.ToTable("StockMovements", "inventory");
                 });
 
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Suppliers.Supplier", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ArchivedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ContactPerson")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Email")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<bool>("IsArchived")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("Phone")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedName")
+                        .IsUnique();
+
+                    b.ToTable("Suppliers", "inventory");
+                });
+
             modelBuilder.Entity("OtantikPos.Node.Infrastructure.Costing.CostingSettings", b =>
                 {
                     b.Property<int>("Id")
@@ -811,6 +1281,50 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("CostingSettings", "inventory");
+                });
+
+            modelBuilder.Entity("OtantikPos.Node.Infrastructure.Costing.ManualSalesLine", b =>
+                {
+                    b.Property<int>("Year")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Month")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Kind")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<Guid>("ItemId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(18, 3)
+                        .HasColumnType("numeric(18,3)");
+
+                    b.HasKey("Year", "Month", "Kind", "ItemId");
+
+                    b.ToTable("ManualSalesLines", "inventory");
+                });
+
+            modelBuilder.Entity("OtantikPos.Node.Infrastructure.Costing.ManualSalesSheet", b =>
+                {
+                    b.Property<int>("Year")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Month")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("UpdatedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.HasKey("Year", "Month");
+
+                    b.ToTable("ManualSalesSheets", "inventory");
                 });
 
             modelBuilder.Entity("OtantikPos.Node.Infrastructure.Costing.MonthlyExpenses", b =>
@@ -1044,6 +1558,20 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.ToTable("OutboxMessages", "messaging");
                 });
 
+            modelBuilder.Entity("OtantikPos.Node.Infrastructure.Persistence.PurchaseInvoiceAttachment", b =>
+                {
+                    b.Property<Guid>("InvoiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<byte[]>("Content")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.HasKey("InvoiceId");
+
+                    b.ToTable("PurchaseInvoiceAttachments", "inventory");
+                });
+
             modelBuilder.Entity("OtantikPos.Node.Infrastructure.Persistence.RestaurantSettingsCopy", b =>
                 {
                     b.Property<int>("Id")
@@ -1216,6 +1744,107 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.Navigation("OrderItem");
                 });
 
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Expenses.ExpenseItem", b =>
+                {
+                    b.HasOne("OtantikPos.Inventory.Domain.Categories.PurchaseCategory", null)
+                        .WithMany()
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Production.PrepIngredient", b =>
+                {
+                    b.HasOne("OtantikPos.Inventory.Domain.Production.PrepRecipe", null)
+                        .WithMany("Ingredients")
+                        .HasForeignKey("PrepRecipeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("OtantikPos.Inventory.Domain.RawMaterials.RawMaterial", null)
+                        .WithMany()
+                        .HasForeignKey("RawMaterialId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Production.PrepRecipe", b =>
+                {
+                    b.HasOne("OtantikPos.Inventory.Domain.RawMaterials.RawMaterial", null)
+                        .WithOne()
+                        .HasForeignKey("OtantikPos.Inventory.Domain.Production.PrepRecipe", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Production.ProductionOrder", b =>
+                {
+                    b.HasOne("OtantikPos.Inventory.Domain.RawMaterials.RawMaterial", null)
+                        .WithMany()
+                        .HasForeignKey("PrepItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Production.ProductionOrderLine", b =>
+                {
+                    b.HasOne("OtantikPos.Inventory.Domain.Production.ProductionOrder", null)
+                        .WithMany("Lines")
+                        .HasForeignKey("ProductionOrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("OtantikPos.Inventory.Domain.RawMaterials.RawMaterial", null)
+                        .WithMany()
+                        .HasForeignKey("RawMaterialId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Purchases.PurchaseInvoice", b =>
+                {
+                    b.HasOne("OtantikPos.Inventory.Domain.Suppliers.Supplier", null)
+                        .WithMany()
+                        .HasForeignKey("SupplierId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Purchases.PurchaseInvoiceLine", b =>
+                {
+                    b.HasOne("OtantikPos.Inventory.Domain.Expenses.ExpenseItem", null)
+                        .WithMany()
+                        .HasForeignKey("ExpenseItemId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("OtantikPos.Inventory.Domain.Purchases.PurchaseInvoice", null)
+                        .WithMany("Lines")
+                        .HasForeignKey("InvoiceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("OtantikPos.Inventory.Domain.RawMaterials.RawMaterial", null)
+                        .WithMany()
+                        .HasForeignKey("RawMaterialId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.RawMaterials.RawMaterial", b =>
+                {
+                    b.HasOne("OtantikPos.Inventory.Domain.Categories.PurchaseCategory", null)
+                        .WithMany()
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Recipes.Recipe", b =>
+                {
+                    b.HasOne("OtantikPos.Inventory.Domain.Recipes.RecipeCategory", null)
+                        .WithMany()
+                        .HasForeignKey("RecipeCategoryId")
+                        .OnDelete(DeleteBehavior.SetNull);
+                });
+
             modelBuilder.Entity("OtantikPos.Inventory.Domain.Recipes.RecipeIngredient", b =>
                 {
                     b.HasOne("OtantikPos.Inventory.Domain.RawMaterials.RawMaterial", null)
@@ -1255,6 +1884,15 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("OtantikPos.Node.Infrastructure.Costing.ManualSalesLine", b =>
+                {
+                    b.HasOne("OtantikPos.Node.Infrastructure.Costing.ManualSalesSheet", null)
+                        .WithMany("Lines")
+                        .HasForeignKey("Year", "Month")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("OtantikPos.Node.Infrastructure.Costing.SharedCost", b =>
                 {
                     b.HasOne("OtantikPos.Inventory.Domain.RawMaterials.RawMaterial", null)
@@ -1268,6 +1906,15 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.HasOne("OtantikPos.Node.Infrastructure.DeliverySystem.OnlineSale", null)
                         .WithMany("Lines")
                         .HasForeignKey("OnlineSalePublicId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OtantikPos.Node.Infrastructure.Persistence.PurchaseInvoiceAttachment", b =>
+                {
+                    b.HasOne("OtantikPos.Inventory.Domain.Purchases.PurchaseInvoice", null)
+                        .WithOne()
+                        .HasForeignKey("OtantikPos.Node.Infrastructure.Persistence.PurchaseInvoiceAttachment", "InvoiceId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
@@ -1299,12 +1946,32 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.Navigation("AddOns");
                 });
 
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Production.PrepRecipe", b =>
+                {
+                    b.Navigation("Ingredients");
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Production.ProductionOrder", b =>
+                {
+                    b.Navigation("Lines");
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Purchases.PurchaseInvoice", b =>
+                {
+                    b.Navigation("Lines");
+                });
+
             modelBuilder.Entity("OtantikPos.Inventory.Domain.Recipes.Recipe", b =>
                 {
                     b.Navigation("Ingredients");
                 });
 
             modelBuilder.Entity("OtantikPos.Inventory.Domain.StockCounts.StockCount", b =>
+                {
+                    b.Navigation("Lines");
+                });
+
+            modelBuilder.Entity("OtantikPos.Node.Infrastructure.Costing.ManualSalesSheet", b =>
                 {
                     b.Navigation("Lines");
                 });

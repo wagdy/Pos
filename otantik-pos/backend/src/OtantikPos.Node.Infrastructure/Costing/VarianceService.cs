@@ -96,7 +96,8 @@ public sealed record SpoilageEntryLine(
 public sealed class VarianceService(NodeDbContext db, SalesLedger ledger)
 {
     private static readonly StockMovementReason[] Flows =
-        [StockMovementReason.Purchase, StockMovementReason.Waste, StockMovementReason.VoidReturn, StockMovementReason.Spoilage];
+        [StockMovementReason.Purchase, StockMovementReason.Waste, StockMovementReason.VoidReturn, StockMovementReason.Spoilage,
+         StockMovementReason.ProductionInput, StockMovementReason.ProductionOutput];
 
     // Null ids: the last two posted counts; only toId: the count before it.
     public async Task<VarianceReport> GetVarianceAsync(Guid? fromId, Guid? toId, CancellationToken cancellationToken)
@@ -126,6 +127,7 @@ public sealed class VarianceService(NodeDbContext db, SalesLedger ledger)
         var opening = lines.Where(l => l.StockCountId == from.Id).ToDictionary(l => l.RawMaterialId);
         var closing = lines.Where(l => l.StockCountId == to.Id).ToDictionary(l => l.RawMaterialId);
         var materials = await db.RawMaterials.AsNoTracking().ToDictionaryAsync(m => m.Id, cancellationToken);
+        var categories = await db.PurchaseCategories.AsNoTracking().ToDictionaryAsync(c => c.Id, c => c.Name, cancellationToken);
         var shared = (await db.SharedCosts.AsNoTracking().Where(c => c.RawMaterialId != null).Select(c => c.RawMaterialId!.Value)
             .ToListAsync(cancellationToken)).ToHashSet();
 
@@ -171,10 +173,12 @@ public sealed class VarianceService(NodeDbContext db, SalesLedger ledger)
             var material = materials[id];
             var open = opening[id].CountedQuantity;
             var close = closing[id].CountedQuantity;
-            var received = Flow(id, StockMovementReason.Purchase);
+            // Bought, or for a prep item made: both come into stock at a cost.
+            var received = Flow(id, StockMovementReason.Purchase) + Flow(id, StockMovementReason.ProductionOutput);
             var rawWaste = -Flow(id, StockMovementReason.Spoilage);
             var productWaste = -(Flow(id, StockMovementReason.Waste) + Flow(id, StockMovementReason.VoidReturn));
-            var standard = standardBy.GetValueOrDefault(id);
+            // What the sales took by their recipes, and what production took by the prep items'.
+            var standard = standardBy.GetValueOrDefault(id) - Flow(id, StockMovementReason.ProductionInput);
             var expected = open + received - rawWaste - productWaste - standard;
             var actual = open + received - close;
             var variance = actual - standard;
@@ -189,7 +193,7 @@ public sealed class VarianceService(NodeDbContext db, SalesLedger ledger)
                 : variance > 0 ? VarianceEvaluation.Unfavourable : variance < 0 ? VarianceEvaluation.Favourable : VarianceEvaluation.WithinLimit;
 
             rows.Add(new VarianceRow(
-                id, material.Code, material.Name, material.Category, material.Unit, material.PurchaseUnitSize,
+                id, material.Code, material.Name, categories.GetValueOrDefault(material.CategoryId), material.Unit, material.PurchaseUnitSize,
                 Quantity(open), Quantity(received), Quantity(rawWaste), Quantity(productWaste), Quantity(standard),
                 Quantity(expected), Quantity(close), Quantity(actual), Quantity(variance), percent, Quantity(unexplained),
                 unitCost, Money(variance * unitCost), Money(unexplained * unitCost), evaluation));

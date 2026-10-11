@@ -8,7 +8,8 @@ namespace OtantikPos.Node.Infrastructure.Costing;
 
 // The worksheet's Income Statement column: the chosen months at a year's pace, as the template
 // lays it out. Gross sales = weekly sales × 52; cost of sales at the months' own ratio; fixed
-// costs are the monthly costs entered, averaged over the months that have them, × 12.
+// costs are the monthly costs entered plus the expense invoices logged, averaged over the months
+// that have any, × 12. Each row says how much of it came from invoices.
 public sealed record BreakEvenWorksheet(
     DateOnly From,
     DateOnly To,
@@ -24,6 +25,8 @@ public sealed record BreakEvenWorksheet(
     decimal OccupationCost,
     decimal Interest,
     decimal Depreciation,
+    // Logged expenses whose category counts them as other fixed costs: insurance, licences.
+    decimal OtherFixedCosts,
     decimal TotalFixedCosts,
     decimal RestaurantProfit,
     // Total fixed costs ÷ profit margin. Null when every sale loses money: no level of sales breaks even.
@@ -31,7 +34,10 @@ public sealed record BreakEvenWorksheet(
     decimal? BreakEvenWeeklySales,
     // Months in the range with no costs entered; with none at all, there are no fixed costs to break even on.
     IReadOnlyList<string> MonthsWithoutCosts,
-    IReadOnlyList<decimal> Scenarios);
+    IReadOnlyList<decimal> Scenarios,
+    // Of ControllableCosts and OccupationCost, what came from expense invoices rather than typed in.
+    decimal ControllableFromInvoices,
+    decimal OccupationFromInvoices);
 
 // The sixth template: the Break-Even Analysis and Scenario Worksheet.
 public sealed class BreakEvenService(NodeDbContext db, RestaurantClock clock, KpiService kpis)
@@ -52,7 +58,8 @@ public sealed class BreakEvenService(NodeDbContext db, RestaurantClock clock, Kp
         if (lastMonth.AddMonths(-23) > first)
             throw new DomainException("Choose two years at most.");
 
-        decimal revenue = 0, costOfSales = 0, controllable = 0, occupation = 0, interest = 0, depreciation = 0;
+        decimal revenue = 0, costOfSales = 0, controllable = 0, occupation = 0, interest = 0, depreciation = 0, otherFixed = 0;
+        decimal controllableLogged = 0, occupationLogged = 0;
         var days = 0;
         var withCosts = 0;
         var withoutCosts = new List<string>();
@@ -65,16 +72,22 @@ public sealed class BreakEvenService(NodeDbContext db, RestaurantClock clock, Kp
             days += (monthEnd < today ? monthEnd : today).DayNumber - month.DayNumber + 1;
 
             var e = report.Expenses;
-            if (e.WagesAndBenefits is null && e.OtherControllableCosts is null && e.OccupationCost is null && e.Interest is null && e.Depreciation is null)
+            var s = report.Statement;
+            var logged = s.LoggedControllableCosts + s.LoggedOccupationCost + s.LoggedOtherFixedCosts;
+            if (e.WagesAndBenefits is null && e.OtherControllableCosts is null && e.OccupationCost is null && e.Interest is null && e.Depreciation is null
+                && logged == 0)
             {
                 withoutCosts.Add(month.ToString("MMMM yyyy", System.Globalization.CultureInfo.InvariantCulture));
                 continue;
             }
             withCosts++;
-            controllable += (e.WagesAndBenefits ?? 0) + (e.OtherControllableCosts ?? 0);
-            occupation += e.OccupationCost ?? 0;
+            controllable += (e.WagesAndBenefits ?? 0) + (e.OtherControllableCosts ?? 0) + s.LoggedControllableCosts;
+            occupation += (e.OccupationCost ?? 0) + s.LoggedOccupationCost;
+            otherFixed += s.LoggedOtherFixedCosts;
             interest += e.Interest ?? 0;
             depreciation += e.Depreciation ?? 0;
+            controllableLogged += s.LoggedControllableCosts;
+            occupationLogged += s.LoggedOccupationCost;
         }
 
         decimal Yearly(decimal total) => withCosts > 0 ? Money(total * 12 / withCosts) : 0;
@@ -83,9 +96,9 @@ public sealed class BreakEvenService(NodeDbContext db, RestaurantClock clock, Kp
         var ratio = revenue > 0 ? costOfSales / revenue : 0;
         var yearlyCostOfSales = grossSales * ratio;
         var grossProfit = grossSales - yearlyCostOfSales;
-        var (yearlyControllable, yearlyOccupation, yearlyInterest, yearlyDepreciation) =
-            (Yearly(controllable), Yearly(occupation), Yearly(interest), Yearly(depreciation));
-        var fixedCosts = yearlyControllable + yearlyOccupation + yearlyInterest + yearlyDepreciation;
+        var (yearlyControllable, yearlyOccupation, yearlyInterest, yearlyDepreciation, yearlyOtherFixed) =
+            (Yearly(controllable), Yearly(occupation), Yearly(interest), Yearly(depreciation), Yearly(otherFixed));
+        var fixedCosts = yearlyControllable + yearlyOccupation + yearlyInterest + yearlyDepreciation + yearlyOtherFixed;
 
         // Each L.E of sales leaves (1 − ratio) towards the fixed costs.
         decimal? breakEven = withCosts > 0 && ratio < 1 ? fixedCosts / (1 - ratio) : null;
@@ -95,10 +108,10 @@ public sealed class BreakEvenService(NodeDbContext db, RestaurantClock clock, Kp
         return new BreakEvenWorksheet(
             first, periodEnd < today ? periodEnd : today, days,
             Money(weekly), Money(grossSales), Money(yearlyCostOfSales), ratio, Money(grossProfit),
-            yearlyControllable, yearlyOccupation, yearlyInterest, yearlyDepreciation, fixedCosts,
+            yearlyControllable, yearlyOccupation, yearlyInterest, yearlyDepreciation, yearlyOtherFixed, fixedCosts,
             Money(grossProfit - fixedCosts),
             Money(breakEven), breakEven is { } b ? Money(b / WeeksInYear) : null,
-            withoutCosts, settings.BreakEvenScenarios);
+            withoutCosts, settings.BreakEvenScenarios, Yearly(controllableLogged), Yearly(occupationLogged));
     }
 
     // The four options' weekly sales, kept for next time.

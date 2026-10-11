@@ -5,10 +5,15 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Otantik.BuildingBlocks;
+using OtantikPos.Inventory.Domain.Production;
+using OtantikPos.Inventory.Domain.Purchases;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
+using OtantikPos.Inventory.Domain.Categories;
+using OtantikPos.Inventory.Domain.Expenses;
+using OtantikPos.Inventory.Domain.Suppliers;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Costing;
 using OtantikPos.Node.Infrastructure.DeliverySystem;
@@ -61,12 +66,21 @@ public static class DependencyInjection
         services.AddScoped<VarianceService>();
         services.AddScoped<KpiService>();
         services.AddScoped<BreakEvenService>();
+        services.AddScoped<PurchaseSpendingService>();
 
         // Inventory.
         services.AddScoped<IRawMaterialRepository, RawMaterialRepository>();
         services.AddScoped<IRecipeRepository, RecipeRepository>();
+        services.AddScoped<IRecipeCategoryRepository, RecipeCategoryRepository>();
         services.AddScoped<IStockMovementRepository, StockMovementRepository>();
         services.AddScoped<IStockCountRepository, StockCountRepository>();
+        services.AddScoped<IPurchaseInvoiceRepository, PurchaseInvoiceRepository>();
+        services.AddScoped<IPurchaseAttachmentStore, PurchaseAttachmentStore>();
+        services.AddScoped<ISupplierRepository, SupplierRepository>();
+        services.AddScoped<IPurchaseCategoryRepository, PurchaseCategoryRepository>();
+        services.AddScoped<IExpenseItemRepository, ExpenseItemRepository>();
+        services.AddScoped<IPrepRecipeRepository, PrepRecipeRepository>();
+        services.AddScoped<IProductionOrderRepository, ProductionOrderRepository>();
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(RetryOnConflictBehavior<,>));
 
         // The delivery system. Short timeouts: a cashier is waiting on most of these calls, and

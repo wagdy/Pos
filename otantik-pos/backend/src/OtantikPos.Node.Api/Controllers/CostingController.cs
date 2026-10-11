@@ -13,7 +13,8 @@ namespace OtantikPos.Node.Api.Controllers;
 [ApiController]
 [Route("api/costing")]
 [Authorize(Policy = Permissions.CostingView)]
-public sealed class CostingController(CostingService costing, VarianceService variance, KpiService kpis, BreakEvenService breakEven) : ControllerBase
+public sealed class CostingController(
+    CostingService costing, VarianceService variance, KpiService kpis, BreakEvenService breakEven, PurchaseSpendingService spending) : ControllerBase
 {
     // Raw materials with their costs: what each costs per purchase unit, the last price paid, and
     // the stock's value.
@@ -32,10 +33,33 @@ public sealed class CostingController(CostingService costing, VarianceService va
         [FromQuery] RecipeTargetKind targetKind, [FromQuery] int catalogItemId, [FromQuery] int? variantId, CancellationToken cancellationToken) =>
         costing.GetRecipeCardAsync(targetKind, catalogItemId, variantId, cancellationToken);
 
-    // The Monthly Theoretical Cost report for a business month.
+    // Every recipe, on the menu or off it; the deleted ones too when asked for.
+    [HttpGet("recipes")]
+    public Task<IReadOnlyList<RecipeCostCard>> GetRecipes([FromQuery] bool includeDeleted, CancellationToken cancellationToken) =>
+        costing.GetRecipesAsync(includeDeleted, cancellationToken);
+
+    // One recipe's costing card, deleted or not.
+    [HttpGet("recipes/{recipeId:guid}")]
+    public Task<RecipeCostCard> GetRecipeCardById(Guid recipeId, CancellationToken cancellationToken) =>
+        costing.GetRecipeCardAsync(recipeId, cancellationToken);
+
+    // The Monthly Theoretical Cost report for a business month: from the till's sales (Pos, the
+    // default), or from the quantities typed in for it (Manual).
     [HttpGet("theoretical")]
-    public Task<TheoreticalCostReport> GetTheoreticalCost([FromQuery] int year, [FromQuery] int month, CancellationToken cancellationToken) =>
-        costing.GetTheoreticalCostAsync(year, month, cancellationToken);
+    public Task<TheoreticalCostReport> GetTheoreticalCost(
+        [FromQuery] int year, [FromQuery] int month, CancellationToken cancellationToken, [FromQuery] TheoreticalSource source = TheoreticalSource.Pos) =>
+        costing.GetTheoreticalCostAsync(year, month, cancellationToken, source);
+
+    // The month's sales sheet for typing quantities in: every active recipe and prep item.
+    [HttpGet("manual-sales/{year:int}/{month:int}")]
+    public Task<ManualSalesSheetDto> GetManualSales(int year, int month, CancellationToken cancellationToken) =>
+        costing.GetManualSalesAsync(year, month, cancellationToken);
+
+    // Saves the month's typed quantities, the whole sheet, and answers with the report from them.
+    [HttpPut("manual-sales/{year:int}/{month:int}")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public Task<TheoreticalCostReport> SaveManualSales(int year, int month, SaveManualSalesRequest request, CancellationToken cancellationToken) =>
+        costing.SaveManualSalesAsync(year, month, request.Lines ?? [], User.FindFirst(StaffClaims.Name)?.Value, cancellationToken);
 
     // Actual usage against standard between two posted stock counts; the last two by default.
     [HttpGet("variance")]
@@ -62,6 +86,11 @@ public sealed class CostingController(CostingService costing, VarianceService va
     [Authorize(Policy = Permissions.InventoryManage)]
     public Task<MonthlyExpensesDto> SaveExpenses(int year, int month, MonthlyExpensesDto expenses, CancellationToken cancellationToken) =>
         kpis.SaveExpensesAsync(year, month, expenses, User.FindFirst(StaffClaims.Name)?.Value, cancellationToken);
+
+    // Purchases by category between two days, both included: stock and expenses, from the posted invoices.
+    [HttpGet("purchases/spending")]
+    public Task<SpendingReport> GetSpending([FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken cancellationToken) =>
+        spending.GetAsync(from, to, cancellationToken);
 
     // The break-even worksheet over a run of months (one month: from = to), at a year's pace.
     [HttpGet("break-even")]
@@ -106,3 +135,5 @@ public sealed class CostingController(CostingService costing, VarianceService va
         return NoContent();
     }
 }
+
+public sealed record SaveManualSalesRequest(IReadOnlyList<ManualSalesLineDto> Lines);

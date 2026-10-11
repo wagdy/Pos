@@ -41,6 +41,11 @@ const report: KpiReport = {
     interest: null,
     depreciation: null,
     netProfit: null,
+    loggedControllableCosts: 0,
+    loggedOccupationCost: 0,
+    loggedOtherFixedCosts: 0,
+    loggedExpenses: [],
+    totalExpenses: 0,
   },
   expenses: { wagesAndBenefits: null, labourHours: null, otherControllableCosts: null, occupationCost: null, interest: null, depreciation: null },
   kpis: [
@@ -115,5 +120,43 @@ describe('the KPIs', () => {
       interest: null,
       depreciation: null,
     });
+  });
+  it('takes the expenses on purchase invoices off on their lines, with what is entered', async () => {
+    kpis.mockReturnValue(
+      of({
+        ...report,
+        statement: {
+          ...report.statement,
+          wagesAndBenefits: 100,
+          otherControllableCosts: 20,
+          loggedControllableCosts: 1_700,
+          loggedOccupationCost: 8_000,
+          loggedOtherFixedCosts: 600,
+          loggedExpenses: [
+            { categoryId: 'rent', category: 'Rent', categoryAr: null, expenseLine: 'Occupation', amount: 8_000 },
+            { categoryId: 'utilities', category: 'Utilities', categoryAr: null, expenseLine: 'Controllable', amount: 1_700 },
+            { categoryId: 'insurance', category: 'Insurance', categoryAr: null, expenseLine: 'OtherFixed', amount: 600 },
+          ],
+          totalExpenses: 10_420,
+          netProfit: -10_122,
+        },
+      }),
+    );
+    const { fixture } = await render();
+    const el = fixture.nativeElement as HTMLElement;
+    const row = (label: string) =>
+      [...el.querySelectorAll('.statement tr')].find((r) => r.querySelector('td')!.textContent!.includes(label))!;
+    const cells = (label: string) => [...row(label).querySelectorAll('td')].map((td) => td.textContent!.replace(/\s+/g, ' ').trim());
+
+    expect(cells('Rent and occupation')).toEqual(['Rent and occupation · الإيجار 8,000.00 from invoices', 'L.E 8,000.00', '1904.8%']);
+    expect(cells('Controllable costs')[0]).toContain('1,700.00 invoices + 20.00 entered');
+    expect(cells('Controllable costs')[1]).toBe('L.E 1,720.00');
+    expect(cells('Other fixed costs')[1]).toBe('L.E 600.00');
+    expect(cells('Total expenses')[1]).toBe('L.E 10,420.00');
+    expect([...el.querySelectorAll('.logged-row')].map((r) => [...r.children].map((c) => c.textContent!.replace(/\s+/g, ' ').trim()))).toEqual([
+      ['Rent · Occupation (rent)', 'L.E 8,000.00'],
+      ['Utilities · Controllable costs', 'L.E 1,700.00'],
+      ['Insurance · Other fixed costs', 'L.E 600.00'],
+    ]);
   });
 });

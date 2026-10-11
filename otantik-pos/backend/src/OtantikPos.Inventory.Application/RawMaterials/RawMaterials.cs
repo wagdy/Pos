@@ -1,6 +1,8 @@
 using MediatR;
+using OtantikPos.Inventory.Application.Categories;
 using OtantikPos.Inventory.Application.Common;
 using Otantik.BuildingBlocks;
+using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.RawMaterials;
 
 namespace OtantikPos.Inventory.Application.RawMaterials;
@@ -15,12 +17,16 @@ public sealed record RawMaterialDto(
     decimal ReorderLevel,
     bool NeedsReorder,
     string? Code,
-    string? Category,
+    // Its purchase category's name, and the category.
+    string Category,
     string PurchaseUnit,
     decimal PurchaseUnitSize,
-    decimal DefaultYieldPercent)
+    decimal DefaultYieldPercent,
+    MaterialKind Kind,
+    Guid CategoryId,
+    string? CategoryAr)
 {
-    public static RawMaterialDto From(RawMaterial material) => new(
+    public static RawMaterialDto From(RawMaterial material, PurchaseCategory? category) => new(
         material.Id,
         material.Name,
         material.Unit,
@@ -28,73 +34,79 @@ public sealed record RawMaterialDto(
         material.ReorderLevel,
         material.NeedsReorder,
         material.Code,
-        material.Category,
+        category?.Name ?? PurchaseCategory.GeneralName,
         material.PurchaseUnit,
         material.PurchaseUnitSize,
-        material.DefaultYieldPercent);
+        material.DefaultYieldPercent,
+        material.Kind,
+        material.CategoryId,
+        category?.NameAr);
 }
 
 // The optional parts describe it for costing. PurchaseUnit and PurchaseUnitSize go together:
 // "kg" and 1000 for a material counted in grams. CostPerPurchaseUnit is the price to start from.
+// No CategoryId: General.
 public sealed record CreateRawMaterialCommand(
     string Name,
     UnitOfMeasure Unit,
     decimal ReorderLevel = 0,
     string? Code = null,
-    string? Category = null,
+    Guid? CategoryId = null,
     string? PurchaseUnit = null,
     decimal? PurchaseUnitSize = null,
     decimal? DefaultYieldPercent = null,
     decimal? CostPerPurchaseUnit = null) : IRequest<RawMaterialDto>;
 
-internal sealed class CreateRawMaterialCommandHandler(IRawMaterialRepository materials, IUnitOfWork unitOfWork)
+internal sealed class CreateRawMaterialCommandHandler(IRawMaterialRepository materials, IPurchaseCategoryRepository categories, IUnitOfWork unitOfWork)
     : IRequestHandler<CreateRawMaterialCommand, RawMaterialDto>
 {
     public async Task<RawMaterialDto> Handle(CreateRawMaterialCommand request, CancellationToken cancellationToken)
     {
+        var category = await categories.ResolveAsync(request.CategoryId, cancellationToken);
         var material = new RawMaterial(request.Name, request.Unit, request.ReorderLevel);
-        UpdateRawMaterialCommandHandler.Describe(material, request.Code, request.Category, request.PurchaseUnit, request.PurchaseUnitSize, request.DefaultYieldPercent, request.CostPerPurchaseUnit);
+        UpdateRawMaterialCommandHandler.Describe(material, request.Code, category.Id, request.PurchaseUnit, request.PurchaseUnitSize, request.DefaultYieldPercent, request.CostPerPurchaseUnit);
         materials.Add(material);
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        return RawMaterialDto.From(material);
+        return RawMaterialDto.From(material, category);
     }
 }
 
 // No Unit here on purpose. Every recipe quantity and every ledger entry for a material is in
 // its unit, so changing it would silently rescale all of them.
-// CostPerPurchaseUnit null leaves the average cost as it is; a value replaces it.
+// CostPerPurchaseUnit null leaves the average cost as it is; a value replaces it. No CategoryId: General.
 public sealed record UpdateRawMaterialCommand(
     Guid RawMaterialId,
     string Name,
     decimal ReorderLevel,
     string? Code = null,
-    string? Category = null,
+    Guid? CategoryId = null,
     string? PurchaseUnit = null,
     decimal? PurchaseUnitSize = null,
     decimal? DefaultYieldPercent = null,
     decimal? CostPerPurchaseUnit = null) : IRequest<RawMaterialDto>;
 
-internal sealed class UpdateRawMaterialCommandHandler(IRawMaterialRepository materials, IUnitOfWork unitOfWork)
+internal sealed class UpdateRawMaterialCommandHandler(IRawMaterialRepository materials, IPurchaseCategoryRepository categories, IUnitOfWork unitOfWork)
     : IRequestHandler<UpdateRawMaterialCommand, RawMaterialDto>
 {
     public async Task<RawMaterialDto> Handle(UpdateRawMaterialCommand request, CancellationToken cancellationToken)
     {
         var material = await materials.GetRequiredAsync(request.RawMaterialId, cancellationToken);
+        var category = await categories.ResolveAsync(request.CategoryId, cancellationToken);
 
         material.Rename(request.Name);
         material.SetReorderLevel(request.ReorderLevel);
-        Describe(material, request.Code, request.Category, request.PurchaseUnit, request.PurchaseUnitSize, request.DefaultYieldPercent, request.CostPerPurchaseUnit);
+        Describe(material, request.Code, category.Id, request.PurchaseUnit, request.PurchaseUnitSize, request.DefaultYieldPercent, request.CostPerPurchaseUnit);
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        return RawMaterialDto.From(material);
+        return RawMaterialDto.From(material, category);
     }
 
     // Shared with creating one. The purchase unit first: the starting cost is per that unit.
     internal static void Describe(
-        RawMaterial material, string? code, string? category, string? purchaseUnit, decimal? purchaseUnitSize, decimal? defaultYield, decimal? cost)
+        RawMaterial material, string? code, Guid categoryId, string? purchaseUnit, decimal? purchaseUnitSize, decimal? defaultYield, decimal? cost)
     {
-        material.Describe(code, category);
+        material.Describe(code, categoryId);
         if (purchaseUnit is not null || purchaseUnitSize is not null)
             material.SetPurchaseUnit(purchaseUnit ?? material.PurchaseUnit, purchaseUnitSize ?? material.PurchaseUnitSize);
         if (defaultYield is { } yield)
@@ -106,7 +118,7 @@ internal sealed class UpdateRawMaterialCommandHandler(IRawMaterialRepository mat
 
 public sealed record GetRawMaterialsQuery(bool NeedsReorderOnly = false) : IRequest<IReadOnlyList<RawMaterialDto>>;
 
-internal sealed class GetRawMaterialsQueryHandler(IRawMaterialRepository materials)
+internal sealed class GetRawMaterialsQueryHandler(IRawMaterialRepository materials, IPurchaseCategoryRepository categories)
     : IRequestHandler<GetRawMaterialsQuery, IReadOnlyList<RawMaterialDto>>
 {
     public async Task<IReadOnlyList<RawMaterialDto>> Handle(GetRawMaterialsQuery request, CancellationToken cancellationToken)
@@ -115,6 +127,6 @@ internal sealed class GetRawMaterialsQueryHandler(IRawMaterialRepository materia
             ? await materials.GetNeedingReorderAsync(cancellationToken)
             : await materials.GetAllAsync(cancellationToken);
 
-        return found.Select(RawMaterialDto.From).ToList();
+        return await categories.DtosAsync(found, cancellationToken);
     }
 }

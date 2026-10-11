@@ -10,7 +10,7 @@ import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
-import { CostingApi, Kpi, KpiReport, MonthlyExpenses, kpiLabels } from '../../core/costing/costing.api';
+import { CostingApi, Kpi, KpiReport, MonthlyExpenses, expenseLineLabels, kpiLabels } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
@@ -20,15 +20,16 @@ type Tone = 'ok' | 'bad' | 'check' | 'none';
 const expenseFields: { key: keyof MonthlyExpenses; en: string; ar: string; hours?: boolean }[] = [
   { key: 'wagesAndBenefits', en: 'Wages and benefits', ar: 'الرواتب والمزايا' },
   { key: 'labourHours', en: 'Labour hours', ar: 'ساعات العمل', hours: true },
-  { key: 'occupationCost', en: 'Rent and occupation', ar: 'الإيجار' },
-  { key: 'otherControllableCosts', en: 'Other controllable costs', ar: 'تكاليف أخرى قابلة للتحكم' },
+  { key: 'occupationCost', en: 'Rent, not on invoices', ar: 'الإيجار (بدون فاتورة)' },
+  { key: 'otherControllableCosts', en: 'Other controllable, not on invoices', ar: 'تكاليف أخرى (بدون فاتورة)' },
   { key: 'interest', en: 'Interest', ar: 'الفوائد' },
   { key: 'depreciation', en: 'Depreciation', ar: 'الإهلاك' },
 ];
 
 // Pillar 4: the template's financial KPIs for a business month, each against its healthy range.
-// Sales and recipe costs come from the till, losses from the stock ledger; wages, hours and
-// overheads are entered here for the month. A KPI missing what it needs says so, never 0.
+// Sales and recipe costs come from the till, losses from the stock ledger, expenses from the
+// month's posted purchase invoices; wages, hours and what is paid without an invoice are entered
+// here. A KPI missing what it needs says so, never 0.
 @Component({
   selector: 'app-kpis-page',
   imports: [DecimalPipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatInputModule, MatProgressBarModule, MoneyPipe, RouterLink],
@@ -136,10 +137,36 @@ const expenseFields: { key: keyof MonthlyExpenses; en: string; ar: string; hours
                 <tr class="total"><td>Cost of sales · تكلفة المبيعات</td><td class="num">{{ r.statement.costOfSales | money }}</td><td class="num">{{ pct(r.statement.costOfSales, r) }}</td></tr>
                 <tr class="total"><td>Gross profit · الربح الإجمالي</td><td class="num">{{ r.statement.grossProfit | money }}</td><td class="num">{{ pct(r.statement.grossProfit, r) }}</td></tr>
                 <tr><td>Wages and benefits · الرواتب</td><td class="num">{{ entered(r.statement.wagesAndBenefits) }}</td><td class="num muted">{{ pct(r.statement.wagesAndBenefits, r) }}</td></tr>
-                <tr><td>Rent and occupation · الإيجار</td><td class="num">{{ entered(r.statement.occupationCost) }}</td><td class="num muted">{{ pct(r.statement.occupationCost, r) }}</td></tr>
-                <tr><td>Other controllable · تكاليف أخرى</td><td class="num">{{ entered(r.statement.otherControllableCosts) }}</td><td class="num muted">{{ pct(r.statement.otherControllableCosts, r) }}</td></tr>
+                <tr>
+                  <td>
+                    Rent and occupation · الإيجار
+                    @if (r.statement.loggedOccupationCost) {
+                      <small class="muted part">{{ parts(r.statement.occupationCost, r.statement.loggedOccupationCost) }}</small>
+                    }
+                  </td>
+                  <td class="num">{{ combined(r.statement.occupationCost, r.statement.loggedOccupationCost) }}</td>
+                  <td class="num muted">{{ pct(sum(r.statement.occupationCost, r.statement.loggedOccupationCost), r) }}</td>
+                </tr>
+                <tr>
+                  <td>
+                    Controllable costs · تكاليف قابلة للتحكم
+                    @if (r.statement.loggedControllableCosts) {
+                      <small class="muted part">{{ parts(r.statement.otherControllableCosts, r.statement.loggedControllableCosts) }}</small>
+                    }
+                  </td>
+                  <td class="num">{{ combined(r.statement.otherControllableCosts, r.statement.loggedControllableCosts) }}</td>
+                  <td class="num muted">{{ pct(sum(r.statement.otherControllableCosts, r.statement.loggedControllableCosts), r) }}</td>
+                </tr>
+                @if (r.statement.loggedOtherFixedCosts) {
+                  <tr>
+                    <td>Other fixed costs · تكاليف ثابتة أخرى <small class="muted part">from invoices</small></td>
+                    <td class="num">{{ r.statement.loggedOtherFixedCosts | money }}</td>
+                    <td class="num muted">{{ pct(r.statement.loggedOtherFixedCosts, r) }}</td>
+                  </tr>
+                }
                 <tr><td>Interest · الفوائد</td><td class="num">{{ entered(r.statement.interest) }}</td><td class="num muted">{{ pct(r.statement.interest, r) }}</td></tr>
                 <tr><td>Depreciation · الإهلاك</td><td class="num">{{ entered(r.statement.depreciation) }}</td><td class="num muted">{{ pct(r.statement.depreciation, r) }}</td></tr>
+                <tr class="total"><td>Total expenses · إجمالي المصروفات</td><td class="num">{{ r.statement.totalExpenses | money }}</td><td class="num">{{ pct(r.statement.totalExpenses, r) }}</td></tr>
                 <tr class="total" [class.loss]="(r.statement.netProfit ?? 0) < 0">
                   <td>Net profit · صافي الربح</td>
                   <td class="num">{{ r.statement.netProfit === null ? 'Enter the wages' : (r.statement.netProfit | money) }}</td>
@@ -150,13 +177,29 @@ const expenseFields: { key: keyof MonthlyExpenses; en: string; ar: string; hours
           </div>
           <p class="note small">
             Revenue is before VAT, after promo discounts. Food and beverage cost: what the sales took by their recipes, with
-            shared costs such as frying oil on the meals. Losses are counted against food.
+            shared costs such as frying oil on the meals. Losses are counted against food. Expenses on the month's posted purchase
+            invoices are taken off on their category's line, with what is entered by hand.
           </p>
+          @if (r.statement.loggedExpenses?.length) {
+            <div class="logged">
+              <strong>From purchase invoices · من فواتير المشتريات</strong>
+              @for (e of r.statement.loggedExpenses; track e.categoryId) {
+                <div class="logged-row">
+                  <span>{{ e.category }} <span class="muted">· {{ lineLabels[e.expenseLine].en }}</span></span>
+                  <span class="num">{{ e.amount | money }}</span>
+                </div>
+              }
+              <a routerLink="/costing/purchases/spending" class="small">Purchases by category →</a>
+            </div>
+          }
         </section>
 
         <section class="no-print">
           <h3>Monthly costs <span class="inline-ar">التكاليف الشهرية</span></h3>
-          <p class="note small">What {{ monthName() }} cost beyond its ingredients. Leave a figure empty until it is known.</p>
+          <p class="note small">
+            What {{ monthName() }} cost beyond its ingredients and its purchase invoices. Leave a figure empty until it is known. Expenses
+            posted on purchase invoices (bills, cleaning, repairs) are added on their own: do not type them here too.
+          </p>
           <div class="expenses">
             @for (f of fields; track f.key) {
               <mat-form-field subscriptSizing="dynamic" floatLabel="always">
@@ -309,6 +352,23 @@ const expenseFields: { key: keyof MonthlyExpenses; en: string; ar: string; hours
     .statement tr.loss td {
       color: var(--mat-sys-error);
     }
+    .part {
+      display: block;
+      font-weight: 400;
+    }
+    .logged {
+      display: grid;
+      gap: 4px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      border-radius: 12px;
+      border: 1px solid var(--mat-sys-outline-variant);
+    }
+    .logged-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
     .expenses {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
@@ -397,6 +457,22 @@ export class KpisPage {
   // As a share of revenue, for the statement's last column.
   protected pct(value: number | null, r: KpiReport): string {
     return value === null || r.statement.revenue <= 0 ? '' : `${((value / r.statement.revenue) * 100).toFixed(1)}%`;
+  }
+
+  protected readonly lineLabels = expenseLineLabels;
+
+  protected sum(typed: number | null, logged: number): number | null {
+    return typed === null && !logged ? null : (typed ?? 0) + logged;
+  }
+
+  // A line made of what was entered and what the invoices logged.
+  protected combined(typed: number | null, logged: number): string {
+    return this.entered(this.sum(typed, logged));
+  }
+
+  protected parts(typed: number | null, logged: number): string {
+    const money = (v: number) => v.toLocaleString('en-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return typed ? `${money(logged)} invoices + ${money(typed)} entered` : `${money(logged)} from invoices`;
   }
 
   protected entered(value: number | null): string {

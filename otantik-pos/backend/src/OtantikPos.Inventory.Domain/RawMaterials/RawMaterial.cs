@@ -3,14 +3,25 @@ using OtantikPos.Inventory.Domain.StockMovements;
 
 namespace OtantikPos.Inventory.Domain.RawMaterials;
 
+public enum MaterialKind
+{
+    // Bought from a supplier, on purchase invoices.
+    Purchased = 1,
+
+    // Made in the kitchen from other materials, by a production order: dough, a house sauce. Kept
+    // in stock, costed and counted like the rest; dishes use it as an ingredient.
+    Prep = 2,
+}
+
 public sealed class RawMaterial : AggregateRoot
 {
     private RawMaterial() { }
 
-    public RawMaterial(string name, UnitOfMeasure unit, decimal reorderLevel = 0)
+    public RawMaterial(string name, UnitOfMeasure unit, decimal reorderLevel = 0, MaterialKind kind = MaterialKind.Purchased)
     {
         Rename(name);
         Unit = unit;
+        Kind = kind;
         SetReorderLevel(reorderLevel);
         (PurchaseUnit, PurchaseUnitSize) = unit switch
         {
@@ -22,6 +33,8 @@ public sealed class RawMaterial : AggregateRoot
 
     public string Name { get; private set; } = string.Empty;
     public UnitOfMeasure Unit { get; private set; }
+    public MaterialKind Kind { get; private set; } = MaterialKind.Purchased;
+    public bool IsPrepItem => Kind == MaterialKind.Prep;
 
     // Can go negative; see Move.
     public decimal QuantityOnHand { get; private set; }
@@ -29,9 +42,12 @@ public sealed class RawMaterial : AggregateRoot
     public decimal ReorderLevel { get; private set; }
     public bool NeedsReorder => QuantityOnHand <= ReorderLevel;
 
-    // How the reports name and group it: ING-001, Dairy. Both optional.
+    // How the reports name it: ING-001. Optional.
     public string? Code { get; private set; }
-    public string? Category { get; private set; }
+
+    // The purchase category it is filed under (Dairy, Meat): the count sheet and the reports
+    // group by it, and purchases are added up by it. Every material has one; General until sorted.
+    public Guid CategoryId { get; private set; }
 
     // How it is bought, and so how its price is written: per kg (1000 g), per carton of 30 eggs
     // (30 pieces). Stock, recipes and the ledger stay in Unit; this is only for prices.
@@ -64,10 +80,17 @@ public sealed class RawMaterial : AggregateRoot
         ReorderLevel = reorderLevel;
     }
 
-    public void Describe(string? code, string? category)
+    public void Describe(string? code, Guid categoryId)
     {
         Code = string.IsNullOrWhiteSpace(code) ? null : code.Trim();
-        Category = string.IsNullOrWhiteSpace(category) ? null : category.Trim();
+        MoveTo(categoryId);
+    }
+
+    public void MoveTo(Guid categoryId)
+    {
+        if (categoryId == Guid.Empty)
+            throw new DomainException("Choose the material's category.");
+        CategoryId = categoryId;
     }
 
     public void SetPurchaseUnit(string name, decimal size)
@@ -112,6 +135,8 @@ public sealed class RawMaterial : AggregateRoot
     // counts as none, since nothing is left to average with.
     public StockMovement ReceivePurchase(decimal quantity, Guid purchaseId, decimal? lineCost = null)
     {
+        if (IsPrepItem)
+            throw new DomainException($"{Name} is made in the kitchen, not bought: make it with a production order.");
         Positive(quantity);
         if (lineCost is not { } cost)
             return Move(quantity, StockMovementReason.Purchase, purchaseId, AverageCost);
@@ -119,11 +144,27 @@ public sealed class RawMaterial : AggregateRoot
             throw new DomainException("A purchase cannot cost less than nothing.");
 
         var unitCost = cost / quantity;
-        var onShelf = Math.Max(QuantityOnHand, 0);
-        AverageCost = AverageCost is { } average && onShelf > 0
-            ? (onShelf * average + quantity * unitCost) / (onShelf + quantity)
-            : unitCost;
+        AverageWith(quantity, unitCost);
         return Move(quantity, StockMovementReason.Purchase, purchaseId, unitCost);
+    }
+
+    // Taken to make a prep item, at the average cost now: what it adds to the batch's cost.
+    public StockMovement UseInProduction(decimal quantity, Guid productionOrderId) =>
+        Move(-Positive(quantity), StockMovementReason.ProductionInput, productionOrderId, AverageCost);
+
+    // A batch of this prep item made. batchCost is what its ingredients cost; it moves the
+    // average exactly as a delivery's price moves a bought material's.
+    public StockMovement ReceiveProduction(decimal quantity, Guid productionOrderId, decimal batchCost)
+    {
+        if (!IsPrepItem)
+            throw new DomainException($"{Name} is bought, not made: it comes in on a purchase invoice.");
+        Positive(quantity);
+        if (batchCost < 0)
+            throw new DomainException("A batch cannot cost less than nothing.");
+
+        var unitCost = batchCost / quantity;
+        AverageWith(quantity, unitCost);
+        return Move(quantity, StockMovementReason.ProductionOutput, productionOrderId, unitCost);
     }
 
     // Stock thrown away before it reached a dish. Why is required: the variance report sets it
@@ -142,6 +183,16 @@ public sealed class RawMaterial : AggregateRoot
         if (countedQuantity < 0)
             throw new DomainException("A counted quantity cannot be negative.");
         return Move(countedQuantity - QuantityOnHand, StockMovementReason.CountAdjustment, stockCountId, AverageCost);
+    }
+
+    // Weighted by quantity against what is on the shelf; stock below zero counts as none, since
+    // nothing is left to average with.
+    private void AverageWith(decimal quantity, decimal unitCost)
+    {
+        var onShelf = Math.Max(QuantityOnHand, 0);
+        AverageCost = AverageCost is { } average && onShelf > 0
+            ? (onShelf * average + quantity * unitCost) / (onShelf + quantity)
+            : unitCost;
     }
 
     // Stock is allowed to go negative. Deduction runs after the sale has already happened, so

@@ -17,4 +17,11 @@ public enum StockMovementReason
 
     // Raw stock thrown away, recorded by hand: expired, spoiled, dropped, damaged packaging.
     Spoilage = 6,
+
+    // Taken from stock to make a prep item: the flour that went into the dough. A transfer
+    // between stock items, not a cost of sales.
+    ProductionInput = 7,
+
+    // A prep item made: the dough, into stock at what its ingredients cost.
+    ProductionOutput = 8,
 }

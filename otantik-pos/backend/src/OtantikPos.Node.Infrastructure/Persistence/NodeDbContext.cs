@@ -4,10 +4,15 @@ using Otantik.BuildingBlocks;
 using Otantik.SharedKernel.Auditing;
 using Otantik.SharedKernel.Catalog;
 using Otantik.SharedKernel.Orders;
+using OtantikPos.Inventory.Domain.Categories;
+using OtantikPos.Inventory.Domain.Expenses;
+using OtantikPos.Inventory.Domain.Production;
+using OtantikPos.Inventory.Domain.Purchases;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
+using OtantikPos.Inventory.Domain.Suppliers;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Costing;
 using OtantikPos.Node.Infrastructure.DeliverySystem;
@@ -43,11 +48,20 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
 
     public DbSet<RawMaterial> RawMaterials => Set<RawMaterial>();
     public DbSet<Recipe> Recipes => Set<Recipe>();
+    public DbSet<RecipeCategory> RecipeCategories => Set<RecipeCategory>();
     public DbSet<StockMovement> StockMovements => Set<StockMovement>();
     public DbSet<StockCount> StockCounts => Set<StockCount>();
+    public DbSet<PurchaseInvoice> PurchaseInvoices => Set<PurchaseInvoice>();
+    public DbSet<PurchaseInvoiceAttachment> PurchaseInvoiceAttachments => Set<PurchaseInvoiceAttachment>();
+    public DbSet<Supplier> Suppliers => Set<Supplier>();
+    public DbSet<PurchaseCategory> PurchaseCategories => Set<PurchaseCategory>();
+    public DbSet<ExpenseItem> ExpenseItems => Set<ExpenseItem>();
+    public DbSet<PrepRecipe> PrepRecipes => Set<PrepRecipe>();
+    public DbSet<ProductionOrder> ProductionOrders => Set<ProductionOrder>();
     public DbSet<CostingSettings> CostingSettings => Set<CostingSettings>();
     public DbSet<SharedCost> SharedCosts => Set<SharedCost>();
     public DbSet<MonthlyExpenses> MonthlyExpenses => Set<MonthlyExpenses>();
+    public DbSet<ManualSalesSheet> ManualSalesSheets => Set<ManualSalesSheet>();
 
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<PrintJob> PrintJobs => Set<PrintJob>();
@@ -158,6 +172,9 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
             new ConflictException("Someone else changed this at the same time. Reload it and try again.", ex),
         DbUpdateException { InnerException: PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } } =>
             new ConflictException("This conflicts with a record that already exists.", ex),
+        // Removed while another till put it on something: a supplier deleted as an invoice named it.
+        DbUpdateException { InnerException: PostgresException { SqlState: PostgresErrorCodes.ForeignKeyViolation } } =>
+            new ConflictException("It was put to use at the same time. Reload and try again.", ex),
         _ => null,
     };
 }

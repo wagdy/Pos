@@ -1,7 +1,9 @@
 using MediatR;
 using Otantik.BuildingBlocks;
+using OtantikPos.Inventory.Application.Categories;
 using OtantikPos.Inventory.Application.Common;
 using OtantikPos.Inventory.Application.RawMaterials;
+using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
@@ -142,6 +144,7 @@ internal sealed class RecordStockCountCommandHandler(
     IStockCountRepository counts,
     IRawMaterialRepository materials,
     IStockMovementRepository movements,
+    IPurchaseCategoryRepository categories,
     IUnitOfWork unitOfWork) : IRequestHandler<RecordStockCountCommand, IReadOnlyList<RawMaterialDto>>
 {
     public async Task<IReadOnlyList<RawMaterialDto>> Handle(RecordStockCountCommand request, CancellationToken cancellationToken)
@@ -160,6 +163,6 @@ internal sealed class RecordStockCountCommandHandler(
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
-        return byId.Values.Select(RawMaterialDto.From).ToList();
+        return await categories.DtosAsync(byId.Values, cancellationToken);
     }
 }

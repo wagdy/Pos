@@ -27,6 +27,7 @@ const rows: Row[] = [
   { label: 'Occupation cost', ar: 'تكلفة الإشغال', value: (c) => c.occupationCost, indent: true },
   { label: 'Interest', ar: 'الفوائد', value: (c) => c.interest, indent: true },
   { label: 'Depreciation', ar: 'الإهلاك', value: (c) => c.depreciation, indent: true },
+  { label: 'Other fixed costs', ar: 'تكاليف ثابتة أخرى', value: (c) => c.otherFixedCosts, indent: true },
   { label: 'Total fixed costs', ar: 'إجمالي التكاليف الثابتة', value: (c) => c.totalFixedCosts, strong: true },
   { label: 'Restaurant profit', ar: 'ربح المطعم', value: (c) => c.restaurantProfit, strong: true, profit: true },
 ];
@@ -115,6 +116,22 @@ const chart = { width: 680, height: 320, left: 78, right: 16, top: 16, bottom: 4
           </tbody>
         </table>
       </div>
+      @if (s.controllableFromInvoices || s.occupationFromInvoices || s.otherFixedCosts) {
+        <p class="note invoices">
+          From purchase invoices, at a year's pace:
+          @if (s.controllableFromInvoices) {
+            <strong>{{ s.controllableFromInvoices | money }}</strong> of the controllable costs;
+          }
+          @if (s.occupationFromInvoices) {
+            <strong>{{ s.occupationFromInvoices | money }}</strong> of the occupation cost;
+          }
+          @if (s.otherFixedCosts) {
+            all <strong>{{ s.otherFixedCosts | money }}</strong> of the other fixed costs;
+          }
+          the rest is what is entered on the KPIs tab. Each expense counts on its category's line.
+          <span class="inline-ar">المصروفات المسجلة في فواتير المشتريات.</span>
+        </p>
+      }
 
       <section class="chart">
         <h3>Break-even chart <span class="inline-ar">رسم نقطة التعادل</span></h3>
@@ -327,6 +344,7 @@ export class BreakEvenPage {
       occupationCost: sheet.occupationCost,
       interest: sheet.interest,
       depreciation: sheet.depreciation,
+      otherFixedCosts: sheet.otherFixedCosts,
       totalFixedCosts: sheet.totalFixedCosts,
       restaurantProfit: sheet.restaurantProfit,
     };

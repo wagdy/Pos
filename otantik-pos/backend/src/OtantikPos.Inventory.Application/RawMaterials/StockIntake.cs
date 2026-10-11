@@ -1,5 +1,8 @@
 using MediatR;
 using Otantik.BuildingBlocks;
+using OtantikPos.Inventory.Application.Categories;
+using OtantikPos.Inventory.Domain.Categories;
+using OtantikPos.Inventory.Domain.Purchases;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.StockMovements;
 
@@ -10,7 +13,7 @@ namespace OtantikPos.Inventory.Application.RawMaterials;
 // same id again. The second request finds the movements already posted and changes nothing,
 // so a delivery is never booked twice.
 
-public sealed record ReceivePurchaseCommand(Guid PurchaseId, IReadOnlyList<PurchaseLine> Lines)
+public sealed record ReceivePurchaseCommand(Guid PurchaseId, IReadOnlyList<PurchaseLine> Lines, string RecordedBy = "")
     : IRequest<IReadOnlyList<RawMaterialDto>>, IRetryOnConflict;
 
 // Quantity in the material's own unit (grams, millilitres, pieces). Cost: what the line cost in
@@ -19,23 +22,37 @@ public sealed record PurchaseLine(Guid RawMaterialId, decimal Quantity, decimal?
 
 internal sealed class ReceivePurchaseCommandHandler(
     IRawMaterialRepository materials,
+    IPurchaseInvoiceRepository invoices,
     IStockMovementRepository movements,
+    IPurchaseCategoryRepository categories,
     IUnitOfWork unitOfWork) : IRequestHandler<ReceivePurchaseCommand, IReadOnlyList<RawMaterialDto>>
 {
+    private static readonly IReadOnlyDictionary<UnitOfMeasure, string> UnitLabels =
+        new Dictionary<UnitOfMeasure, string> { [UnitOfMeasure.Gram] = "g", [UnitOfMeasure.Millilitre] = "ml", [UnitOfMeasure.Piece] = "pc" };
+
+    // A delivery in one request, filed as a posted invoice in the materials' own units, so the
+    // invoices' history has it too. One booked before invoices were kept has movements and no
+    // invoice: a retry of it changes nothing either.
     public async Task<IReadOnlyList<RawMaterialDto>> Handle(ReceivePurchaseCommand request, CancellationToken cancellationToken)
     {
         var byId = await materials.GetRequiredByIdsAsync(
             request.Lines.Select(l => l.RawMaterialId).ToList(), cancellationToken);
 
-        if (!await movements.ExistsAsync(request.PurchaseId, StockMovementReason.Purchase, cancellationToken))
+        if (await invoices.GetByIdAsync(request.PurchaseId, cancellationToken) is null
+            && !await movements.ExistsAsync(request.PurchaseId, StockMovementReason.Purchase, cancellationToken))
         {
-            foreach (var line in request.Lines)
-                movements.Add(byId[line.RawMaterialId].ReceivePurchase(line.Quantity, request.PurchaseId, line.Cost));
+            var invoice = new PurchaseInvoice(request.PurchaseId, request.RecordedBy);
+            invoice.Record(null, null, null, request.Lines
+                .Select(l => new PurchaseInvoiceLineEntry(l.RawMaterialId, l.Quantity, UnitLabels[byId[l.RawMaterialId].Unit], 1, l.Cost))
+                .ToList());
+            invoices.Add(invoice);
+            foreach (var movement in invoice.Post(byId, request.RecordedBy))
+                movements.Add(movement);
 
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
-        return byId.Values.Select(RawMaterialDto.From).ToList();
+        return await categories.DtosAsync(byId.Values, cancellationToken);
     }
 }
 
@@ -50,6 +67,7 @@ public sealed record SpoilageLine(Guid RawMaterialId, decimal Quantity, string R
 internal sealed class RecordSpoilageCommandHandler(
     IRawMaterialRepository materials,
     IStockMovementRepository movements,
+    IPurchaseCategoryRepository categories,
     IUnitOfWork unitOfWork) : IRequestHandler<RecordSpoilageCommand, IReadOnlyList<RawMaterialDto>>
 {
     public async Task<IReadOnlyList<RawMaterialDto>> Handle(RecordSpoilageCommand request, CancellationToken cancellationToken)
@@ -65,6 +83,6 @@ internal sealed class RecordSpoilageCommandHandler(
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
-        return byId.Values.Select(RawMaterialDto.From).ToList();
+        return await categories.DtosAsync(byId.Values, cancellationToken);
     }
 }

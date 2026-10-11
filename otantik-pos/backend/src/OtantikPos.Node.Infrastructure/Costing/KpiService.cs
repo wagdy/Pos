@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Otantik.BuildingBlocks;
 using Otantik.SharedKernel.Orders;
+using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Persistence;
@@ -44,13 +45,22 @@ public sealed record MonthStatement(
     decimal CountDifferences,
     decimal CostOfSales,
     decimal GrossProfit,
+    // As entered for the month: wages, and what is paid without a purchase invoice.
     decimal? WagesAndBenefits,
     decimal? OtherControllableCosts,
     decimal? OccupationCost,
     decimal? Interest,
     decimal? Depreciation,
     // Null until the wages are in: without them a net profit would flatter.
-    decimal? NetProfit);
+    decimal? NetProfit,
+    // Expense items on the month's posted purchase invoices, on the line each category says,
+    // added to what is entered above; and each category's part.
+    decimal LoggedControllableCosts = 0,
+    decimal LoggedOccupationCost = 0,
+    decimal LoggedOtherFixedCosts = 0,
+    IReadOnlyList<LoggedExpense>? LoggedExpenses = null,
+    // Every overhead: wages, controllable, occupation, other fixed, interest and depreciation.
+    decimal TotalExpenses = 0);
 
 public sealed record MonthlyExpensesDto(
     decimal? WagesAndBenefits,
@@ -64,7 +74,7 @@ public sealed record MonthlyExpensesDto(
 
 // The template's item profitability: selling price − ingredient cost, over what was sold.
 public sealed record ItemProfit(
-    string ItemCode, string MenuItem, string? MenuItemAr, string Category, bool Beverage, int QuantitySold,
+    string ItemCode, string MenuItem, string? MenuItemAr, string Category, bool Beverage, decimal QuantitySold,
     decimal NetSales, decimal? Cost, decimal? Profit, decimal? ProfitPerUnit, decimal? MarginPercent);
 
 public sealed record KpiReport(
@@ -84,7 +94,7 @@ public sealed record KpiReport(
 // Pillar 4: the template's financial KPIs for a business month. Sales and recipe costs come
 // from the till; losses from the stock ledger; wages, hours and overheads from what the manager
 // enters for the month.
-public sealed class KpiService(NodeDbContext db, RestaurantClock clock, CostingService costing, SalesLedger ledger)
+public sealed class KpiService(NodeDbContext db, RestaurantClock clock, CostingService costing, SalesLedger ledger, PurchaseSpendingService spending)
 {
     // The template's healthy ranges.
     private static readonly (decimal From, decimal To) FoodCostRange = (28, 35);
@@ -159,9 +169,15 @@ public sealed class KpiService(NodeDbContext db, RestaurantClock clock, CostingS
 
         var expenses = await db.MonthlyExpenses.AsNoTracking().SingleOrDefaultAsync(e => e.Year == year && e.Month == month, cancellationToken);
         var wages = expenses?.WagesAndBenefits;
-        decimal? netProfit = wages is { } w
-            ? grossProfit - w - (expenses!.OtherControllableCosts ?? 0) - (expenses.OccupationCost ?? 0) - (expenses.Interest ?? 0) - (expenses.Depreciation ?? 0)
-            : null;
+        // The month's expense invoices, on top of what is entered: an electricity bill logged as a
+        // purchase is not typed in again.
+        var logged = await spending.LoggedExpensesAsync(theoretical.From, theoretical.To, cancellationToken);
+        decimal Logged(ExpenseLine line) => Money(logged.Where(e => e.ExpenseLine == line).Sum(e => e.Amount));
+        var (loggedControllable, loggedOccupation, loggedOtherFixed) =
+            (Logged(ExpenseLine.Controllable), Logged(ExpenseLine.Occupation), Logged(ExpenseLine.OtherFixed));
+        var totalExpenses = (wages ?? 0) + (expenses?.OtherControllableCosts ?? 0) + (expenses?.OccupationCost ?? 0)
+            + (expenses?.Interest ?? 0) + (expenses?.Depreciation ?? 0) + loggedControllable + loggedOccupation + loggedOtherFixed;
+        decimal? netProfit = wages is not null ? grossProfit - totalExpenses : null;
 
         decimal? Share(decimal part, decimal whole) => whole > 0 ? Percent(part / whole) : null;
         var kpis = new List<Kpi>
@@ -204,7 +220,7 @@ public sealed class KpiService(NodeDbContext db, RestaurantClock clock, CostingS
                 Money(foodRecipe), Money(drinksRecipe), kitchenWaste, spoilage, countDifferences,
                 Money(costOfSales), Money(grossProfit),
                 wages, expenses?.OtherControllableCosts, expenses?.OccupationCost, expenses?.Interest, expenses?.Depreciation,
-                Money(netProfit)),
+                Money(netProfit), loggedControllable, loggedOccupation, loggedOtherFixed, logged, Money(totalExpenses)),
             ToDto(expenses), kpis, items,
             withoutRecipe.Count, withoutRecipe.Sum(r => r.NetSales));
     }

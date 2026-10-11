@@ -11,10 +11,15 @@ using Otantik.SharedKernel.Customers;
 using Otantik.SharedKernel.Identity;
 using Otantik.SharedKernel.Orders;
 using OtantikPos.Inventory.Application;
+using OtantikPos.Inventory.Domain.Categories;
+using OtantikPos.Inventory.Domain.Expenses;
+using OtantikPos.Inventory.Domain.Production;
+using OtantikPos.Inventory.Domain.Purchases;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
+using OtantikPos.Inventory.Domain.Suppliers;
 using OtantikPos.Ordering.Application;
 using OtantikPos.Ordering.Application.Catalog;
 using OtantikPos.Ordering.Application.Ports;
@@ -63,8 +68,16 @@ public sealed class TestPos
         services.AddSingleton<IUnitOfWork>(new UnitOfWork(this));
         services.AddSingleton<IRawMaterialRepository>(Inventory);
         services.AddSingleton<IRecipeRepository>(Inventory.Recipes);
+        services.AddSingleton<IRecipeCategoryRepository>(Inventory.RecipeCategories);
         services.AddSingleton<IStockMovementRepository>(Inventory.Movements);
         services.AddSingleton<IStockCountRepository>(Inventory.Counts);
+        services.AddSingleton<IPurchaseInvoiceRepository>(Inventory.Invoices);
+        services.AddSingleton<IPurchaseAttachmentStore>(Inventory.Invoices);
+        services.AddSingleton<ISupplierRepository>(Inventory.Suppliers);
+        services.AddSingleton<IPurchaseCategoryRepository>(Inventory.PurchaseCategories);
+        services.AddSingleton<IExpenseItemRepository>(Inventory.ExpenseItems);
+        services.AddSingleton<IPrepRecipeRepository>(Inventory.PrepRecipes);
+        services.AddSingleton<IProductionOrderRepository>(Inventory.Production);
 
         _services = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }
@@ -387,8 +400,16 @@ public sealed class InventoryStore : IRawMaterialRepository
     private readonly List<RawMaterial> _materials = new();
 
     public RecipeStore Recipes { get; } = new();
+    public RecipeCategoryStore RecipeCategories { get; } = new();
     public MovementStore Movements { get; } = new();
     public CountStore Counts { get; } = new();
+    public InvoiceStore Invoices { get; } = new();
+    public SupplierStore Suppliers { get; } = new();
+    public ExpenseItemStore ExpenseItems { get; } = new();
+    public PurchaseCategoryStore PurchaseCategories => _purchaseCategories ??= new(this, ExpenseItems);
+    private PurchaseCategoryStore? _purchaseCategories;
+    public PrepRecipeStore PrepRecipes { get; } = new();
+    public ProductionStore Production { get; } = new();
 
     public RawMaterial Stock(string name, UnitOfMeasure unit, decimal onHand)
     {
@@ -411,9 +432,13 @@ public sealed class RecipeStore : IRecipeRepository
 
     public Task<Recipe?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(_recipes.SingleOrDefault(r => r.Id == id));
     public void Add(Recipe aggregate) => _recipes.Add(aggregate);
-    public void Remove(Recipe recipe) => _recipes.Remove(recipe);
-    public Task<Recipe?> GetByTargetAsync(RecipeTarget target, CancellationToken cancellationToken = default) => Task.FromResult(_recipes.SingleOrDefault(r => r.Target == target));
-    public Task<IReadOnlyList<Recipe>> GetByTargetsAsync(IReadOnlyCollection<RecipeTarget> targets, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<Recipe>>(_recipes.Where(r => targets.Contains(r.Target)).ToList());
+    // The ones sales go by: not deleted, and linked to the menu.
+    private IEnumerable<Recipe> Active => _recipes.Where(r => !r.IsDeleted && r.Target is not null);
+    public Task<Recipe?> GetByTargetAsync(RecipeTarget target, CancellationToken cancellationToken = default) => Task.FromResult(Active.SingleOrDefault(r => r.Target == target));
+    public Task<IReadOnlyList<Recipe>> GetByTargetsAsync(IReadOnlyCollection<RecipeTarget> targets, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<Recipe>>(Active.Where(r => targets.Contains(r.Target!.Value)).ToList());
+    public Task<IReadOnlyList<Recipe>> GetInCategoryAsync(Guid categoryId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<Recipe>>(_recipes.Where(r => r.RecipeCategoryId == categoryId).ToList());
+    public Task<IReadOnlyDictionary<Guid, int>> CountByCategoryAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyDictionary<Guid, int>>(_recipes.Where(r => !r.IsDeleted && r.RecipeCategoryId != null).GroupBy(r => r.RecipeCategoryId!.Value).ToDictionary(g => g.Key, g => g.Count()));
 }
 
 public sealed class MovementStore : IStockMovementRepository
@@ -434,4 +459,115 @@ public sealed class CountStore : IStockCountRepository
     public void Remove(StockCount draft) => _counts.Remove(draft);
     public Task<StockCount?> GetDraftAsync(CancellationToken cancellationToken = default) => Task.FromResult(_counts.FirstOrDefault(c => c.Status == StockCountStatus.Draft));
     public Task<IReadOnlyList<StockCount>> GetAllAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<StockCount>>(_counts.ToList());
+}
+
+public sealed class InvoiceStore : IPurchaseInvoiceRepository, IPurchaseAttachmentStore
+{
+    private readonly List<PurchaseInvoice> _invoices = new();
+    private readonly Dictionary<Guid, byte[]> _attachments = new();
+
+    public Task<PurchaseInvoice?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(_invoices.SingleOrDefault(i => i.Id == id));
+    public void Add(PurchaseInvoice aggregate) => _invoices.Add(aggregate);
+    public void Remove(PurchaseInvoice draft) => _invoices.Remove(draft);
+    public Task<IReadOnlyList<PurchaseInvoice>> GetByStatusAsync(PurchaseInvoiceStatus status, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<PurchaseInvoice>>(_invoices.Where(i => i.Status == status).ToList());
+    public Task<IReadOnlyDictionary<Guid, SupplierUse>> GetSupplierUseAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyDictionary<Guid, SupplierUse>>(_invoices.Where(i => i.SupplierId != null).GroupBy(i => i.SupplierId!.Value)
+            .ToDictionary(g => g.Key, g => new SupplierUse(
+                g.Count(), g.Where(i => i.Status == PurchaseInvoiceStatus.Posted).Sum(i => i.Total), g.Max(i => i.PostedAtUtc))));
+    public Task<bool> AnyForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_invoices.Any(i => i.SupplierId == supplierId));
+    public Task<IReadOnlyDictionary<Guid, ExpenseItemUse>> GetExpenseItemUseAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyDictionary<Guid, ExpenseItemUse>>(_invoices
+            .SelectMany(i => i.Lines.Where(l => l.ExpenseItemId != null).Select(l => (Invoice: i, Line: l)))
+            .GroupBy(x => x.Line.ExpenseItemId!.Value)
+            .ToDictionary(g => g.Key, g => new ExpenseItemUse(
+                g.Count(), g.Where(x => x.Invoice.Status == PurchaseInvoiceStatus.Posted).Sum(x => x.Line.Cost ?? 0), g.Max(x => x.Invoice.PostedAtUtc))));
+    public Task<bool> AnyForExpenseItemAsync(Guid expenseItemId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_invoices.Any(i => i.Lines.Any(l => l.ExpenseItemId == expenseItemId)));
+    public void Put(Guid invoiceId, byte[] content) => _attachments[invoiceId] = content;
+    public Task<byte[]?> GetAsync(Guid invoiceId, CancellationToken cancellationToken = default) => Task.FromResult(_attachments.GetValueOrDefault(invoiceId));
+}
+
+public sealed class SupplierStore : ISupplierRepository
+{
+    private readonly List<Supplier> _suppliers = new();
+
+    public Task<Supplier?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(_suppliers.SingleOrDefault(s => s.Id == id));
+    public void Add(Supplier aggregate) => _suppliers.Add(aggregate);
+    public void Remove(Supplier supplier) => _suppliers.Remove(supplier);
+    public Task<IReadOnlyList<Supplier>> GetAllAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<Supplier>>(_suppliers.ToList());
+    public Task<Supplier?> GetByNormalizedNameAsync(string normalizedName, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_suppliers.SingleOrDefault(s => s.NormalizedName == normalizedName));
+}
+
+public sealed class PrepRecipeStore : IPrepRecipeRepository
+{
+    private readonly List<PrepRecipe> _recipes = new();
+
+    public Task<PrepRecipe?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(_recipes.SingleOrDefault(r => r.Id == id));
+    public void Add(PrepRecipe aggregate) => _recipes.Add(aggregate);
+    public Task<IReadOnlyList<PrepRecipe>> GetAllAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PrepRecipe>>(_recipes.ToList());
+}
+
+public sealed class ProductionStore : IProductionOrderRepository
+{
+    private readonly List<ProductionOrder> _orders = new();
+
+    public Task<ProductionOrder?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(_orders.SingleOrDefault(o => o.Id == id));
+    public void Add(ProductionOrder aggregate) => _orders.Add(aggregate);
+    public Task<IReadOnlyList<ProductionOrder>> GetRecentAsync(Guid? prepItemId, int take, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<ProductionOrder>>(_orders.Where(o => prepItemId == null || o.PrepItemId == prepItemId)
+            .OrderByDescending(o => o.ProducedAtUtc).Take(take).ToList());
+}
+
+public sealed class RecipeCategoryStore : IRecipeCategoryRepository
+{
+    private readonly List<RecipeCategory> _categories = new();
+
+    public Task<RecipeCategory?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(_categories.SingleOrDefault(c => c.Id == id));
+    public void Add(RecipeCategory aggregate) => _categories.Add(aggregate);
+    public void Remove(RecipeCategory category) => _categories.Remove(category);
+    public Task<IReadOnlyList<RecipeCategory>> GetAllAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<RecipeCategory>>(_categories.ToList());
+    public Task<RecipeCategory?> GetByNormalizedNameAsync(string normalizedName, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_categories.SingleOrDefault(c => c.NormalizedName == normalizedName));
+}
+
+public sealed class PurchaseCategoryStore : IPurchaseCategoryRepository
+{
+    private readonly List<PurchaseCategory> _categories = new();
+    private readonly InventoryStore _materials;
+    private readonly ExpenseItemStore _expenses;
+
+    public PurchaseCategoryStore(InventoryStore materials, ExpenseItemStore expenses) => (_materials, _expenses) = (materials, expenses);
+
+    public Task<PurchaseCategory?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(_categories.SingleOrDefault(c => c.Id == id));
+    public void Add(PurchaseCategory aggregate) => _categories.Add(aggregate);
+    public void Remove(PurchaseCategory category) => _categories.Remove(category);
+    public Task<IReadOnlyList<PurchaseCategory>> GetAllAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PurchaseCategory>>(_categories.ToList());
+    public Task<PurchaseCategory?> GetByNormalizedNameAsync(string normalizedName, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_categories.SingleOrDefault(c => c.NormalizedName == normalizedName));
+    public async Task<IReadOnlyDictionary<Guid, PurchaseCategoryUse>> GetUseAsync(CancellationToken cancellationToken = default)
+    {
+        var materials = (await _materials.GetAllAsync(cancellationToken)).GroupBy(m => m.CategoryId).ToDictionary(g => g.Key, g => g.Count());
+        var expenses = (await _expenses.GetAllAsync(cancellationToken)).GroupBy(e => e.CategoryId).ToDictionary(g => g.Key, g => g.Count());
+        return materials.Keys.Union(expenses.Keys)
+            .ToDictionary(id => id, id => new PurchaseCategoryUse(materials.GetValueOrDefault(id), expenses.GetValueOrDefault(id)));
+    }
+}
+
+public sealed class ExpenseItemStore : IExpenseItemRepository
+{
+    private readonly List<ExpenseItem> _items = new();
+
+    public Task<ExpenseItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(_items.SingleOrDefault(e => e.Id == id));
+    public void Add(ExpenseItem aggregate) => _items.Add(aggregate);
+    public void Remove(ExpenseItem item) => _items.Remove(item);
+    public Task<IReadOnlyList<ExpenseItem>> GetAllAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ExpenseItem>>(_items.ToList());
+    public Task<IReadOnlyList<ExpenseItem>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<ExpenseItem>>(_items.Where(e => ids.Contains(e.Id)).ToList());
+    public Task<IReadOnlyList<ExpenseItem>> GetInCategoryAsync(Guid categoryId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<ExpenseItem>>(_items.Where(e => e.CategoryId == categoryId).ToList());
+    public Task<ExpenseItem?> GetByNormalizedNameAsync(string normalizedName, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_items.SingleOrDefault(e => e.NormalizedName == normalizedName));
 }

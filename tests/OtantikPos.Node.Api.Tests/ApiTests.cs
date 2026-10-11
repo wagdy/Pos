@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -76,6 +77,273 @@ public class ApiTests
         Assert.DoesNotContain((await anonymous.GetFromJsonAsync<List<SignInOption>>("/api/auth/staff", TestApi.Json, Cancel))!, s => s.Id == "staff-captain");
         var captain = await anonymous.PostAsJsonAsync("/api/auth/sign-in", new SignInRequest("staff-captain", "1357"), Cancel);
         Assert.Equal(HttpStatusCode.Unauthorized, captain.StatusCode);
+    }
+
+    // An invoice's paper goes up as a file from the review screen and comes back as it went:
+    // shown in the browser, or downloaded under its name. A manager's only.
+    [Fact]
+    public async Task An_invoice_photo_is_uploaded_and_read_back_by_a_manager_only()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var cashier = await api.CashierAsync(manager);
+        var invoiceId = Guid.NewGuid();
+        byte[] jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4];
+
+        MultipartFormDataContent Upload(byte[] bytes, string type)
+        {
+            var file = new ByteArrayContent(bytes);
+            file.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(type);
+            return new MultipartFormDataContent { { file, "file", "receipt.jpg" } };
+        }
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PutAsync($"/api/inventory/purchase-invoices/{invoiceId}/attachment", Upload(jpeg, "image/jpeg"), Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync("/api/inventory/purchase-invoices", Cancel)).StatusCode);
+
+        var refused = await manager.PutAsync($"/api/inventory/purchase-invoices/{invoiceId}/attachment", Upload([1, 2, 3], "image/jpeg"), Cancel);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, refused.StatusCode);
+        (await manager.PutAsync($"/api/inventory/purchase-invoices/{invoiceId}/attachment", Upload(jpeg, "image/jpeg"), Cancel)).EnsureSuccessStatusCode();
+
+        var shown = await manager.GetAsync($"/api/inventory/purchase-invoices/{invoiceId}/attachment", Cancel);
+        Assert.Equal(("image/jpeg", "nosniff"), (shown.Content.Headers.ContentType!.MediaType, shown.Headers.GetValues("X-Content-Type-Options").Single()));
+        Assert.Equal(jpeg, await shown.Content.ReadAsByteArrayAsync(Cancel));
+        var downloaded = await manager.GetAsync($"/api/inventory/purchase-invoices/{invoiceId}/attachment?download=true", Cancel);
+        Assert.Equal("receipt.jpg", downloaded.Content.Headers.ContentDisposition!.FileName);
+    }
+
+    // The suppliers screen: a manager's. Deleting answers whether the supplier went or was
+    // archived, which it is when an invoice has it.
+    [Fact]
+    public async Task Suppliers_are_kept_by_a_manager_and_archived_once_invoiced()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var cashier = await api.CashierAsync(manager);
+        var nileFarms = Guid.NewGuid();
+        var deltaOils = Guid.NewGuid();
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync("/api/inventory/suppliers", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PutAsJsonAsync($"/api/inventory/suppliers/{nileFarms}", new { name = "Nile Farms" }, Cancel)).StatusCode);
+
+        (await manager.PutAsJsonAsync($"/api/inventory/suppliers/{nileFarms}", new { name = "Nile Farms", phone = "0100 123 4567" }, Cancel)).EnsureSuccessStatusCode();
+        (await manager.PutAsJsonAsync($"/api/inventory/suppliers/{deltaOils}", new { name = "Delta Oils" }, Cancel)).EnsureSuccessStatusCode();
+        var twice = await manager.PutAsJsonAsync($"/api/inventory/suppliers/{Guid.NewGuid()}", new { name = "NILE FARMS" }, Cancel);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, twice.StatusCode);
+
+        // On an invoice through the screens' own request.
+        (await manager.PutAsJsonAsync($"/api/inventory/purchase-invoices/{Guid.NewGuid()}",
+            new { supplierId = nileFarms, supplierInvoiceNumber = "F-1", invoiceDate = (string?)null, lines = Array.Empty<object>() }, Cancel)).EnsureSuccessStatusCode();
+
+        async Task<string> Delete(Guid id) =>
+            (await (await manager.DeleteAsync($"/api/inventory/suppliers/{id}", Cancel)).Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(Cancel)).GetProperty("outcome").GetString()!;
+        Assert.Equal("Deleted", await Delete(deltaOils));
+        Assert.Equal("Archived", await Delete(nileFarms));
+
+        async Task<string[]> Names(string query) =>
+            (await manager.GetFromJsonAsync<System.Text.Json.JsonElement[]>($"/api/inventory/suppliers{query}", Cancel))!.Select(s => s.GetProperty("name").GetString()!).ToArray();
+        Assert.Empty(await Names(""));
+        Assert.Equal(["Nile Farms"], await Names("?includeArchived=true"));
+
+        (await manager.PostAsync($"/api/inventory/suppliers/{nileFarms}/restore", null, Cancel)).EnsureSuccessStatusCode();
+        Assert.Equal(["Nile Farms"], await Names(""));
+    }
+
+    // Recipes of their own: written, changed, deleted softly and restored by a manager; listed with
+    // their costs to whoever sees the costing.
+    [Fact]
+    public async Task Recipes_are_created_edited_and_deleted_softly_by_a_manager()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var cashier = await api.CashierAsync(manager);
+
+        async Task<System.Text.Json.JsonElement> Json(HttpResponseMessage response)
+        {
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(Cancel);
+        }
+        var patty = (await Json(await manager.PostAsJsonAsync("/api/inventory/raw-materials",
+            new { name = "Beef patty", unit = "Piece", reorderLevel = 0, purchaseUnit = "piece", purchaseUnitSize = 1, costPerPurchaseUnit = 20 }, Cancel)))
+            .GetProperty("id").GetGuid();
+
+        // The kitchen's own categories: a manager's to keep.
+        var trials = Guid.NewGuid();
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PutAsJsonAsync($"/api/inventory/recipe-categories/{trials}", new { name = "R&D" }, Cancel)).StatusCode);
+        await Json(await manager.PutAsJsonAsync($"/api/inventory/recipe-categories/{trials}", new { name = "R&D", nameAr = "تجارب" }, Cancel));
+        var mains = Guid.NewGuid();
+        await Json(await manager.PutAsJsonAsync($"/api/inventory/recipe-categories/{mains}", new { name = "Mains" }, Cancel));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity,
+            (await manager.PutAsJsonAsync($"/api/inventory/recipe-categories/{Guid.NewGuid()}", new { name = " r&d " }, Cancel)).StatusCode);
+
+        var body = new
+        {
+            name = "Smash burger trial",
+            targetKind = (string?)null,
+            catalogItemId = (int?)null,
+            variantId = (int?)null,
+            portions = 2,
+            ingredients = new[] { new { rawMaterialId = patty, quantity = 3, yieldPercent = 100 } },
+            recipeCategoryId = (Guid?)trials,
+            plannedPrice = 120,
+        };
+        // A recipe written here is in a category.
+        Assert.Equal(HttpStatusCode.UnprocessableEntity,
+            (await manager.PostAsJsonAsync("/api/inventory/recipes", body with { recipeCategoryId = (Guid?)null }, Cancel)).StatusCode);
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PostAsJsonAsync("/api/inventory/recipes", body, Cancel)).StatusCode);
+        var created = await Json(await manager.PostAsJsonAsync("/api/inventory/recipes", body, Cancel));
+        var id = created.GetProperty("id").GetGuid();
+        Assert.Equal(JsonValueKind.Null, created.GetProperty("targetKind").ValueKind);
+
+        // 3 patties for 2 portions: 30 a portion, 25% of the planned 120.
+        var card = await Json(await manager.GetAsync($"/api/costing/recipes/{id}", Cancel));
+        Assert.Equal((true, 30m, 25m), (card.GetProperty("isStandalone").GetBoolean(), card.GetProperty("costPerPortion").GetDecimal(), card.GetProperty("foodCostPercentActual").GetDecimal()));
+
+        (await manager.PutAsJsonAsync($"/api/inventory/recipes/{id}", body with { portions = 3 }, Cancel)).EnsureSuccessStatusCode();
+        Assert.Equal(20m, (await Json(await manager.GetAsync($"/api/costing/recipes/{id}", Cancel))).GetProperty("costPerPortion").GetDecimal());
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.DeleteAsync($"/api/inventory/recipes/{id}", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await manager.DeleteAsync($"/api/inventory/recipes/{id}", Cancel)).StatusCode);
+        Assert.Empty((await Json(await manager.GetAsync("/api/costing/recipes", Cancel))).EnumerateArray());
+        var kept = Assert.Single((await Json(await manager.GetAsync("/api/costing/recipes?includeDeleted=true", Cancel))).EnumerateArray());
+        Assert.True(kept.GetProperty("isDeleted").GetBoolean());
+
+        await Json(await manager.PostAsJsonAsync($"/api/inventory/recipes/{id}/restore", new { name = (string?)null }, Cancel));
+        var listed = Assert.Single((await Json(await manager.GetAsync("/api/costing/recipes", Cancel))).EnumerateArray());
+        Assert.Equal("R&D", listed.GetProperty("recipeCategory").GetString());
+
+        // R&D holds a recipe: deleted only with somewhere for it to go.
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await manager.DeleteAsync($"/api/inventory/recipe-categories/{trials}", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await manager.DeleteAsync($"/api/inventory/recipe-categories/{trials}?moveTo={mains}", Cancel)).StatusCode);
+        var categories = (await Json(await manager.GetAsync("/api/inventory/recipe-categories", Cancel))).EnumerateArray().ToList();
+        Assert.Equal([("Mains", 1)], categories.Select(c => (c.GetProperty("name").GetString(), c.GetProperty("recipes").GetInt32())));
+
+        // The month's theoretical cost from quantities typed in, kept for the month: a manager's,
+        // as costs are on it.
+        var sheet = new { lines = new[] { new { kind = "Recipe", itemId = id, quantity = 6m } } };
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync("/api/costing/manual-sales/2026/10", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PutAsJsonAsync("/api/costing/manual-sales/2026/10", sheet, Cancel)).StatusCode);
+        var listedForSales = Assert.Single((await Json(await manager.GetAsync("/api/costing/manual-sales/2026/10", Cancel))).GetProperty("items").EnumerateArray());
+        Assert.Equal(("Recipe", "Mains"), (listedForSales.GetProperty("kind").GetString(), listedForSales.GetProperty("group").GetString()));
+        // 6 at 20 against 6 at the planned 120.
+        var typed = await Json(await manager.PutAsJsonAsync("/api/costing/manual-sales/2026/10", sheet, Cancel));
+        Assert.Equal(("Manual", 120m, 720m), (typed.GetProperty("source").GetString(), typed.GetProperty("theoreticalCost").GetDecimal(), typed.GetProperty("netSales").GetDecimal()));
+        var report = await Json(await manager.GetAsync("/api/costing/theoretical?year=2026&month=10&source=Manual", Cancel));
+        Assert.Equal((6m, "Manual"), (report.GetProperty("quantitySold").GetDecimal(), report.GetProperty("source").GetString()));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity,
+            (await manager.PutAsJsonAsync("/api/costing/manual-sales/2026/10", new { lines = new[] { new { kind = "Recipe", itemId = id, quantity = 0.5m } } }, Cancel)).StatusCode);
+        Assert.Equal("Pos", (await Json(await manager.GetAsync("/api/costing/theoretical?year=2026&month=10", Cancel))).GetProperty("source").GetString());
+    }
+
+    // Purchase categories and expense items through the screens' own requests: who may change
+    // them, an invoice carrying both kinds of line, and where its expenses land.
+    [Fact]
+    public async Task Expenses_are_bought_beside_stock_and_added_up_by_category()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var cashier = await api.CashierAsync(manager);
+        var utilities = Guid.NewGuid();
+        var dairy = Guid.NewGuid();
+        var electricity = Guid.NewGuid();
+
+        async Task<System.Text.Json.JsonElement> Json(HttpResponseMessage response)
+        {
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(Cancel);
+        }
+
+        // Anyone who sees stock sees how it is grouped; changing it, and the expenses, are a manager's.
+        var listed = await Json(await cashier.GetAsync("/api/inventory/purchase-categories", Cancel));
+        Assert.Equal("General", listed[0].GetProperty("name").GetString());
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PutAsJsonAsync($"/api/inventory/purchase-categories/{utilities}", new { name = "Utilities" }, Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync("/api/inventory/expense-items", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync("/api/costing/purchases/spending?from=2026-10-01&to=2026-10-31", Cancel)).StatusCode);
+
+        var saved = await Json(await manager.PutAsJsonAsync($"/api/inventory/purchase-categories/{utilities}",
+            new { name = "Utilities", nameAr = "مرافق", expenseLine = "Controllable" }, Cancel));
+        Assert.Equal("Controllable", saved.GetProperty("expenseLine").GetString());
+        await Json(await manager.PutAsJsonAsync($"/api/inventory/purchase-categories/{dairy}", new { name = "Dairy" }, Cancel));
+        await Json(await manager.PutAsJsonAsync($"/api/inventory/expense-items/{electricity}", new { name = "Electricity", categoryId = utilities }, Cancel));
+        var milk = await Json(await manager.PostAsJsonAsync("/api/inventory/raw-materials",
+            new { name = "Milk", unit = "Millilitre", categoryId = dairy, purchaseUnit = "L", purchaseUnitSize = 1000 }, Cancel));
+        Assert.Equal("Dairy", milk.GetProperty("category").GetString());
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.DeleteAsync($"/api/inventory/purchase-categories/{dairy}?moveTo={utilities}", Cancel)).StatusCode);
+
+        var invoiceId = Guid.NewGuid();
+        var invoice = await Json(await manager.PutAsJsonAsync($"/api/inventory/purchase-invoices/{invoiceId}", new
+        {
+            supplierId = (Guid?)null,
+            supplierInvoiceNumber = "B-1",
+            invoiceDate = "2026-10-05",
+            lines = new object[]
+            {
+                new { rawMaterialId = milk.GetProperty("id").GetGuid(), enteredQuantity = 2, unitLabel = "L", unitSize = 1000, cost = 60 },
+                new { itemType = "Expense", expenseItemId = electricity, enteredQuantity = 1, unitSize = 1, cost = 1_200 },
+            },
+        }, Cancel));
+        Assert.Equal((60m, 1_200m), (invoice.GetProperty("inventoryTotal").GetDecimal(), invoice.GetProperty("expenseTotal").GetDecimal()));
+        Assert.Equal(["Inventory", "Expense"], invoice.GetProperty("lines").EnumerateArray().Select(l => l.GetProperty("itemType").GetString()));
+        await Json(await manager.PostAsync($"/api/inventory/purchase-invoices/{invoiceId}/post", null, Cancel));
+
+        var spending = await Json(await manager.GetAsync("/api/costing/purchases/spending?from=2026-10-01&to=2026-10-31", Cancel));
+        Assert.Equal((1_260m, 1_200m), (spending.GetProperty("total").GetDecimal(), spending.GetProperty("expenses").GetDecimal()));
+        Assert.Equal(["Utilities", "Dairy"], spending.GetProperty("categories").EnumerateArray().Select(c => c.GetProperty("category").GetString()));
+        var statement = (await Json(await manager.GetAsync("/api/costing/kpis?year=2026&month=10", Cancel))).GetProperty("statement");
+        Assert.Equal(1_200m, statement.GetProperty("loggedControllableCosts").GetDecimal());
+
+        // Dairy holds the milk: deleted only by moving it.
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await manager.DeleteAsync($"/api/inventory/purchase-categories/{dairy}", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await manager.DeleteAsync($"/api/inventory/purchase-categories/{dairy}?moveTo={utilities}", Cancel)).StatusCode);
+        Assert.Equal("Archived", (await Json(await manager.DeleteAsync($"/api/inventory/expense-items/{electricity}", Cancel))).GetProperty("outcome").GetString());
+    }
+
+    // Prep items and production orders: a manager's, as costs are on them. A batch is made under
+    // the id the till sends, once.
+    [Fact]
+    public async Task Prep_items_are_made_by_a_manager_through_production_orders()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var cashier = await api.CashierAsync(manager);
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync("/api/inventory/prep-items", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync("/api/inventory/production-orders", Cancel)).StatusCode);
+
+        async Task<System.Text.Json.JsonElement> Json(HttpResponseMessage response)
+        {
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(Cancel);
+        }
+        var flour = (await Json(await manager.PostAsJsonAsync("/api/inventory/raw-materials",
+            new { name = "Flour", unit = "Gram", reorderLevel = 0, purchaseUnit = "kg", purchaseUnitSize = 1000, costPerPurchaseUnit = 20 }, Cancel)))
+            .GetProperty("id").GetGuid();
+        var dough = await Json(await manager.PostAsJsonAsync("/api/inventory/prep-items", new
+        {
+            name = "Pizza dough",
+            unit = "Gram",
+            batchQuantity = 10_000,
+            displayUnit = "kg",
+            displayUnitSize = 1000,
+            ingredients = new[] { new { rawMaterialId = flour, quantity = 6_000 } },
+        }, Cancel));
+        var doughId = dough.GetProperty("id").GetGuid();
+        Assert.Equal(12m, dough.GetProperty("standardCostPerDisplayUnit").GetDecimal());
+
+        var preview = await Json(await manager.GetAsync($"/api/inventory/production-orders/preview?prepItemId={doughId}&planned=5000&produced=4800", Cancel));
+        Assert.Equal((60m, 12.5m), (preview.GetProperty("totalCost").GetDecimal(), preview.GetProperty("unitCostPerDisplayUnit").GetDecimal()));
+        Assert.Equal(["Flour"], preview.GetProperty("shortages").EnumerateArray().Select(s => s.GetString()));
+
+        var orderId = Guid.NewGuid();
+        var body = new { prepItemId = doughId, plannedQuantity = 5_000, producedQuantity = 4_800, notes = "Lunch prep" };
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PutAsJsonAsync($"/api/inventory/production-orders/{orderId}", body, Cancel)).StatusCode);
+        var made = await Json(await manager.PutAsJsonAsync($"/api/inventory/production-orders/{orderId}", body, Cancel));
+        await Json(await manager.PutAsJsonAsync($"/api/inventory/production-orders/{orderId}", body, Cancel));
+        Assert.Equal((60m, 4_800m), (made.GetProperty("totalCost").GetDecimal(), made.GetProperty("producedQuantity").GetDecimal()));
+
+        var profile = await Json(await manager.GetAsync($"/api/inventory/prep-items/{doughId}", Cancel));
+        Assert.Equal((4_800m, 12.5m), (profile.GetProperty("quantityOnHand").GetDecimal(), profile.GetProperty("averageCostPerDisplayUnit").GetDecimal()));
+        Assert.Single((await Json(await manager.GetAsync("/api/inventory/production-orders", Cancel))).EnumerateArray());
     }
 
     // Closed by default: a new endpoint that forgets [Authorize] needs a signed-in user anyway,

@@ -15,7 +15,8 @@ public static class StockRequirements
     // base portion plus a tray.
     public static IReadOnlyDictionary<Guid, decimal> For(SoldItem item, IReadOnlyCollection<Recipe> recipes)
     {
-        var byTarget = recipes.ToDictionary(r => r.Target);
+        // Only the active recipes on the menu take stock: one per target.
+        var byTarget = recipes.Where(r => !r.IsDeleted && r.Target is not null).ToDictionary(r => r.Target!.Value);
         var totals = new Dictionary<Guid, decimal>();
 
         var main = item.VariantId is { } variantId && byTarget.TryGetValue(RecipeTarget.ForVariant(item.MenuItemId, variantId), out var forVariant)

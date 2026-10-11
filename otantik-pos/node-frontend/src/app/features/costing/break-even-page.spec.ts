@@ -26,6 +26,9 @@ const template: BreakEvenWorksheet = {
   breakEvenWeeklySales: 24056,
   monthsWithoutCosts: [],
   scenarios: [],
+  otherFixedCosts: 0,
+  controllableFromInvoices: 0,
+  occupationFromInvoices: 0,
 };
 
 describe('the break-even worksheet', () => {

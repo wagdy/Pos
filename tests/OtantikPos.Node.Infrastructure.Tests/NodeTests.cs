@@ -1,15 +1,23 @@
 using MediatR;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Otantik.BuildingBlocks;
 using Otantik.SharedKernel.Catalog;
 using Otantik.SharedKernel.Identity;
 using Otantik.SharedKernel.Orders;
+using OtantikPos.Inventory.Application.Categories;
+using OtantikPos.Inventory.Application.Expenses;
 using OtantikPos.Inventory.Application.RawMaterials;
+using OtantikPos.Inventory.Application.Production;
+using OtantikPos.Inventory.Application.Purchases;
 using OtantikPos.Inventory.Application.Recipes;
 using OtantikPos.Inventory.Application.StockCounts;
+using OtantikPos.Inventory.Application.Suppliers;
+using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.RawMaterials;
+using OtantikPos.Inventory.Domain.Purchases;
 using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
@@ -438,6 +446,636 @@ public class NodeTests
         node.Cloud.OnlineOrdersOffered = true;
         await sync.SyncAsync(ct);
         Assert.Equal(0, await node.Db(db => db.OnlineSales.CountAsync()));
+    }
+
+    // The same through the database, which keeps a unit cost to six places: what the costing
+    // screens show for 5 kg at L.E 100 and 2,500 g at L.E 62.50 is right to the cent.
+    [Fact]
+    public async Task Purchases_in_kilograms_and_grams_cost_out_to_the_cent()
+    {
+        await using var node = await TestNode.StartAsync();
+        var ct = TestContext.Current.CancellationToken;
+        var tomatoes = (await node.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram))).Id;
+
+        await node.Send(new ReceivePurchaseCommand(Guid.NewGuid(), [new(tomatoes, 5 * 1000, 100)]));
+        using var scope = node.Scope();
+        var costing = node.Service<CostingService>(scope);
+        var material = Assert.Single(await costing.GetMaterialsAsync(ct));
+        Assert.Equal((5000m, 0.02m, 20m, 100m), (material.QuantityOnHand, material.CostPerUnit, material.CostPerPurchaseUnit, material.StockValue));
+
+        await node.Send(new ReceivePurchaseCommand(Guid.NewGuid(), [new(tomatoes, 2500, 62.50m)]));
+        material = Assert.Single(await costing.GetMaterialsAsync(ct));
+        Assert.Equal((7500m, 21.67m, 162.50m, 25m), (material.QuantityOnHand, material.CostPerPurchaseUnit, material.StockValue, material.LastPurchaseCostPerPurchaseUnit));
+    }
+
+    // A supplier's invoice in two steps: saved as a draft with its details and its paper, which
+    // moves no stock; posted after the review, which does, once. Then it is in the history.
+    [Fact]
+    public async Task An_invoice_is_reviewed_as_a_draft_and_takes_stock_only_when_posted()
+    {
+        await using var node = await TestNode.StartAsync();
+        var ct = TestContext.Current.CancellationToken;
+        var tomatoes = (await node.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram))).Id;
+        Task<decimal> OnHand() => node.Db(db => db.RawMaterials.Where(m => m.Id == tomatoes).Select(m => m.QuantityOnHand).SingleAsync());
+        var invoiceId = Guid.NewGuid();
+        var nileFarms = (await node.Send(new SaveSupplierCommand(Guid.NewGuid(), "Nile Farms"))).Id;
+
+        var draft = await node.Send(new SavePurchaseInvoiceCommand(invoiceId, nileFarms, "F-1001", new DateOnly(2026, 10, 7),
+            [new PurchaseInvoiceLineEntry(tomatoes, 5, "kg", 1000, 100)], "Omar"));
+        Assert.Equal((PurchaseInvoiceStatus.Draft, 100m, 5000m), (draft.Status, draft.Total, draft.Lines.Single().Quantity));
+        Assert.Equal(0m, await OnHand());
+
+        // The paper: a PNG by its first bytes. One that only says it is a PNG is refused.
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new AttachPurchaseInvoiceFileCommand(invoiceId, "x.png", "image/png", [1, 2, 3], "Omar")));
+        var attached = await node.Send(new AttachPurchaseInvoiceFileCommand(invoiceId, "invoice.png", "image/png", png, "Omar"));
+        Assert.Equal(("invoice.png", png.Length), (attached.Attachment!.FileName, attached.Attachment.Bytes));
+
+        Assert.Single(await node.Send(new GetPurchaseInvoicesQuery(PurchaseInvoiceStatus.Draft)));
+        Assert.Empty(await node.Send(new GetPurchaseInvoicesQuery(PurchaseInvoiceStatus.Posted)));
+
+        // Confirmed after the review; confirmed again, as a lost answer would.
+        var posted = await node.Send(new PostPurchaseInvoiceCommand(invoiceId, "Omar"));
+        await node.Send(new PostPurchaseInvoiceCommand(invoiceId, "Omar"));
+        Assert.Equal((PurchaseInvoiceStatus.Posted, "Omar"), (posted.Status, posted.PostedBy));
+        Assert.Equal(5000m, await OnHand());
+        using (var scope = node.Scope())
+        {
+            var material = Assert.Single(await node.Service<CostingService>(scope).GetMaterialsAsync(ct));
+            Assert.Equal((20m, 100m), (material.CostPerPurchaseUnit, material.StockValue));
+        }
+
+        var history = Assert.Single(await node.Send(new GetPurchaseInvoicesQuery(PurchaseInvoiceStatus.Posted)));
+        Assert.Equal(("Nile Farms", "F-1001", 100m, "Omar", "invoice.png", 1), (history.SupplierName, history.SupplierInvoiceNumber, history.Total, history.CreatedBy, history.AttachmentFileName, history.Lines));
+        Assert.Equal(png, (await node.Send(new GetPurchaseInvoiceAttachmentQuery(invoiceId)))!.Content);
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new DiscardPurchaseInvoiceCommand(invoiceId)));
+        var supplier = Assert.Single(await node.Send(new GetSuppliersQuery()));
+        Assert.Equal(("Nile Farms", 1, 100m, posted.PostedAtUtc), (supplier.Name, supplier.Invoices, supplier.PostedTotal, supplier.LastPostedAtUtc));
+
+        // A delivery sent in one request is filed as a posted invoice too, in grams.
+        await node.Send(new ReceivePurchaseCommand(Guid.NewGuid(), [new(tomatoes, 2500, 62.50m)], "Sara"));
+        Assert.Equal(2, (await node.Send(new GetPurchaseInvoicesQuery(PurchaseInvoiceStatus.Posted))).Count);
+        Assert.Equal(7500m, await OnHand());
+    }
+
+    // Suppliers are added, changed, and deleted. One that is on an invoice is archived instead: off
+    // the list for new invoices, still on the ones it is on, and restorable.
+    [Fact]
+    public async Task A_supplier_on_an_invoice_is_archived_rather_than_deleted()
+    {
+        await using var node = await TestNode.StartAsync();
+        var tomatoes = (await node.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram))).Id;
+        Task<IReadOnlyList<SupplierDto>> Suppliers(bool archived = false) => node.Send(new GetSuppliersQuery(archived));
+        PurchaseInvoiceLineEntry[] OneKilo = [new(tomatoes, 1, "kg", 1000, 20)];
+
+        var nileFarms = Guid.NewGuid();
+        await node.Send(new SaveSupplierCommand(nileFarms, "Nile Farms", "Hassan", "0100 123 4567"));
+        var edited = await node.Send(new SaveSupplierCommand(nileFarms, "Nile Farms", "Hassan", "0100 765 4321", "orders@nile.example"));
+        Assert.Equal(("0100 765 4321", "orders@nile.example"), (edited.Phone, edited.Email));
+        var deltaOils = (await node.Send(new SaveSupplierCommand(Guid.NewGuid(), "Delta Oils"))).Id;
+
+        // One name, one supplier: spelt differently, it is still Nile Farms.
+        var twice = await Assert.ThrowsAsync<DomainException>(() => node.Send(new SaveSupplierCommand(Guid.NewGuid(), " nile  FARMS ")));
+        Assert.Equal("Nile Farms is already a supplier.", twice.Message);
+        Assert.Equal(["Delta Oils", "Nile Farms"], (await Suppliers()).Select(s => s.Name));
+
+        // Never invoiced: deleted outright.
+        Assert.Equal(SupplierRemoval.Deleted, (await node.Send(new DeleteSupplierCommand(deltaOils))).Outcome);
+        Assert.Equal(SupplierRemoval.Deleted, (await node.Send(new DeleteSupplierCommand(deltaOils))).Outcome);
+        Assert.Equal(["Nile Farms"], (await Suppliers(archived: true)).Select(s => s.Name));
+
+        // On a posted invoice and a draft: archived.
+        var posted = Guid.NewGuid();
+        await node.Send(new SavePurchaseInvoiceCommand(posted, nileFarms, "F-1", null, OneKilo, "Omar"));
+        await node.Send(new PostPurchaseInvoiceCommand(posted, "Omar"));
+        var draft = Guid.NewGuid();
+        await node.Send(new SavePurchaseInvoiceCommand(draft, nileFarms, "F-2", null, OneKilo, "Omar"));
+        Assert.Equal(SupplierRemoval.Archived, (await node.Send(new DeleteSupplierCommand(nileFarms))).Outcome);
+
+        Assert.Empty(await Suppliers());
+        var archived = Assert.Single(await Suppliers(archived: true));
+        Assert.Equal((true, 2, 20m), (archived.IsArchived, archived.Invoices, archived.PostedTotal));
+        Assert.Equal("Nile Farms", (await node.Send(new GetPurchaseInvoiceQuery(posted)))!.SupplierName);
+        Assert.Equal("Nile Farms", Assert.Single(await node.Send(new GetPurchaseInvoicesQuery(PurchaseInvoiceStatus.Posted))).SupplierName);
+
+        // The draft that had it keeps it; a new invoice cannot take it, nor can it be added again.
+        await node.Send(new SavePurchaseInvoiceCommand(draft, nileFarms, "F-2", null, OneKilo, "Omar"));
+        var refused = await Assert.ThrowsAsync<DomainException>(() =>
+            node.Send(new SavePurchaseInvoiceCommand(Guid.NewGuid(), nileFarms, "F-3", null, OneKilo, "Omar")));
+        Assert.Contains("archived", refused.Message);
+        Assert.Contains("archived", (await Assert.ThrowsAsync<DomainException>(() => node.Send(new SaveSupplierCommand(Guid.NewGuid(), "Nile Farms")))).Message);
+
+        // Restored, it is back for new invoices.
+        await node.Send(new RestoreSupplierCommand(nileFarms));
+        Assert.Equal(["Nile Farms"], (await Suppliers()).Select(s => s.Name));
+        await node.Send(new SavePurchaseInvoiceCommand(Guid.NewGuid(), nileFarms, "F-3", null, OneKilo, "Omar"));
+    }
+
+    // The supplier names typed on invoices before suppliers were kept become suppliers on the
+    // update: one per name, however it was spelt, each invoice pointing at its own.
+    [Fact]
+    public async Task Supplier_names_typed_on_invoices_become_suppliers()
+    {
+        await using var node = await TestNode.StartAsync();
+        await node.Db(async db =>
+        {
+            var migrator = db.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
+            await migrator.MigrateAsync("20261007133059_BackfillPurchaseInvoices");
+            await db.Database.ExecuteSqlRawAsync("""
+                INSERT INTO inventory."PurchaseInvoices" ("Id", "Status", "CreatedAtUtc", "CreatedBy", "SupplierName") VALUES
+                    ('00000000-0000-0000-0000-000000000001', 'Posted', now() - interval '2 days', 'Omar', 'nile farms'),
+                    ('00000000-0000-0000-0000-000000000002', 'Posted', now() - interval '1 day', 'Omar', ' Nile  Farms '),
+                    ('00000000-0000-0000-0000-000000000003', 'Draft', now(), 'Sara', 'Delta Oils'),
+                    ('00000000-0000-0000-0000-000000000004', 'Posted', now(), 'Sara', NULL);
+                """);
+            await migrator.MigrateAsync();
+            return 0;
+        });
+
+        var suppliers = await node.Send(new GetSuppliersQuery());
+        // The latest spelling names it.
+        Assert.Equal([("Delta Oils", 1), ("Nile Farms", 2)], suppliers.Select(s => (s.Name, s.Invoices)));
+        var invoices = await node.Db(db => db.PurchaseInvoices.OrderBy(i => i.Id).Select(i => i.SupplierId).ToListAsync());
+        var nile = suppliers.Single(s => s.Name == "Nile Farms").Id;
+        Assert.Equal([nile, nile, suppliers.Single(s => s.Name == "Delta Oils").Id, null], invoices);
+    }
+
+    // A recipe of its own: written off the menu (R&D) with a planned price, then linked to the
+    // burger, which sells by it. Deleted, it is kept and marked: off the list, no stock taken by
+    // it, and the month's report keeps what the sales made under it cost. Restored, it is linked
+    // again, or off the menu if the burger has another recipe by then.
+    [Fact]
+    public async Task Recipes_are_written_off_the_menu_linked_and_deleted_softly()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        var ct = TestContext.Current.CancellationToken;
+        async Task<Guid> Piece(string name, decimal cost) =>
+            (await node.Send(new CreateRawMaterialCommand(name, UnitOfMeasure.Piece, PurchaseUnit: "piece", PurchaseUnitSize: 1, CostPerPurchaseUnit: cost))).Id;
+        var patty = await Piece("Beef patty", 20);
+        var bun = await Piece("Bun", 5);
+        await node.Send(new ReceivePurchaseCommand(Guid.NewGuid(), [new(patty, 50, 1_000), new(bun, 50, 250)]));
+        Task<decimal> OnHand(Guid id) => node.Db(db => db.RawMaterials.Where(m => m.Id == id).Select(m => m.QuantityOnHand).SingleAsync());
+        async Task Sell(int burgers)
+        {
+            var order = await node.Send(new OpenOrderCommand(OrderType.DineIn, TableNumber: Guid.NewGuid().ToString()[..6]));
+            await node.Send(new AddOrderItemCommand(order.PublicId, FakeDeliverySystem.Burger, burgers));
+            await node.Send(new SendToKitchenCommand(order.PublicId));
+            await node.Send(new CheckoutCommand(order.PublicId, PaymentMethod.Cash));
+        }
+        using var scope = node.Scope();
+        var costing = node.Service<CostingService>(scope);
+
+        // Off the menu, with a planned price of 100: 25 a portion is 25%.
+        var mains = (await node.Send(new SaveRecipeCategoryCommand(Guid.NewGuid(), "Mains"))).Id;
+        var trial = await node.Send(new SaveRecipeCommand(null, "Double burger trial", null, null, null, 1, [new(patty, 1), new(bun, 1)], mains, 100));
+        var card = await costing.GetRecipeCardAsync(trial.Id, ct);
+        Assert.Equal(("Double burger trial", true, (string?)null, 100m, 25m, 25m), (card.Recipe, card.IsStandalone, card.LinkedTo, card.MenuPrice!.Value, card.CostPerPortion, card.FoodCostPercentActual!.Value));
+        // Off the menu, the burger does not sell by it.
+        Assert.Null(await node.Send(new GetRecipeQuery(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null)));
+
+        // Linked to the burger: from the next sale, the burger takes stock by it.
+        await node.Send(new SaveRecipeCommand(trial.Id, "Double burger", RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, 1, [new(patty, 2), new(bun, 1)], mains));
+        card = await costing.GetRecipeCardAsync(trial.Id, ct);
+        Assert.Equal(("Double burger", false, "Burger"), (card.Recipe, card.IsStandalone, card.LinkedTo));
+        await Sell(2);
+        Assert.True(await TestNode.WaitFor(async () => await OnHand(patty) == 46m));
+
+        // One recipe a menu item sells by: a second is refused, naming the first.
+        var second = await Assert.ThrowsAsync<DomainException>(() => node.Send(new SaveRecipeCommand(
+            null, "Another", RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, 1, [new(patty, 1)], mains)));
+        Assert.Equal("That menu item already sells by the recipe \"Double burger\". Unlink or delete that one first.", second.Message);
+
+        var today = node.Service<RestaurantClock>(scope).BusinessDateOf(DateTime.UtcNow);
+        var before = Assert.Single((await costing.GetTheoreticalCostAsync(today.Year, today.Month, ct)).Rows, r => r.MenuItemId == FakeDeliverySystem.Burger);
+
+        // Deleted: kept and marked, off the list, and the burger takes nothing any more.
+        await node.Send(new DeleteRecipeCommand(trial.Id, "Omar"));
+        Assert.Empty(await costing.GetRecipesAsync(false, ct));
+        var deleted = Assert.Single(await costing.GetRecipesAsync(true, ct));
+        Assert.Equal((true, "Omar"), (deleted.IsDeleted, deleted.DeletedBy));
+        Assert.True(await node.Db(db => db.Recipes.AnyAsync(r => r.Id == trial.Id && r.DeletedAtUtc != null)));
+        await Sell(1);
+        // Both sales handled by the stock module; the second took nothing.
+        var settled = typeof(OtantikPos.Ordering.Contracts.OrderSettled).FullName!;
+        Assert.True(await TestNode.WaitFor(async () => await node.Db(db => db.OutboxMessages.CountAsync(m => m.Type == settled && m.ProcessedAtUtc != null)) == 2));
+        Assert.Equal(46m, await OnHand(patty));
+        Assert.Null(await node.Send(new GetRecipeQuery(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null)));
+
+        // The month's report still costs the two burgers sold under it, from what their sales took.
+        var after = Assert.Single((await costing.GetTheoreticalCostAsync(today.Year, today.Month, ct)).Rows, r => r.MenuItemId == FakeDeliverySystem.Burger);
+        Assert.Equal(before.TheoreticalCost, after.TheoreticalCost);
+        Assert.Equal(90m, after.TheoreticalCost);
+
+        // Restored while the burger has no other recipe: linked again.
+        var restored = await node.Send(new RestoreRecipeCommand(trial.Id));
+        Assert.Equal((false, (int?)FakeDeliverySystem.Burger), (restored.IsDeleted, restored.CatalogItemId));
+
+        // Deleted again, and the burger given a new one in the meantime: it comes back off the menu.
+        await node.Send(new DeleteRecipeCommand(trial.Id, "Omar"));
+        await node.Send(new SetRecipeCommand(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, [new(patty, 1), new(bun, 1)]));
+        restored = await node.Send(new RestoreRecipeCommand(trial.Id, "Double burger (old)"));
+        Assert.Equal(((int?)null, "Double burger"), (restored.CatalogItemId, restored.Name));
+        Assert.Equal(2, (await costing.GetRecipesAsync(false, ct)).Count);
+
+        // Through the old path, an empty recipe deletes the one the burger sells by, softly.
+        await node.Send(new SetRecipeCommand(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, []));
+        Assert.Equal(2, await node.Db(db => db.Recipes.CountAsync()));
+        Assert.Equal(["Double burger"], (await costing.GetRecipesAsync(false, ct)).Select(r => r.Recipe));
+    }
+
+    // The theoretical cost by hand: an accountant types the month's quantities instead of the till's
+    // sales, for every active recipe and prep item. Kept for the month, said to be typed and by whom,
+    // costed by the recipes at today's prices, shared costs spread over the meals typed in. The
+    // till's own report is untouched.
+    [Fact]
+    public async Task The_theoretical_cost_can_come_from_quantities_typed_in()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        var ct = TestContext.Current.CancellationToken;
+        async Task<Guid> Piece(string name, decimal cost) =>
+            (await node.Send(new CreateRawMaterialCommand(name, UnitOfMeasure.Piece, PurchaseUnit: "piece", PurchaseUnitSize: 1, CostPerPurchaseUnit: cost))).Id;
+        var patty = await Piece("Beef patty", 20);
+        var bun = await Piece("Bun", 5);
+        var flour = (await node.Send(new CreateRawMaterialCommand("Flour", UnitOfMeasure.Gram, PurchaseUnit: "kg", PurchaseUnitSize: 1000, CostPerPurchaseUnit: 20))).Id;
+        // The burger on the menu at 120, 25 by its recipe; a staff meal off the menu, unpriced;
+        // dough at 12 a kg by its recipe.
+        var burger = (await node.Send(new SetRecipeCommand(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, [new(patty, 1), new(bun, 1)])))!.Id;
+        var staffMeals = (await node.Send(new SaveRecipeCategoryCommand(Guid.NewGuid(), "Staff meals"))).Id;
+        var staffMeal = (await node.Send(new SaveRecipeCommand(null, "Staff burger", null, null, null, 1, [new(patty, 1)], staffMeals))).Id;
+        var dough = (await node.Send(new SavePrepItemCommand(null, "Pizza dough", UnitOfMeasure.Gram, 10_000, [new(flour, 6_000)], DisplayUnit: "kg", DisplayUnitSize: 1000))).Id;
+
+        using var scope = node.Scope();
+        var costing = node.Service<CostingService>(scope);
+        var today = node.Service<RestaurantClock>(scope).BusinessDateOf(DateTime.UtcNow);
+        // 140 of frying oil a month: over the 14 meals typed in, 10 a meal.
+        await costing.SaveSharedCostAsync(null, new SaveSharedCostRequest("Frying oil", null, 140, null), ct);
+
+        var sheet = await costing.GetManualSalesAsync(today.Year, today.Month, ct);
+        Assert.Equal(
+            [(ManualSalesItemKind.Recipe, "Burger", "Uncategorized", "portion", (decimal?)25m, (decimal?)120m),
+             (ManualSalesItemKind.Recipe, "Staff burger", "Staff meals", "portion", 20m, null),
+             (ManualSalesItemKind.PrepItem, "Pizza dough", "Prep items", "kg", 12m, null)],
+            sheet.Items.Select(i => (i.Kind, i.Name, i.Group, i.Unit, i.CostPerUnit, i.Price)).OrderBy(i => i.Kind).ThenBy(i => i.Name));
+        Assert.All(sheet.Items, i => Assert.Null(i.Quantity));
+
+        // Portions are whole, and nothing is negative.
+        await Assert.ThrowsAsync<DomainException>(() => costing.SaveManualSalesAsync(today.Year, today.Month,
+            [new(ManualSalesItemKind.Recipe, burger, 1.5m)], "Sara", ct));
+        await Assert.ThrowsAsync<DomainException>(() => costing.SaveManualSalesAsync(today.Year, today.Month,
+            [new(ManualSalesItemKind.PrepItem, dough, -1)], "Sara", ct));
+
+        var report = await costing.SaveManualSalesAsync(today.Year, today.Month,
+            [new(ManualSalesItemKind.Recipe, burger, 10), new(ManualSalesItemKind.Recipe, staffMeal, 4), new(ManualSalesItemKind.PrepItem, dough, 2.5m)],
+            "Sara", ct);
+        Assert.Equal((TheoreticalSource.Manual, "Sara"), (report.Source, report.EnteredBy));
+        var rows = report.Rows.ToDictionary(r => r.MenuItem);
+        // Burger: 10 at 25 and 10 of oil each is 350, against 1,200 of sales.
+        Assert.Equal((10m, 1_200m, 35m, 350m, 100m, 29.2m, CostStatus.WithinTarget),
+            (rows["Burger"].QuantitySold, rows["Burger"].NetSales, rows["Burger"].RecipeCostPerUnit, rows["Burger"].TheoreticalCost,
+                rows["Burger"].SharedCost, rows["Burger"].FoodCostPercent!.Value, rows["Burger"].Status));
+        Assert.Equal((4m, 0m, 120m, CostStatus.NoPrice), (rows["Staff burger"].QuantitySold, rows["Staff burger"].NetSales, rows["Staff burger"].TheoreticalCost, rows["Staff burger"].Status));
+        Assert.Equal((2.5m, "kg", 30m, 0m, (Guid?)dough), (rows["Pizza dough"].QuantitySold, rows["Pizza dough"].Unit, rows["Pizza dough"].TheoreticalCost, rows["Pizza dough"].SharedCost, rows["Pizza dough"].PrepItemId));
+        Assert.Equal((14m, 1_200m, 500m, 41.7m), (report.QuantitySold, report.NetSales, report.TheoreticalCost, report.FoodCostPercent!.Value));
+
+        // Kept for the month: the sheet comes back filled in, and the report from it.
+        Assert.Equal(10m, (await costing.GetManualSalesAsync(today.Year, today.Month, ct)).Items.Single(i => i.ItemId == burger).Quantity);
+        var again = await costing.GetTheoreticalCostAsync(today.Year, today.Month, ct, TheoreticalSource.Manual);
+        Assert.Equal((500m, "Sara"), (again.TheoreticalCost, again.EnteredBy));
+
+        // The till's own report for the month: nothing sold, and said to be the till's.
+        var pos = await costing.GetTheoreticalCostAsync(today.Year, today.Month, ct);
+        Assert.Equal((TheoreticalSource.Pos, 0, (string?)null), (pos.Source, pos.Rows.Count, pos.EnteredBy));
+    }
+
+    // The kitchen's own recipe categories. One holding recipes is deleted only by moving them to
+    // another, the deleted ones with them; a recipe written on the recipe screen needs one.
+    [Fact]
+    public async Task Recipe_categories_are_kept_apart_from_the_menu_and_move_their_recipes_when_deleted()
+    {
+        await using var node = await TestNode.StartAsync();
+        var patty = (await node.Send(new CreateRawMaterialCommand("Beef patty", UnitOfMeasure.Piece))).Id;
+        var sauces = (await node.Send(new SaveRecipeCategoryCommand(Guid.NewGuid(), "Sauces", "صوصات"))).Id;
+        var staff = (await node.Send(new SaveRecipeCategoryCommand(Guid.NewGuid(), "Staff meals"))).Id;
+        var twice = await Assert.ThrowsAsync<DomainException>(() => node.Send(new SaveRecipeCategoryCommand(Guid.NewGuid(), " staff  MEALS")));
+        Assert.Equal("There is already a category called Staff meals.", twice.Message);
+        Assert.Equal("Sauce bar", (await node.Send(new SaveRecipeCategoryCommand(sauces, "Sauce bar", "صوصات"))).Name);
+
+        Task<RecipeDto> Write(string name, Guid? category) =>
+            node.Send(new SaveRecipeCommand(null, name, null, null, null, 1, [new(patty, 1)], category));
+        Assert.Equal("Choose the recipe's category.", (await Assert.ThrowsAsync<DomainException>(() => Write("Unsorted", null))).Message);
+        var familyMeal = await Write("Family meal", staff);
+        var oldMeal = await Write("Old family meal", staff);
+        await node.Send(new DeleteRecipeCommand(oldMeal.Id, "Omar"));
+
+        var categories = await node.Send(new GetRecipeCategoriesQuery());
+        Assert.Equal([("Sauce bar", "صوصات", 0), ("Staff meals", (string?)null, 1)], categories.Select(c => (c.Name, c.NameAr, c.Recipes)));
+
+        // Staff meals holds a recipe: it goes only with somewhere for its recipes to go.
+        var held = await Assert.ThrowsAsync<DomainException>(() => node.Send(new DeleteRecipeCategoryCommand(staff)));
+        Assert.Equal("Staff meals has 1 recipe. Choose the category it moves to.", held.Message);
+        await node.Send(new DeleteRecipeCategoryCommand(staff, sauces));
+        Assert.Equal([("Sauce bar", 1)], (await node.Send(new GetRecipeCategoriesQuery())).Select(c => (c.Name, c.Recipes)));
+        var moved = await node.Db(db => db.Recipes.Where(r => r.Id == familyMeal.Id || r.Id == oldMeal.Id).Select(r => r.RecipeCategoryId).ToListAsync());
+        Assert.All(moved, id => Assert.Equal(sauces, id));
+
+        // One with no recipes goes at once; the card says which category a recipe is in.
+        var empty = (await node.Send(new SaveRecipeCategoryCommand(Guid.NewGuid(), "Catering orders"))).Id;
+        await node.Send(new DeleteRecipeCategoryCommand(empty));
+        using var scope = node.Scope();
+        var card = await node.Service<CostingService>(scope).GetRecipeCardAsync(familyMeal.Id, TestContext.Current.CancellationToken);
+        Assert.Equal(((Guid?)sauces, "Sauce bar", "صوصات"), (card.RecipeCategoryId, card.RecipeCategory, card.RecipeCategoryAr));
+    }
+
+    // The categories typed on off-menu recipes before categories were kept become categories on
+    // the update, one per name however spelt; the rest are left to be sorted.
+    [Fact]
+    public async Task Typed_recipe_categories_become_categories()
+    {
+        await using var node = await TestNode.StartAsync();
+        await node.Db(async db =>
+        {
+            var migrator = db.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
+            await migrator.MigrateAsync("20261007172513_StandaloneRecipesAndSoftDelete");
+            await db.Database.ExecuteSqlRawAsync("""
+                INSERT INTO inventory."Recipes" ("Id", "Name", "Category", "Portions", "CreatedAtUtc") VALUES
+                    ('00000000-0000-0000-0000-000000000001', 'Garlic dip', 'sauces', 1, now()),
+                    ('00000000-0000-0000-0000-000000000002', 'Chili oil', ' Sauces ', 1, now()),
+                    ('00000000-0000-0000-0000-000000000003', 'Family meal', 'Staff meals', 1, now()),
+                    ('00000000-0000-0000-0000-000000000004', 'Trial', NULL, 1, now());
+                """);
+            await migrator.MigrateAsync();
+            return 0;
+        });
+
+        var categories = await node.Send(new GetRecipeCategoriesQuery());
+        Assert.Equal([2, 1], categories.Select(c => c.Recipes));
+        Assert.Equal("STAFF MEALS", (await node.Db(db => db.RecipeCategories.SingleAsync(c => c.Name == "Staff meals"))).NormalizedName);
+        Assert.Null(await node.Db(db => db.Recipes.Where(r => r.Name == "Trial").Select(r => r.RecipeCategoryId).SingleAsync()));
+    }
+
+    // Pizza dough made in the kitchen: its recipe costs it per kg, a production order takes the
+    // flour, yeast and oil off stock and puts the dough in at their cost over what came out, and a
+    // burger sold takes dough, not flour. Between two counts, the flour production took is a use
+    // by its recipe, not a loss; what is missing shows on the dough.
+    [Fact]
+    public async Task Prep_items_are_made_by_production_orders_and_used_by_the_dishes_sold()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        var ct = TestContext.Current.CancellationToken;
+        async Task<Guid> Material(string name, UnitOfMeasure unit) => (await node.Send(new CreateRawMaterialCommand(name, unit))).Id;
+        Task<decimal> OnHand(Guid id) => node.Db(db => db.RawMaterials.Where(m => m.Id == id).Select(m => m.QuantityOnHand).SingleAsync());
+        var flour = await Material("Flour", UnitOfMeasure.Gram);
+        var yeast = await Material("Yeast", UnitOfMeasure.Gram);
+        var oil = await Material("Olive oil", UnitOfMeasure.Millilitre);
+        // 20 a kg of flour, 500 a kg of yeast, 60 a litre of oil.
+        await node.Send(new ReceivePurchaseCommand(Guid.NewGuid(), [new(flour, 20_000, 400), new(yeast, 500, 250), new(oil, 5_000, 300)]));
+
+        // A 10 kg batch: 120 of flour, 50 of yeast, 12 of oil, so 18.20 a kg by its recipe.
+        var dough = await node.Send(new SavePrepItemCommand(
+            null, "Pizza dough", UnitOfMeasure.Gram, 10_000, [new(flour, 6_000), new(yeast, 100), new(oil, 200)],
+            Code: "PREP-1", DisplayUnit: "kg", DisplayUnitSize: 1000));
+        Assert.Equal((182m, 18.20m, 0m), (dough.StandardBatchCost, dough.StandardCostPerDisplayUnit, dough.QuantityOnHand));
+        Assert.Equal([("Flour", 120m, 65.9m), ("Yeast", 50m, 27.5m), ("Olive oil", 12m, 6.6m)],
+            dough.Ingredients.Select(i => (i.Name, i.BatchCost!.Value, i.SharePercent!.Value)));
+
+        var opening = Guid.NewGuid();
+        await node.Send(new RecordStockCountCommand(opening, [new(flour, 20_000), new(yeast, 500), new(oil, 5_000), new(dough.Id, 0)], "Omar"));
+
+        // The review: 10 kg planned, 9.6 kg came out, so 182 over 9.6 kg. Four batches' flour is
+        // more than the records show: flagged, not refused.
+        var preview = await node.Send(new PreviewProductionQuery(dough.Id, 10_000, 9_600));
+        Assert.Equal((182m, 18.96m), (preview.TotalCost, preview.UnitCostPerDisplayUnit));
+        Assert.Empty(preview.Shortages);
+        var big = await node.Send(new PreviewProductionQuery(dough.Id, 40_000));
+        Assert.Equal(["Flour"], big.Shortages);
+        Assert.Equal(4_000m, big.Lines.Single(l => l.Material == "Flour").Short);
+
+        // Made, and made again as a lost answer would: once.
+        var orderId = Guid.NewGuid();
+        var made = await node.Send(new MakeProductionOrderCommand(orderId, dough.Id, 10_000, 9_600, "Morning batch", "Omar"));
+        await node.Send(new MakeProductionOrderCommand(orderId, dough.Id, 10_000, 9_600, null, "Omar"));
+        Assert.Equal((182m, 18.96m, 96m, "Omar", "Morning batch"), (made.TotalCost, made.UnitCostPerDisplayUnit, made.YieldPercent, made.ProducedBy, made.Notes));
+        Assert.Equal((14_000m, 400m, 4_800m, 9_600m), (await OnHand(flour), await OnHand(yeast), await OnHand(oil), await OnHand(dough.Id)));
+        var profile = (await node.Send(new GetPrepItemQuery(dough.Id)))!;
+        Assert.Equal((18.96m, 182m, 18.96m), (profile.AverageCostPerDisplayUnit, profile.StockValue, profile.LastBatchCostPerDisplayUnit));
+        Assert.Equal(orderId, Assert.Single(profile.Recent).Id);
+        Assert.Equal(orderId, Assert.Single(await node.Send(new GetProductionOrdersQuery())).Id);
+
+        // A burger takes 250 g of dough. Two sold take 500 g of it, at its batch cost, and no flour.
+        await node.Send(new SetRecipeCommand(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, [new(dough.Id, 250)]));
+        var order = await node.Send(new OpenOrderCommand(OrderType.DineIn, TableNumber: "P1"));
+        await node.Send(new AddOrderItemCommand(order.PublicId, FakeDeliverySystem.Burger, 2));
+        await node.Send(new SendToKitchenCommand(order.PublicId));
+        await node.Send(new CheckoutCommand(order.PublicId, PaymentMethod.Cash));
+        Assert.True(await TestNode.WaitFor(async () => await OnHand(dough.Id) == 9_100m));
+        Assert.Equal(14_000m, await OnHand(flour));
+        var sale = await node.Db(db => db.StockMovements.SingleAsync(m => m.Reason == StockMovementReason.Sale));
+        // Its unit cost kept to six places, as every cost in the ledger is.
+        Assert.Equal((dough.Id, -500m, 0.018958m), (sale.RawMaterialId, sale.Quantity, sale.UnitCost!.Value));
+
+        // The closing count finds 100 g of dough fewer than the records.
+        var closing = Guid.NewGuid();
+        await node.Send(new RecordStockCountCommand(closing, [new(flour, 14_000), new(yeast, 400), new(oil, 4_800), new(dough.Id, 9_000)], "Omar"));
+        using (var scope = node.Scope())
+        {
+            var rows = (await node.Service<VarianceService>(scope).GetVarianceAsync(opening, closing, ct)).Rows.ToDictionary(r => r.Material);
+            Assert.Equal((6_000m, 6_000m, 0m, VarianceEvaluation.WithinLimit),
+                (rows["Flour"].StandardUsage, rows["Flour"].ActualUsage, rows["Flour"].VarianceQuantity, rows["Flour"].Evaluation));
+            Assert.Equal((9_600m, 500m, 600m, 100m, VarianceEvaluation.Unfavourable),
+                (rows["Pizza dough"].Received, rows["Pizza dough"].StandardUsage, rows["Pizza dough"].ActualUsage, rows["Pizza dough"].VarianceQuantity, rows["Pizza dough"].Evaluation));
+        }
+
+        // Made, so not bought; and not made from what is made from it.
+        var bought = await Assert.ThrowsAsync<DomainException>(() => node.Send(new SavePurchaseInvoiceCommand(
+            Guid.NewGuid(), null, null, null, [new PurchaseInvoiceLineEntry(dough.Id, 1, "kg", 1000, 18)], "Omar")));
+        Assert.StartsWith("Pizza dough is made in the kitchen", bought.Message);
+        var sauce = await node.Send(new SavePrepItemCommand(null, "Dough crumb", UnitOfMeasure.Gram, 1_000, [new(dough.Id, 1_000)]));
+        var loop = await Assert.ThrowsAsync<DomainException>(() => node.Send(new SavePrepItemCommand(
+            dough.Id, "Pizza dough", UnitOfMeasure.Gram, 10_000, [new(flour, 6_000), new(sauce.Id, 50)])));
+        Assert.Equal("Dough crumb is made with Pizza dough, so Pizza dough cannot be made with Dough crumb.", loop.Message);
+        Assert.Equal(["Dough crumb", "Pizza dough"], (await node.Send(new GetPrepItemsQuery())).Select(p => p.Name));
+    }
+
+    // A till that took deliveries before invoices were kept: on the update, each is filed as the
+    // posted invoice it was, in the material's own unit and at what it was booked at.
+    [Fact]
+    public async Task Deliveries_from_before_invoices_are_filed_in_the_history()
+    {
+        await using var node = await TestNode.StartAsync();
+        var tomatoes = (await node.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram))).Id;
+        var oil = (await node.Send(new CreateRawMaterialCommand("Frying oil", UnitOfMeasure.Millilitre))).Id;
+        var delivery = Guid.NewGuid();
+        // As the till recorded a delivery then: the stock movements, and no invoice.
+        await node.Db(async db =>
+        {
+            var materials = await db.RawMaterials.ToDictionaryAsync(m => m.Id);
+            db.StockMovements.AddRange(materials[tomatoes].ReceivePurchase(2500, delivery, 62.50m), materials[oil].ReceivePurchase(10000, delivery));
+            return await db.SaveChangesAsync();
+        });
+
+        // The update, run again over it.
+        await node.Db(async db =>
+        {
+            var migrator = db.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
+            await migrator.MigrateAsync("20261007131728_AddPurchaseInvoices");
+            await migrator.MigrateAsync();
+            return 0;
+        });
+
+        var filed = Assert.Single(await node.Send(new GetPurchaseInvoicesQuery(PurchaseInvoiceStatus.Posted)));
+        Assert.Equal((delivery, (string?)null, 62.50m, 2, (string?)null), (filed.Id, filed.SupplierName, filed.Total, filed.Lines, filed.AttachmentFileName));
+        var lines = (await node.Send(new GetPurchaseInvoiceQuery(delivery)))!.Lines.OrderBy(l => l.Material).ToList();
+        Assert.Equal(
+            [("Frying oil", 10000m, "ml", 10000m, (decimal?)null), ("Tomatoes", 2500m, "g", 2500m, 62.50m)],
+            lines.Select(l => (l.Material, l.EnteredQuantity, l.UnitLabel, l.Quantity, l.Cost)));
+    }
+
+    // The categories typed on materials become purchase categories: one per name, capitals and
+    // extra spaces ignored, spelled as most of its materials had it. Materials with none, or with
+    // "general", go into General.
+    [Fact]
+    public async Task Typed_material_categories_become_purchase_categories()
+    {
+        await using var node = await TestNode.StartAsync();
+        await node.Db(async db =>
+        {
+            var migrator = db.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
+            await migrator.MigrateAsync("20261008132446_ManualSalesSheets");
+            await db.Database.ExecuteSqlRawAsync("""
+                INSERT INTO inventory."RawMaterials" ("Id", "Name", "Unit", "QuantityOnHand", "ReorderLevel", "Category") VALUES
+                    ('00000000-0000-0000-0000-000000000001', 'Milk', 'Millilitre', 0, 0, 'dairy'),
+                    ('00000000-0000-0000-0000-000000000002', 'Cheese', 'Gram', 0, 0, ' Dairy '),
+                    ('00000000-0000-0000-0000-000000000003', 'Cheddar', 'Gram', 0, 0, 'Dairy'),
+                    ('00000000-0000-0000-0000-000000000004', 'Salt', 'Gram', 0, 0, NULL),
+                    ('00000000-0000-0000-0000-000000000005', 'Napkins', 'Piece', 0, 0, 'general');
+                """);
+            await migrator.MigrateAsync();
+            return 0;
+        });
+
+        var categories = await node.Send(new GetPurchaseCategoriesQuery());
+        Assert.Equal([("General", true, 2), ("Dairy", false, 3)], categories.Select(c => (c.Name, c.IsGeneral, c.Materials)));
+        Assert.Equal(PurchaseCategory.GeneralId, categories[0].Id);
+        Assert.Equal("Dairy", (await node.Send(new GetRawMaterialsQuery())).Single(m => m.Name == "Milk").Category);
+    }
+
+    // Expense items go on purchase invoices beside raw materials. Posting takes the stock lines in
+    // and leaves stock alone for the expenses, which are only what they cost, under their category.
+    // They never reach the stock list or a recipe. The spending report adds both up by category;
+    // the KPIs and the break-even worksheet take the expenses off on each category's line, on top
+    // of what is typed in.
+    [Fact]
+    public async Task Expenses_bought_on_invoices_reach_the_profit_and_loss_but_never_stock()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        var ct = TestContext.Current.CancellationToken;
+        using var scope = node.Scope();
+        var today = node.Service<RestaurantClock>(scope).BusinessDateOf(DateTime.UtcNow);
+
+        async Task<Guid> Category(string name, ExpenseLine line) => (await node.Send(new SavePurchaseCategoryCommand(Guid.NewGuid(), name, null, line))).Id;
+        var dairy = await Category("Dairy", ExpenseLine.Controllable);
+        var utilities = await Category("Utilities", ExpenseLine.Controllable);
+        var rent = await Category("Rent", ExpenseLine.Occupation);
+        var insurance = await Category("Insurance", ExpenseLine.OtherFixed);
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new SavePurchaseCategoryCommand(Guid.NewGuid(), " utilities ")));
+
+        var milk = await node.Send(new CreateRawMaterialCommand("Milk", UnitOfMeasure.Millilitre, CategoryId: dairy, PurchaseUnit: "L", PurchaseUnitSize: 1000));
+        Assert.Equal(("Dairy", dairy), (milk.Category, milk.CategoryId));
+        // No category given: General.
+        Assert.Equal("General", (await node.Send(new CreateRawMaterialCommand("Salt", UnitOfMeasure.Gram))).Category);
+
+        async Task<Guid> Expense(string name, Guid category, string? unit = null) =>
+            (await node.Send(new SaveExpenseItemCommand(Guid.NewGuid(), name, category, null, unit))).Id;
+        var electricity = await Expense("Electricity", utilities);
+        var spray = await Expense("Cleaning spray", utilities, "bottle");
+        var shop = await Expense("Shop rent", rent);
+        var cover = await Expense("Fire insurance", insurance);
+
+        // Never stock: not on the stock list, and no recipe can use one.
+        Assert.DoesNotContain(await node.Send(new GetRawMaterialsQuery()), m => m.Name == "Electricity");
+        Assert.DoesNotContain(await node.Service<CostingService>(scope).GetMaterialsAsync(ct), m => m.Name == "Electricity");
+        await Assert.ThrowsAsync<NotFoundException>(() => node.Send(new SetRecipeCommand(
+            RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, [new(electricity, 1)])));
+
+        // One invoice, both kinds: 10 L of milk for 300, the month's electricity, four bottles of spray.
+        var bill = Guid.NewGuid();
+        PurchaseInvoiceLineEntry Spend(Guid item, decimal amount, decimal quantity = 1, string? unit = null) =>
+            new(null, quantity, unit, 1, amount, PurchaseItemType.Expense, item);
+        var draft = await node.Send(new SavePurchaseInvoiceCommand(bill, null, null, today,
+            [new(milk.Id, 10, "L", 1000, 300), Spend(electricity, 1_500), Spend(spray, 200, 4, "bottle")]));
+        Assert.Equal((300m, 1_700m, 2_000m), (draft.InventoryTotal, draft.ExpenseTotal, draft.Total));
+        Assert.Equal([("Milk", PurchaseItemType.Inventory, "Dairy"), ("Electricity", PurchaseItemType.Expense, "Utilities"), ("Cleaning spray", PurchaseItemType.Expense, "Utilities")],
+            draft.Lines.Select(l => (l.Material, l.ItemType, l.Category)));
+        // An expense is its amount, and is one thing or the other.
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new SavePurchaseInvoiceCommand(bill, null, null, today,
+            [new(null, 1, null, 1, null, PurchaseItemType.Expense, electricity)])));
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new SavePurchaseInvoiceCommand(bill, null, null, today,
+            [new(milk.Id, 1, null, 1, 50, PurchaseItemType.Expense, electricity)])));
+
+        await node.Send(new PostPurchaseInvoiceCommand(bill, "Omar"));
+        // The milk is in, at 0.03 a ml; the expenses moved nothing.
+        var stocked = await node.Db(db => db.RawMaterials.SingleAsync(m => m.Id == milk.Id));
+        Assert.Equal((10_000m, (decimal?)0.03m), (stocked.QuantityOnHand, stocked.AverageCost));
+        Assert.Equal([milk.Id], await node.Db(db => db.StockMovements.Where(m => m.SourceId == bill).Select(m => m.RawMaterialId).ToListAsync()));
+
+        // Rent and insurance on an invoice of their own; a draft and last month's bill do not count this month.
+        var overheads = Guid.NewGuid();
+        await node.Send(new SavePurchaseInvoiceCommand(overheads, null, null, today, [Spend(shop, 8_000), Spend(cover, 600)]));
+        await node.Send(new PostPurchaseInvoiceCommand(overheads, "Omar"));
+        await node.Send(new SavePurchaseInvoiceCommand(Guid.NewGuid(), null, null, today, [Spend(electricity, 999)]));
+        var lastMonth = new DateOnly(today.Year, today.Month, 1).AddDays(-1);
+        var earlier = Guid.NewGuid();
+        await node.Send(new SavePurchaseInvoiceCommand(earlier, null, null, lastMonth, [Spend(electricity, 1_400)]));
+        await node.Send(new PostPurchaseInvoiceCommand(earlier, "Omar"));
+
+        var firstOfMonth = new DateOnly(today.Year, today.Month, 1);
+        var spending = node.Service<PurchaseSpendingService>(scope);
+        var report = await spending.GetAsync(firstOfMonth, today, ct);
+        Assert.Equal((10_600m, 300m, 10_300m, 2, 0), (report.Total, report.Inventory, report.Expenses, report.Invoices, report.UnpricedLines));
+        Assert.Equal(
+            [("Rent", 0m, 8_000m, (decimal?)75.5m), ("Utilities", 0m, 1_700m, 16.0m), ("Insurance", 0m, 600m, 5.7m), ("Dairy", 300m, 0m, 2.8m)],
+            report.Categories.Select(c => (c.Category, c.Inventory, c.Expenses, c.SharePercent)));
+        Assert.Equal([("Electricity", 1m, 1_500m), ("Cleaning spray", 4m, 200m)],
+            report.Categories.Single(c => c.Category == "Utilities").Items.Select(i => (i.Name, i.Quantity, i.Total)));
+        Assert.Equal((10m, "L"), report.Categories.Single(c => c.Category == "Dairy").Items.Select(i => (i.Quantity, i.Unit)).Single());
+        Assert.Equal(12_000m, (await spending.GetAsync(lastMonth, today, ct)).Total);
+
+        // The month's P&L: 1,700 controllable, 8,000 occupation, 600 other fixed, from the invoices.
+        var kpis = node.Service<KpiService>(scope);
+        var s = (await kpis.GetAsync(today.Year, today.Month, ct)).Statement;
+        Assert.Equal((1_700m, 8_000m, 600m), (s.LoggedControllableCosts, s.LoggedOccupationCost, s.LoggedOtherFixedCosts));
+        Assert.Equal(["Rent", "Utilities", "Insurance"], s.LoggedExpenses!.Select(e => e.Category));
+        // No net profit until the wages are in; then everything comes off, typed and logged.
+        Assert.Null(s.NetProfit);
+        await kpis.SaveExpensesAsync(today.Year, today.Month, new MonthlyExpensesDto(5_000, 100, 300, null, null, null), "Omar", ct);
+        s = (await kpis.GetAsync(today.Year, today.Month, ct)).Statement;
+        Assert.Equal((15_600m, s.GrossProfit - 15_600m), (s.TotalExpenses, s.NetProfit!.Value));
+
+        // A year of it: wages, typed and logged controllable costs; logged rent; logged insurance.
+        var sheet = await node.Service<BreakEvenService>(scope).GetAsync(today.Year, today.Month, today.Year, today.Month, ct);
+        Assert.Equal((84_000m, 20_400m, 96_000m, 96_000m, 7_200m, 187_200m),
+            (sheet.ControllableCosts, sheet.ControllableFromInvoices, sheet.OccupationCost, sheet.OccupationFromInvoices, sheet.OtherFixedCosts, sheet.TotalFixedCosts));
+
+        // On invoices, an expense is archived rather than deleted, and not put on another until restored.
+        Assert.Equal(ExpenseItemRemoval.Archived, (await node.Send(new DeleteExpenseItemCommand(electricity))).Outcome);
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new SavePurchaseInvoiceCommand(Guid.NewGuid(), null, null, today, [Spend(electricity, 10)])));
+        Assert.DoesNotContain(await node.Send(new GetExpenseItemsQuery()), e => e.Id == electricity);
+        // On three invoices, the draft too; 1,500 and 1,400 posted.
+        var archived = (await node.Send(new GetExpenseItemsQuery(IncludeArchived: true))).Single(e => e.Id == electricity);
+        Assert.Equal((true, 3, 2_900m), (archived.IsArchived, archived.Invoices, archived.PostedTotal));
+        await node.Send(new RestoreExpenseItemCommand(electricity));
+
+        // A category goes only once what is in it has somewhere to go; General never goes. The
+        // insurance moves to Rent, and its history with it.
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new DeletePurchaseCategoryCommand(insurance)));
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new DeletePurchaseCategoryCommand(PurchaseCategory.GeneralId, rent)));
+        await node.Send(new DeletePurchaseCategoryCommand(insurance, rent));
+        s = (await node.Service<KpiService>(node.Scope()).GetAsync(today.Year, today.Month, ct)).Statement;
+        Assert.Equal((8_600m, 0m), (s.LoggedOccupationCost, s.LoggedOtherFixedCosts));
     }
 
     // The break-even worksheet: the month's sales at a year's pace, cost of sales at its ratio, the
