@@ -20,7 +20,9 @@ namespace OtantikPos.Inventory.Application.Treasury;
 // moves until it is approved. A supplier's opening debt moves no cash, and is entered at once.
 
 // A safe entry as entered: held by a request until a manager approves it. TransactionId is made
-// by the till.
+// by the till. IncludesTax: a day's takings counted with the tax in them; TaxPercent is the till's
+// rate, set by the server when it is entered (never the screen's), and kept with a request so the
+// approval takes the tax off at the rate that was asked.
 public sealed record SafeVoucher(
     Guid TransactionId,
     SafeTransactionKind Kind,
@@ -31,7 +33,15 @@ public sealed record SafeVoucher(
     Guid? SupplierId = null,
     Guid? ExpenseItemId = null,
     Guid? PurchaseInvoiceId = null,
-    string? Notes = null);
+    string? Notes = null,
+    bool IncludesTax = false,
+    decimal? TaxPercent = null);
+
+// The tax rate the till's bills are charged: the delivery system's, as last synced.
+public interface ITaxRate
+{
+    Task<decimal> PercentAsync(CancellationToken cancellationToken);
+}
 
 public sealed record SafeTransactionDto(
     Guid Id,
@@ -50,11 +60,14 @@ public sealed record SafeTransactionDto(
     string? ApprovedBy,
     Guid? ReversalOf,
     DateTime? VoidedAtUtc,
-    string? VoidedBy)
+    string? VoidedBy,
+    bool IncludesTax,
+    decimal? TaxPercent,
+    decimal TaxAmount)
 {
     public static SafeTransactionDto From(SafeTransaction t) => new(
         t.Id, t.Kind, t.Fund, t.Amount, t.BusinessDate, t.RevenueDate, t.Source, t.SupplierId, t.PurchaseInvoiceId, t.ExpenseItemId, t.Notes,
-        t.RecordedBy, t.RecordedAtUtc, t.ApprovedBy, t.ReversalOf, t.VoidedAtUtc, t.VoidedBy);
+        t.RecordedBy, t.RecordedAtUtc, t.ApprovedBy, t.ReversalOf, t.VoidedAtUtc, t.VoidedBy, t.IncludesTax, t.TaxPercent, t.TaxAmount);
 }
 
 // Checks, describes and enters safe entries: for a manager's own and for an approval alike. What
@@ -65,7 +78,8 @@ internal sealed class TreasuryWriter(
     ISupplierRepository suppliers,
     IExpenseItemRepository expenses,
     IPurchaseInvoiceRepository invoices,
-    IRecordDescriptions descriptions)
+    IRecordDescriptions descriptions,
+    ITaxRate taxRate)
 {
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
@@ -87,10 +101,23 @@ internal sealed class TreasuryWriter(
         }
     }
 
+    // A voucher as the screens sent it, with the till's tax rate when its takings include tax. Any
+    // rate the screen sent is replaced: the rate is the till's, not the caller's.
+    public async Task<SafeVoucher> WithTaxRateAsync(SafeVoucher voucher, CancellationToken cancellationToken)
+    {
+        if (!voucher.IncludesTax)
+            return voucher with { TaxPercent = null };
+        if (voucher.Kind != SafeTransactionKind.RevenueTransfer)
+            throw new DomainException("Only a day's takings are entered with the tax in them.");
+        return voucher with { TaxPercent = await taxRate.PercentAsync(cancellationToken) };
+    }
+
     // What would stop it being entered now, refused before a request goes to a manager. Checked
     // again on approval, as balances may have moved.
     public async Task CheckAsync(SafeVoucher voucher, CancellationToken cancellationToken)
     {
+        if (voucher.IncludesTax && (voucher.Kind != SafeTransactionKind.RevenueTransfer || voucher.TaxPercent is null))
+            throw new DomainException("Only a day's takings are entered with the tax in them, at the till's rate.");
         if (voucher.Date > Latest)
             throw new DomainException("A safe entry is dated today or before: cash cannot move in the future.");
         if (voucher.RevenueDate > Latest)
@@ -157,7 +184,9 @@ internal sealed class TreasuryWriter(
                 entry = SafeTransaction.Funding(id, voucher.Amount, voucher.Date, voucher.Source!.Value, voucher.Notes, recordedBy, approvedBy);
                 break;
             case SafeTransactionKind.RevenueTransfer:
-                entry = SafeTransaction.RevenueTransfer(id, voucher.Amount, voucher.Date, voucher.RevenueDate!.Value, voucher.Notes, recordedBy, approvedBy);
+                entry = SafeTransaction.RevenueTransfer(
+                    id, voucher.Amount, voucher.Date, voucher.RevenueDate!.Value, voucher.Notes, recordedBy, approvedBy,
+                    voucher.IncludesTax ? voucher.TaxPercent : null);
                 break;
             case SafeTransactionKind.ExpenseVoucher:
                 entry = SafeTransaction.ExpenseVoucher(id, voucher.Amount, voucher.Date, voucher.ExpenseItemId!.Value, voucher.Notes, recordedBy, approvedBy);
@@ -254,6 +283,13 @@ internal sealed class TreasuryWriter(
                 break;
             case SafeTransactionKind.RevenueTransfer:
                 summary = $"Takings of {Day(voucher.RevenueDate!.Value)} into the safe · {amount}";
+                if (voucher.IncludesTax && voucher.TaxPercent is { } rate)
+                {
+                    var tax = SafeTransaction.TaxIn(voucher.Amount, rate);
+                    changes.Add(new ApprovalChange($"Tax in it ({rate.ToString("0.##", Invariant)}%)", null, Money(tax)));
+                    changes.Add(new ApprovalChange("Takings before tax", null, Money(voucher.Amount - tax)));
+                }
+
                 break;
             case SafeTransactionKind.ExpenseVoucher:
                 var item = await ExpenseItemAsync(voucher.ExpenseItemId, cancellationToken);
@@ -370,19 +406,20 @@ internal sealed class RecordSafeVoucherHandler(
             return new SafeVoucherResultDto(ApprovalOutcome.Requested, null, ApprovalRequestDto.From(already));
         if (request.Voucher.Kind == SafeTransactionKind.InvoicePayment)
             throw new DomainException("An invoice is paid from the invoice itself.");
+        var voucher = await treasury.WithTaxRateAsync(request.Voucher, cancellationToken);
 
         if (request.CanApprove)
         {
-            var entry = await treasury.ApplyAsync(request.Voucher, request.StaffName, null, cancellationToken);
+            var entry = await treasury.ApplyAsync(voucher, request.StaffName, null, cancellationToken);
             await unitOfWork.SaveChangesAsync(cancellationToken);
             return new SafeVoucherResultDto(ApprovalOutcome.Applied, SafeTransactionDto.From(entry), null);
         }
 
-        await treasury.CheckAsync(request.Voucher, cancellationToken);
-        var (summary, changes) = await treasury.DescribeAsync(request.Voucher, cancellationToken);
+        await treasury.CheckAsync(voucher, cancellationToken);
+        var (summary, changes) = await treasury.DescribeAsync(voucher, cancellationToken);
         var asked = ApprovalRequest.AskToChange(
-            request.RequestId, ApprovalModule.Treasury, ApprovalAction.Create, request.Voucher.TransactionId, summary, changes,
-            ApprovalPayload.Write(request.Voucher), request.Reason, request.StaffId, request.StaffName);
+            request.RequestId, ApprovalModule.Treasury, ApprovalAction.Create, voucher.TransactionId, summary, changes,
+            ApprovalPayload.Write(voucher), request.Reason, request.StaffId, request.StaffName);
         requests.Add(asked);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return new SafeVoucherResultDto(ApprovalOutcome.Requested, null, ApprovalRequestDto.From(asked));

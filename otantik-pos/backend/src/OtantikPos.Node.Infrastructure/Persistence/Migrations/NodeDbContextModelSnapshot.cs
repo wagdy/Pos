@@ -1411,6 +1411,9 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
+                    b.Property<bool>("IncludesTax")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("Kind")
                         .IsRequired()
                         .HasMaxLength(32)
@@ -1443,6 +1446,14 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid?>("SupplierId")
                         .HasColumnType("uuid");
+
+                    b.Property<decimal>("TaxAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal?>("TaxPercent")
+                        .HasPrecision(5, 2)
+                        .HasColumnType("numeric(5,2)");
 
                     b.Property<uint>("Version")
                         .IsConcurrencyToken()
@@ -1558,6 +1569,27 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("CostingSettings", "inventory");
+                });
+
+            modelBuilder.Entity("OtantikPos.Node.Infrastructure.Costing.FinancialSettings", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("ServicePercent")
+                        .HasPrecision(5, 2)
+                        .HasColumnType("numeric(5,2)");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("UpdatedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("FinancialSettings", "inventory");
                 });
 
             modelBuilder.Entity("OtantikPos.Node.Infrastructure.Costing.ManualSalesLine", b =>

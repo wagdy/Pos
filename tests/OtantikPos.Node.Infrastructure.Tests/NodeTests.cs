@@ -1418,6 +1418,78 @@ public class NodeTests
         Assert.Equal([today], (await treasury.GetDayRevenueAsync(today.AddDays(-7), today, ct)).Days.Select(d => d.Date));
     }
 
+    // The reconciliation (مطابقة الإيرادات): the day's cash before tax against what its sales, at
+    // their prices before tax, should have brought in as cash.
+    [Fact]
+    public async Task Each_days_cash_before_tax_is_reconciled_with_the_cash_its_sales_should_bring_in()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        var ct = TestContext.Current.CancellationToken;
+        using var scope = node.Scope();
+        var treasury = node.Service<TreasuryService>(scope);
+        var today = treasury.Today;
+        async Task<Order> Sell(string table, PaymentMethod method, params (int Item, int Quantity)[] items)
+        {
+            var order = await node.Send(new OpenOrderCommand(OrderType.DineIn, TableNumber: table));
+            foreach (var (item, quantity) in items)
+                order = await node.Send(new AddOrderItemCommand(order.PublicId, item, quantity));
+            return await node.Send(new CheckoutCommand(order.PublicId, method));
+        }
+        async Task<SafeTransactionDto> Takings(decimal amount) => (await node.Send(new RecordSafeVoucherCommand(
+            Guid.NewGuid(), new SafeVoucher(Guid.NewGuid(), SafeTransactionKind.RevenueTransfer, amount, today, RevenueDate: today, IncludesTax: true),
+            null, "staff-omar", "Omar", CanApprove: true))).Transaction!;
+
+        // Two burgers and two lemonades paid in cash, one lemonade handed back after; a burger by card.
+        var cash = await Sell("R1", PaymentMethod.Cash, (FakeDeliverySystem.Burger, 2), (FakeDeliverySystem.Lemonade, 2));
+        cash = await node.Send(new VoidOrderItemCommand(
+            cash.PublicId, cash.OrderItems.Single(i => i.MenuItemId == FakeDeliverySystem.Lemonade).PublicId, 1, "Spilt"));
+        var card = await Sell("R2", PaymentMethod.Visa, (FakeDeliverySystem.Burger, 1));
+        Assert.True(cash.RefundedAmount > 0);
+
+        // 100 of the cash paid out for tomatoes; the rest counted into the safe 10 short, with the
+        // tax in it. A mistaken entry, voided, nets out.
+        var tomatoes = (await node.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram))).Id;
+        var market = Guid.NewGuid();
+        await node.Send(new SavePurchaseInvoiceCommand(market, null, null, today, [new(tomatoes, 5, "kg", 1000, 100)], "Omar",
+            PurchasePaymentMethod.DayRevenue, today));
+        await node.Send(new PostPurchaseInvoiceCommand(market, "Omar"));
+        var counted = cash.TotalAmount - cash.RefundedAmount - 100 - 10;
+        var entry = await Takings(counted);
+        var wrong = await Takings(999);
+        await node.Send(new RequestDeletionCommand(Guid.NewGuid(), ApprovalModule.Treasury, wrong.Id, "Typed twice", "staff-omar", "Omar", CanApprove: true));
+
+        var report = await treasury.GetReconciliationAsync(today, today, ct);
+        var day = Assert.Single(report.Days);
+        Assert.Equal(day with { Date = null }, report.Total);
+        var rate = entry.TaxPercent!.Value;
+        Assert.Equal(rate, report.TaxPercent);
+
+        // A: all the day's cash, what was paid out of it too, less the tax in it.
+        var tax = SafeTransaction.TaxIn(counted, rate) + SafeTransaction.TaxIn(100, rate);
+        Assert.Equal((counted, 100m, tax, counted + 100 - tax), (day.TakingsEntered, day.PaidOut, day.Tax, day.NetCash));
+
+        // B: every item sold at its price, the lemonade handed back and the card's burger too.
+        Assert.Equal(2 * 120 + 2 * 30 + 120m, day.ItemSales);
+        // Then before tax: the card's bill, and the refund at its bill's own proportion of tax.
+        var refund = Math.Round(cash.RefundedAmount * (cash.TotalAmount - cash.TaxAmount) / cash.TotalAmount, 2, MidpointRounding.AwayFromZero);
+        Assert.Equal((card.TotalAmount - card.TaxAmount, refund), (day.CardAndOnline, day.Refunds));
+        Assert.Equal(cash.TotalAmount - cash.TaxAmount - refund, day.ExpectedCash);
+        Assert.Equal(day.ItemSales - day.Discounts - day.Points + day.DeliveryFees - day.Refunds - day.CardAndOnline, day.ExpectedCash);
+
+        // Short by the 10 not counted, before its tax.
+        Assert.Equal(day.NetCash - day.ExpectedCash, day.Difference);
+        Assert.InRange(day.Difference, -10m, -8m);
+
+        // A day whose only takings were voided, with nothing sold, has nothing to reconcile.
+        var yesterday = await node.Send(new RecordSafeVoucherCommand(
+            Guid.NewGuid(), new SafeVoucher(Guid.NewGuid(), SafeTransactionKind.RevenueTransfer, 50, today, RevenueDate: today.AddDays(-1)),
+            null, "staff-omar", "Omar", CanApprove: true));
+        await node.Send(new RequestDeletionCommand(
+            Guid.NewGuid(), ApprovalModule.Treasury, yesterday.Transaction!.Id, null, "staff-omar", "Omar", CanApprove: true));
+        Assert.Equal([today], (await treasury.GetReconciliationAsync(today.AddDays(-1), today, ct)).Days.Select(d => d.Date!.Value));
+    }
+
     // The break-even worksheet: the month's sales at a year's pace, cost of sales at its ratio, the
     // month's costs × 12 as fixed costs, and the sales at which profit is nil.
     [Fact]

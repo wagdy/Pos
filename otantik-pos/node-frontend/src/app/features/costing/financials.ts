@@ -1,6 +1,7 @@
 import { Component, Injectable, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
+import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
@@ -13,6 +14,7 @@ import {
   FundingSource,
   InvoicePaymentStatus,
   PurchasePaymentMethod,
+  SafeEntry,
   SafeTransactionKind,
   SafeVoucherInput,
   SupplierBalance,
@@ -73,6 +75,27 @@ export interface SafeVoucherDialogData {
   supplierId?: string;
   amount?: number;
   revenueDate?: string;
+  // A day's takings: the till's tax rate (null before it has one), and whether the sum counted
+  // starts as including tax, as the till's own bills do.
+  taxPercent?: number | null;
+  includesTax?: boolean;
+}
+
+// A day's takings entered with the tax in them, as a ledger line shows it: the rate, the tax, and
+// the takings before it. A reversal's are its entry's.
+export function entryTax(e: SafeEntry): { percent: number; tax: number; net: number } | null {
+  if (!e.includesTax || e.taxPercent == null) {
+    return null;
+  }
+  const tax = Math.abs(e.tax);
+  return { percent: e.taxPercent, tax, net: Math.round(((e.in || e.out) - tax) * 100) / 100 };
+}
+
+// The tax in a sum that includes it, as the server takes it off: the sum less the sum over
+// (1 + rate), to the piastre.
+export function taxIn(gross: number, percent: number): { net: number; tax: number } {
+  const net = Math.round((gross / (1 + percent / 100)) * 100) / 100;
+  return { net, tax: Math.round((gross - net) * 100) / 100 };
 }
 
 const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
@@ -86,7 +109,17 @@ const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
 // send, or nothing when cancelled.
 @Component({
   selector: 'app-safe-voucher-dialog',
-  imports: [FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, MatSelectModule, MoneyPipe],
+  imports: [
+    FormsModule,
+    MatButtonModule,
+    MatCheckboxModule,
+    MatDialogModule,
+    MatFormFieldModule,
+    MatInputModule,
+    MatProgressBarModule,
+    MatSelectModule,
+    MoneyPipe,
+  ],
   template: `
     <h2 mat-dialog-title>{{ label.en }} <span class="ar">{{ label.ar }}</span></h2>
     <mat-dialog-content>
@@ -143,6 +176,20 @@ const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
           <input matInput type="number" min="0" step="any" [(ngModel)]="amount" aria-label="Amount" />
           <span matTextSuffix>&nbsp;L.E</span>
         </mat-form-field>
+        @if (data.kind === 'RevenueTransfer') {
+          <div class="wide tax">
+            <mat-checkbox [(ngModel)]="includesTax" [disabled]="data.taxPercent == null">
+              Total includes tax? <span class="ar">هل إجمالي الإيراد يشمل الضريبة؟</span>
+            </mat-checkbox>
+            @if (data.taxPercent == null) {
+              <p class="muted small">The till has no tax rate yet: it comes from the delivery system's settings.</p>
+            } @else if (taxSplit(); as t) {
+              <p class="muted small">
+                Before tax {{ t.net | money }} · tax at {{ data.taxPercent }}% {{ t.tax | money }}. All {{ amount | money }} goes into the safe.
+              </p>
+            }
+          </div>
+        }
         <mat-form-field>
           <mat-label>Date · التاريخ</mat-label>
           <input matInput type="date" [(ngModel)]="date" [max]="today" aria-label="Date" />
@@ -192,6 +239,16 @@ const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
     .error {
       color: var(--mat-sys-error);
     }
+    .tax {
+      margin: -4px 0 8px;
+
+      p {
+        margin: 0 0 0 40px;
+      }
+    }
+    .small {
+      font-size: 0.85em;
+    }
   `,
 })
 export class SafeVoucherDialog {
@@ -215,6 +272,7 @@ export class SafeVoucherDialog {
   protected supplierId: string | null = this.data.supplierId ?? null;
   protected expenseItemId: string | null = null;
   protected notes = '';
+  protected includesTax = this.data.includesTax ?? false;
 
   protected readonly explanation = {
     OpeningBalance: 'The cash in the safe as the treasury starts: carried over from before, or put in by the owners.',
@@ -231,6 +289,12 @@ export class SafeVoucherDialog {
 
   protected owed(): number | null {
     return this.balances().find((b) => b.supplierId === this.supplierId)?.balance ?? null;
+  }
+
+  // The takings before tax and the tax in them, while they are entered as including it.
+  protected taxSplit(): { net: number; tax: number } | null {
+    const rate = this.data.taxPercent;
+    return this.includesTax && rate != null && this.amount !== null && this.amount > 0 ? taxIn(this.amount, rate) : null;
   }
 
   // A supplier chosen: what they are owed, to pay in full unless less is typed.
@@ -284,6 +348,7 @@ export class SafeVoucherDialog {
       expenseItemId: this.data.kind === 'ExpenseVoucher' ? this.expenseItemId : null,
       notes: this.notes.trim() || null,
       reason: null,
+      includesTax: this.data.kind === 'RevenueTransfer' && this.includesTax && this.data.taxPercent != null,
     };
     this.ref.close(voucher);
   }
@@ -426,10 +491,12 @@ export class Treasury {
   // Asks for it, then sends it. True when something was entered or asked for.
   async enter(kind: SafeTransactionKind, preset: Partial<SafeVoucherDialogData> = {}): Promise<boolean> {
     const today = await this.businessDay.today();
+    // A day's takings may be entered with the tax in them, taken off at the till's rate.
+    const tax = kind === 'RevenueTransfer' ? { taxPercent: await this.taxPercent() } : {};
     const voucher = await firstValueFrom(
       this.dialog
         .open<SafeVoucherDialog, SafeVoucherDialogData, SafeVoucherInput>(SafeVoucherDialog, {
-          data: { ...preset, kind, canApprove: this.approvals.canApprove(), today },
+          data: { ...preset, ...tax, kind, canApprove: this.approvals.canApprove(), today },
           width: '520px',
           maxWidth: '95vw',
         })
@@ -443,12 +510,23 @@ export class Treasury {
       if (isRequested(result)) {
         await this.approvals.requested(result);
       } else {
-        this.notify.info(`${safeKindLabels[kind].en} entered: ${voucher.amount.toLocaleString('en-EG', { minimumFractionDigits: 2 })} L.E.`);
+        const money = (n: number) => n.toLocaleString('en-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const tax = result.includesTax ? `, tax in it ${money(result.taxAmount)} L.E` : '';
+        this.notify.info(`${safeKindLabels[kind].en} entered: ${money(voucher.amount)} L.E${tax}.`);
       }
       return true;
     } catch (error) {
       this.notify.error(error, 'The entry could not be saved.');
       return false;
+    }
+  }
+
+  // The bills' tax rate, or null before the till has one (or when it cannot be asked).
+  private async taxPercent(): Promise<number | null> {
+    try {
+      return (await firstValueFrom(this.api.financialSettings())).taxPercent;
+    } catch {
+      return null;
     }
   }
 

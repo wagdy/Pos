@@ -64,6 +64,7 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
     public DbSet<PrepRecipe> PrepRecipes => Set<PrepRecipe>();
     public DbSet<ProductionOrder> ProductionOrders => Set<ProductionOrder>();
     public DbSet<CostingSettings> CostingSettings => Set<CostingSettings>();
+    public DbSet<FinancialSettings> FinancialSettings => Set<FinancialSettings>();
     public DbSet<SharedCost> SharedCosts => Set<SharedCost>();
     public DbSet<MonthlyExpenses> MonthlyExpenses => Set<MonthlyExpenses>();
     public DbSet<ManualSalesSheet> ManualSalesSheets => Set<ManualSalesSheet>();

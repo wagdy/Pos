@@ -7,7 +7,7 @@ import { firstValueFrom } from 'rxjs';
 import { CostingApi, DayRevenue, DayRevenueReport, FundingReport, safeKindLabels } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
-import { Treasury, monthBounds } from './financials';
+import { Treasury, entryTax, monthBounds } from './financials';
 
 // Funding sources (مصادر التمويل): every sum put into the safe in a month, by where it came from:
 // carried over, the owners' financing, another source, and the days' cash takings. Below, each
@@ -69,6 +69,9 @@ import { Treasury, monthBounds } from './financials';
                 <td class="nowrap">{{ e.date | date: 'd MMM' }}</td>
                 <td>
                   <span class="kind">{{ kinds[e.kind].en }}</span> {{ e.description }}
+                  @if (entryTax(e); as t) {
+                    <div class="muted small">Tax in it at {{ t.percent }}%: {{ t.tax | money }} · {{ t.net | money }} before tax</div>
+                  }
                   @if (e.notes && !e.reversalOf) {
                     <div class="muted small">{{ e.notes }}</div>
                   }
@@ -172,6 +175,7 @@ export class FundingPage {
   private readonly api = inject(CostingApi);
   private readonly treasury = inject(Treasury);
   protected readonly kinds = safeKindLabels;
+  protected readonly entryTax = entryTax;
 
   protected readonly year = signal(new Date().getFullYear());
   protected readonly month = signal(new Date().getMonth() + 1);
@@ -200,9 +204,10 @@ export class FundingPage {
     }
   }
 
-  // A day's cash counted into the safe: what is left, unless less was counted.
+  // A day's cash counted into the safe: what is left, unless less was counted. The till's bills
+  // charge tax, so its cash has the tax in it.
   protected async moveIn(day: DayRevenue): Promise<void> {
-    if (await this.treasury.enter('RevenueTransfer', { revenueDate: day.date, amount: day.left })) {
+    if (await this.treasury.enter('RevenueTransfer', { revenueDate: day.date, amount: day.left, includesTax: true })) {
       await this.load();
     }
   }

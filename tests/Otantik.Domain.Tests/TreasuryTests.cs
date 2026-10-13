@@ -68,6 +68,31 @@ public class TreasuryTests
     }
 
     [Fact]
+    public void Takings_with_the_tax_in_them_go_into_the_safe_whole_with_the_tax_kept_apart()
+    {
+        // 1,140 at 14%: 1,000 before tax and 140 of tax, and all 1,140 in the safe.
+        var takings = SafeTransaction.RevenueTransfer(Guid.NewGuid(), 1_140, Today, Today, null, "Omar", taxPercent: 14);
+        Assert.Equal(
+            (1_140m, true, (decimal?)14m, 140m, 1_000m),
+            (takings.Amount, takings.IncludesTax, takings.TaxPercent, takings.TaxAmount, takings.NetAmount));
+
+        // To the piastre, and the two always add back up: 100 is 87.72 before tax and 12.28 of tax.
+        var odd = SafeTransaction.RevenueTransfer(Guid.NewGuid(), 100, Today, Today, null, "Omar", taxPercent: 14);
+        Assert.Equal((12.28m, 87.72m), (odd.TaxAmount, odd.NetAmount));
+
+        // Without the tax in them, all of it is takings.
+        var plain = SafeTransaction.RevenueTransfer(Guid.NewGuid(), 500, Today, Today, null, "Omar");
+        Assert.Equal((false, (decimal?)null, 0m, 500m), (plain.IncludesTax, plain.TaxPercent, plain.TaxAmount, plain.NetAmount));
+
+        // A void takes the tax back with the cash.
+        var reversal = takings.Void(Guid.NewGuid(), Today, "Omar");
+        Assert.Equal((-1_140m, -140m, (decimal?)14m), (reversal.Amount, reversal.TaxAmount, reversal.TaxPercent));
+
+        Assert.Throws<DomainException>(() => SafeTransaction.RevenueTransfer(Guid.NewGuid(), 100, Today, Today, null, "Omar", taxPercent: 100));
+        Assert.Throws<DomainException>(() => SafeTransaction.RevenueTransfer(Guid.NewGuid(), 100, Today, Today, null, "Omar", taxPercent: -1));
+    }
+
+    [Fact]
     public void A_supplier_is_owed_what_was_bought_on_credit_less_what_was_paid()
     {
         var supplier = Guid.NewGuid();

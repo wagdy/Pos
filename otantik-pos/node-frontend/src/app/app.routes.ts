@@ -156,6 +156,10 @@ export const routes: Routes = [
                 loadComponent: () => import('./features/costing/funding-page').then((m) => m.FundingPage),
               },
               {
+                path: 'reconciliation',
+                loadComponent: () => import('./features/costing/reconciliation-page').then((m) => m.ReconciliationPage),
+              },
+              {
                 path: 'expenses',
                 loadComponent: () => import('./features/costing/expense-vouchers-page').then((m) => m.ExpenseVouchersPage),
               },
@@ -167,6 +171,10 @@ export const routes: Routes = [
               {
                 path: 'payments',
                 loadComponent: () => import('./features/costing/supplier-payments-page').then((m) => m.SupplierPaymentsPage),
+              },
+              {
+                path: 'tax-service',
+                loadComponent: () => import('./features/costing/tax-service-page').then((m) => m.TaxServicePage),
               },
             ],
           },

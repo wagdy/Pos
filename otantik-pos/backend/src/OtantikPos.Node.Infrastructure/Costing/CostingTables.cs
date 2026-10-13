@@ -31,6 +31,19 @@ public sealed class CostingSettings
     public List<decimal> BreakEvenScenarios { get; set; } = [];
 }
 
+// The treasury's tax and service settings (إعدادات الضريبة والخدمة). The tax rate is not here: it is
+// the one every bill is charged, set in the delivery system and synced to the till, so the two can
+// never disagree. The service charge is kept for when bills carry one; nothing uses it yet.
+public sealed class FinancialSettings
+{
+    public const int SingletonId = 1;
+
+    public int Id { get; init; } = SingletonId;
+    public decimal ServicePercent { get; set; }
+    public string? UpdatedBy { get; set; }
+    public DateTime? UpdatedAtUtc { get; set; }
+}
+
 // What a month cost beyond its ingredients, as the manager enters it: what the KPIs need besides
 // sales, and the income statement's lines for the break-even worksheet. Every figure is optional
 // until known; a KPI that needs a missing one says so rather than showing 0.
@@ -187,5 +200,16 @@ internal sealed class MonthlyExpensesConfiguration : IEntityTypeConfiguration<Mo
         builder.Property(e => e.Interest).HasPrecision(18, 2);
         builder.Property(e => e.Depreciation).HasPrecision(18, 2);
         builder.Property(e => e.UpdatedBy).HasMaxLength(200);
+    }
+}
+
+internal sealed class FinancialSettingsConfiguration : IEntityTypeConfiguration<FinancialSettings>
+{
+    public void Configure(EntityTypeBuilder<FinancialSettings> builder)
+    {
+        builder.ToTable("FinancialSettings", NodeDbContext.InventorySchema);
+        builder.Property(s => s.Id).ValueGeneratedNever();
+        builder.Property(s => s.ServicePercent).HasPrecision(5, 2);
+        builder.Property(s => s.UpdatedBy).HasMaxLength(200);
     }
 }

@@ -106,6 +106,12 @@ public sealed class PricingOptions
     public decimal? TaxPercentageUntilSynced { get; set; }
 }
 
+// The rate the treasury takes off a day's takings entered with the tax in them: the bills' own.
+internal sealed class TillTaxRate(IPricingSettings pricing) : OtantikPos.Inventory.Application.Treasury.ITaxRate
+{
+    public Task<decimal> PercentAsync(CancellationToken cancellationToken) => pricing.GetTaxPercentageAsync(cancellationToken);
+}
+
 internal sealed class PricingSettings(NodeDbContext db, IOptions<PricingOptions> options) : IPricingSettings
 {
     public async Task<decimal> GetTaxPercentageAsync(CancellationToken cancellationToken)

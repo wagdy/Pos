@@ -62,6 +62,7 @@ public sealed class TestPos
         services.AddSingleton<IOrderStore>(Orders);
         services.AddSingleton<ICatalog>(new Menu());
         services.AddSingleton<IPricingSettings>(Pricing);
+        services.AddSingleton<OtantikPos.Inventory.Application.Treasury.ITaxRate>(Pricing);
         services.AddSingleton<IBusinessCalendar>(new TestCalendar());
         services.AddSingleton<ICustomerDirectory>(Cloud);
         services.AddSingleton<ILoyaltyGateway>(Cloud);
@@ -395,12 +396,16 @@ internal sealed class Menu : ICatalog
 }
 
 // The delivery system's synced pricing settings: 14% tax, and points at the default rate
-// unless a test changes it.
-public sealed class FixedPricing(decimal taxPercentage) : IPricingSettings
+// unless a test changes it. The treasury takes tax off takings at the same rate.
+public sealed class FixedPricing(decimal taxPercentage) : IPricingSettings, OtantikPos.Inventory.Application.Treasury.ITaxRate
 {
+    public decimal TaxPercentage { get; set; } = taxPercentage;
+
     public decimal RedemptionValuePer100Points { get; set; } = LoyaltyRedemption.DefaultValuePer100Points;
 
-    public Task<decimal> GetTaxPercentageAsync(CancellationToken cancellationToken) => Task.FromResult(taxPercentage);
+    public Task<decimal> GetTaxPercentageAsync(CancellationToken cancellationToken) => Task.FromResult(TaxPercentage);
+
+    public Task<decimal> PercentAsync(CancellationToken cancellationToken) => Task.FromResult(TaxPercentage);
 
     public Task<decimal> GetRedemptionValuePer100PointsAsync(CancellationToken cancellationToken) => Task.FromResult(RedemptionValuePer100Points);
 }

@@ -1157,6 +1157,19 @@ export class CostingApi {
     return this.http.get<DayRevenueReport>('/api/financials/revenue', { params: { from, to } });
   }
 
+  reconciliation(from: string, to: string): Observable<ReconciliationReport> {
+    return this.http.get<ReconciliationReport>('/api/financials/reconciliation', { params: { from, to } });
+  }
+
+  financialSettings(): Observable<FinancialSettings> {
+    return this.http.get<FinancialSettings>('/api/financials/settings');
+  }
+
+  // A manager's only.
+  saveFinancialSettings(servicePercent: number): Observable<FinancialSettings> {
+    return this.http.put<FinancialSettings>('/api/financials/settings', { servicePercent });
+  }
+
   expenseVouchers(from: string, to: string): Observable<ExpenseVoucherReport> {
     return this.http.get<ExpenseVoucherReport>('/api/financials/expense-vouchers', { params: { from, to } });
   }
@@ -1474,6 +1487,10 @@ export interface SafeEntry {
   reversalOf: string | null;
   voidedAtUtc: string | null;
   voidedBy: string | null;
+  // A day's takings entered with the tax in them: the rate, and the tax (signed as in and out are).
+  includesTax: boolean;
+  taxPercent: number | null;
+  tax: number;
 }
 
 // How a month's opening balance came about: carried over from the month before, the treasury's
@@ -1623,6 +1640,8 @@ export interface SafeVoucherInput {
   expenseItemId: string | null;
   notes: string | null;
   reason: string | null;
+  // A day's takings counted with the tax in them: the server takes it off at the till's rate.
+  includesTax: boolean;
 }
 
 export interface SafeTransaction {
@@ -1633,4 +1652,45 @@ export interface SafeTransaction {
   businessDate: string;
   recordedBy: string;
   approvedBy: string | null;
+  includesTax: boolean;
+  taxPercent: number | null;
+  taxAmount: number;
+}
+
+// Tax and service (إعدادات الضريبة والخدمة): the till's tax rate, as the delivery system set it
+// (null until it has synced), and the service charge, a manager's to set.
+export interface FinancialSettings {
+  taxPercent: number | null;
+  servicePercent: number;
+  updatedBy: string | null;
+  updatedAtUtc: string | null;
+}
+
+// One business day of the reconciliation (مطابقة الإيرادات), or the period's total (date null). The
+// cash before tax (A, netCash) against the cash the sales should have brought in (expectedCash):
+// every item at its price (B, itemSales), less discounts and points, plus delivery fees, less
+// refunds, less what was paid by card or online, all before tax. Difference: A less that; below
+// zero cash is missing, above it cash came in for items not rung up.
+export interface ReconciliationDay {
+  date: string | null;
+  takingsEntered: number;
+  paidOut: number;
+  tax: number;
+  netCash: number;
+  itemSales: number;
+  discounts: number;
+  points: number;
+  deliveryFees: number;
+  refunds: number;
+  cardAndOnline: number;
+  expectedCash: number;
+  difference: number;
+}
+
+export interface ReconciliationReport {
+  from: string;
+  to: string;
+  taxPercent: number | null;
+  total: ReconciliationDay;
+  days: ReconciliationDay[];
 }

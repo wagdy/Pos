@@ -355,6 +355,49 @@ public class ApiTests
         Assert.Equal((HttpStatusCode.OK, "Applied"), (done.StatusCode, (await Json(done)).GetProperty("outcome").GetString()));
     }
 
+    // Tax and service: the tax rate is the bills' own, shown to whoever keeps the books; the
+    // service charge is a manager's to set. A day's takings with the tax in them: the tax kept
+    // apart, all of the cash in the safe, and the day reconciled with its sales.
+    [Fact]
+    public async Task Tax_and_service_are_a_managers_to_set_and_takings_keep_their_tax_apart()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+
+        async Task<System.Text.Json.JsonElement> Json(HttpResponseMessage response)
+        {
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(Cancel));
+            return await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(Cancel);
+        }
+
+        var settings = await Json(await accountant.GetAsync("/api/financials/settings", Cancel));
+        Assert.Equal((14m, 0m), (settings.GetProperty("taxPercent").GetDecimal(), settings.GetProperty("servicePercent").GetDecimal()));
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.PutAsJsonAsync("/api/financials/settings", new { servicePercent = 12 }, Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await manager.PutAsJsonAsync("/api/financials/settings", new { servicePercent = 100 }, Cancel)).StatusCode);
+        var saved = await Json(await manager.PutAsJsonAsync("/api/financials/settings", new { servicePercent = 12 }, Cancel));
+        Assert.Equal(12m, saved.GetProperty("servicePercent").GetDecimal());
+        Assert.False(string.IsNullOrEmpty(saved.GetProperty("updatedBy").GetString()));
+
+        // 1,140 counted with the tax in it, whatever rate the screen sends: 140 of tax, 1,140 in the safe.
+        var today = (await Json(await manager.GetAsync("/api/financials/today", Cancel))).GetProperty("today").GetString();
+        var entry = await Json(await manager.PostAsJsonAsync("/api/financials/vouchers", new
+        {
+            requestId = Guid.NewGuid(), transactionId = Guid.NewGuid(), kind = "RevenueTransfer", amount = 1_140, revenueDate = today, includesTax = true,
+            taxPercent = 1,
+        }, Cancel));
+        Assert.Equal((true, 14m, 140m), (entry.GetProperty("includesTax").GetBoolean(), entry.GetProperty("taxPercent").GetDecimal(), entry.GetProperty("taxAmount").GetDecimal()));
+        var month = DateOnly.Parse(today!, System.Globalization.CultureInfo.InvariantCulture);
+        var safe = await Json(await manager.GetAsync($"/api/financials/safe?year={month.Year}&month={month.Month}", Cancel));
+        Assert.Equal(1_140m, safe.GetProperty("balanceNow").GetDecimal());
+        Assert.Equal(140m, safe.GetProperty("entries")[0].GetProperty("tax").GetDecimal());
+
+        // Nothing sold: the 1,000 before tax is all cash for items not rung up.
+        var report = await Json(await accountant.GetAsync($"/api/financials/reconciliation?from={today}&to={today}", Cancel));
+        var total = report.GetProperty("total");
+        Assert.Equal((1_000m, 0m, 1_000m), (total.GetProperty("netCash").GetDecimal(), total.GetProperty("expectedCash").GetDecimal(), total.GetProperty("difference").GetDecimal()));
+    }
+
     // An accountant's prep item and batch: each answered 202, a request, with nothing made until
     // the manager approves; the manager sees what approving would move, at today's averages. A
     // manager's own correction is done at once (200), and kept with the approvals.

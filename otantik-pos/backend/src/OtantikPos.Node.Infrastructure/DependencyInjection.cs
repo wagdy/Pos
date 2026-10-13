@@ -85,6 +85,7 @@ public static class DependencyInjection
         services.AddScoped<ISafeTransactionRepository, SafeTransactionRepository>();
         services.AddScoped<ISupplierLedgerRepository, SupplierLedgerRepository>();
         services.AddScoped<OtantikPos.Inventory.Application.Approvals.IRecordDescriptions, RecordDescriptions>();
+        services.AddScoped<OtantikPos.Inventory.Application.Treasury.ITaxRate, TillTaxRate>();
         services.AddScoped<IExpenseItemRepository, ExpenseItemRepository>();
         services.AddScoped<IPrepRecipeRepository, PrepRecipeRepository>();
         services.AddScoped<IProductionOrderRepository, ProductionOrderRepository>();

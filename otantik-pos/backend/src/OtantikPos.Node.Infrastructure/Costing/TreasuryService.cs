@@ -6,6 +6,7 @@ using OtantikPos.Inventory.Domain.Purchases;
 using OtantikPos.Inventory.Domain.Treasury;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Persistence;
+using OtantikPos.Ordering.Application.Ports;
 using static OtantikPos.Node.Infrastructure.Costing.CostingService;
 
 namespace OtantikPos.Node.Infrastructure.Costing;
@@ -32,7 +33,12 @@ public sealed record SafeEntryRow(
     string? ApprovedBy,
     Guid? ReversalOf,
     DateTime? VoidedAtUtc,
-    string? VoidedBy);
+    string? VoidedBy,
+    // A day's takings entered with the tax in them: the rate, and the tax (signed as In and Out
+    // are: a voided entry's reversal takes it back).
+    bool IncludesTax = false,
+    decimal? TaxPercent = null,
+    decimal Tax = 0);
 
 // How a month's opening balance came about: carried over from the month before (رصيد مرحل), the
 // treasury's own opening entry, made this month, or none yet.
@@ -119,9 +125,44 @@ public sealed record SupplierPaymentRow(
     Guid Id, DateOnly Date, Guid SupplierId, string Supplier, decimal Amount, string? Notes, string RecordedBy, string? ApprovedBy,
     DateTime? VoidedAtUtc, string? VoidedBy);
 
+// Tax and service (إعدادات الضريبة والخدمة): the till's tax rate, as the delivery system set it (null
+// until it has synced, when the till cannot price a bill either), and the service charge.
+public sealed record FinancialSettingsDto(decimal? TaxPercent, decimal ServicePercent, string? UpdatedBy, DateTime? UpdatedAtUtc);
+
+public sealed record SaveFinancialSettingsRequest(decimal ServicePercent);
+
+// One business day of the reconciliation (مطابقة الإيرادات), or the period's total (no Date).
+//
+// The cash: the day's takings as entered, and what was paid straight out of them before they
+// reached the safe; the tax in that; and so the cash before tax (A, NetCash).
+//
+// The sales: every item sold, at its price (B, ItemSales); less promo discounts and the points
+// bills were paid with, plus delivery fees, less money handed back, all before tax; less what was
+// paid by card or online. What is left is the cash the sales should have brought in (ExpectedCash).
+//
+// Difference: A less the expected cash. Below zero, cash is missing for items sold; above it,
+// cash came in for items that were not rung up.
+public sealed record ReconciliationDay(
+    DateOnly? Date,
+    decimal TakingsEntered,
+    decimal PaidOut,
+    decimal Tax,
+    decimal NetCash,
+    decimal ItemSales,
+    decimal Discounts,
+    decimal Points,
+    decimal DeliveryFees,
+    decimal Refunds,
+    decimal CardAndOnline,
+    decimal ExpectedCash,
+    decimal Difference);
+
+public sealed record ReconciliationReport(DateOnly From, DateOnly To, decimal? TaxPercent, ReconciliationDay Total, IReadOnlyList<ReconciliationDay> Days);
+
 // The treasury's reports, read straight from the ledgers: the safe, where its money came from, each
-// day's cash, the expense vouchers, and what is owed to suppliers.
-public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock)
+// day's cash and its reconciliation with the sales, the expense vouchers, and what is owed to
+// suppliers. And its tax and service settings.
+public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, SalesLedger ledger, IPricingSettings pricing)
 {
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
@@ -193,12 +234,7 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock)
     public async Task<DayRevenueReport> GetDayRevenueAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken)
     {
         Period(from, to);
-        var opened = await db.SafeTransactions.AsNoTracking()
-            .Where(t => t.Kind == SafeTransactionKind.OpeningBalance && t.ReversalOf == null && t.VoidedAtUtc == null)
-            .Select(t => (DateOnly?)t.BusinessDate)
-            .FirstOrDefaultAsync(cancellationToken);
-        if (opened > from)
-            from = opened.Value;
+        from = await FromOpeningAsync(from, cancellationToken);
         if (from > to)
             return new DayRevenueReport(from, to, 0, 0, 0, 0, []);
         var sales = await CashSalesAsync(from, to, cancellationToken);
@@ -239,6 +275,121 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock)
                 .ToListAsync(cancellationToken))
             .Select(s => (Day: clock.BusinessDateOf(s.SoldAtUtc), Amount: s.Lines.Sum(l => l.LineTotal) - s.DiscountAmount + s.DeliveryFee));
         return till.Concat(online).GroupBy(x => x.Day).ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
+    }
+
+    // The first day of a period the treasury has kept: its opening day, when that is later.
+    private async Task<DateOnly> FromOpeningAsync(DateOnly from, CancellationToken cancellationToken)
+    {
+        var opened = await db.SafeTransactions.AsNoTracking()
+            .Where(t => t.Kind == SafeTransactionKind.OpeningBalance && t.ReversalOf == null && t.VoidedAtUtc == null)
+            .Select(t => (DateOnly?)t.BusinessDate)
+            .FirstOrDefaultAsync(cancellationToken);
+        return opened > from ? opened.Value : from;
+    }
+
+    // ---- Reconciliation: the cash against the sales ----
+
+    // Each business day from the treasury's opening on, latest first: the takings entered for it
+    // against the items sold that day (costing's sales: orders paid at the till by when they were
+    // paid, and online orders).
+    public async Task<ReconciliationReport> GetReconciliationAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken)
+    {
+        Period(from, to);
+        var taxPercent = await TaxPercentAsync(cancellationToken);
+        from = await FromOpeningAsync(from, cancellationToken);
+        if (from > to)
+            return new ReconciliationReport(from, to, taxPercent, Reconcile(null, [], []), []);
+
+        var cash = await db.SafeTransactions.AsNoTracking()
+            .Where(t => t.RevenueDate != null && t.RevenueDate >= from && t.RevenueDate <= to
+                && (t.Kind == SafeTransactionKind.RevenueTransfer || t.Kind == SafeTransactionKind.InvoicePayment))
+            .ToListAsync(cancellationToken);
+        var (fromUtc, _) = clock.Bounds(from);
+        var (_, toUtc) = clock.Bounds(to);
+        var sales = (await ledger.GetAsync(fromUtc, toUtc, cancellationToken)).ToLookup(o => clock.BusinessDateOf(o.SoldAtUtc));
+
+        // A day whose only entries were voided, with nothing sold, has nothing to reconcile.
+        var days = cash.Select(t => t.RevenueDate!.Value).Concat(sales.Select(g => g.Key)).Distinct().OrderByDescending(d => d)
+            .Select(day => Reconcile(day, cash.Where(t => t.RevenueDate == day).ToList(), sales[day].ToList()))
+            .Where(d => d.TakingsEntered != 0 || d.PaidOut != 0 || sales[d.Date!.Value].Any())
+            .ToList();
+        var total = new ReconciliationDay(
+            null, Money(days.Sum(d => d.TakingsEntered)), Money(days.Sum(d => d.PaidOut)), Money(days.Sum(d => d.Tax)),
+            Money(days.Sum(d => d.NetCash)), Money(days.Sum(d => d.ItemSales)), Money(days.Sum(d => d.Discounts)), Money(days.Sum(d => d.Points)),
+            Money(days.Sum(d => d.DeliveryFees)), Money(days.Sum(d => d.Refunds)), Money(days.Sum(d => d.CardAndOnline)),
+            Money(days.Sum(d => d.ExpectedCash)), Money(days.Sum(d => d.Difference)));
+        return new ReconciliationReport(from, to, taxPercent, total, days);
+    }
+
+    private static ReconciliationDay Reconcile(DateOnly? day, IReadOnlyList<SafeTransaction> cash, IReadOnlyList<SaleOrder> sales)
+    {
+        // The cash, voided entries netting out with their reversals.
+        var takings = cash.Where(t => t.Kind == SafeTransactionKind.RevenueTransfer).ToList();
+        var entered = takings.Sum(t => t.Amount);
+        var paidOut = -cash.Where(t => t.Kind == SafeTransactionKind.InvoicePayment).Sum(t => t.Amount);
+        // What was paid out of the takings was part of them: entered with the tax in them, it had
+        // tax in it too, at their rate.
+        var rate = takings.Where(t => t.IncludesTax && !t.IsReversal && !t.IsVoided)
+            .OrderByDescending(t => t.RecordedAtUtc).Select(t => t.TaxPercent).FirstOrDefault();
+        var tax = takings.Sum(t => t.TaxAmount) + (rate is { } r ? SafeTransaction.TaxIn(paidOut, r) : 0);
+        var netCash = entered + paidOut - tax;
+
+        // The sales, before tax. A bill's money before tax is its items, less its promo discount and
+        // points, plus its delivery fee; a refund is taken back in the same proportion.
+        decimal items = 0, discounts = 0, points = 0, fees = 0, refunds = 0, cardAndOnline = 0, expected = 0;
+        foreach (var sale in sales)
+        {
+            var beforeTax = sale.Charged - sale.Tax;
+            var refund = sale.Charged > 0 ? Math.Round(sale.Refunded * beforeTax / sale.Charged, 2, MidpointRounding.AwayFromZero) : 0;
+            items += sale.BilledSubtotal;
+            discounts += sale.DiscountAmount;
+            points += sale.Points;
+            fees += beforeTax - sale.BilledSubtotal + sale.DiscountAmount + sale.Points;
+            refunds += refund;
+            if (sale.PaymentMethod == PaymentMethod.Cash)
+                expected += beforeTax - refund;
+            else
+                cardAndOnline += beforeTax - refund;
+        }
+
+        return new ReconciliationDay(
+            day, Money(entered), Money(paidOut), Money(tax), Money(netCash), Money(items), Money(discounts), Money(points), Money(fees),
+            Money(refunds), Money(cardAndOnline), Money(expected), Money(netCash - expected));
+    }
+
+    // ---- Tax and service ----
+
+    public async Task<FinancialSettingsDto> GetSettingsAsync(CancellationToken cancellationToken)
+    {
+        var row = await db.FinancialSettings.AsNoTracking().SingleOrDefaultAsync(cancellationToken);
+        return new FinancialSettingsDto(await TaxPercentAsync(cancellationToken), row?.ServicePercent ?? 0, row?.UpdatedBy, row?.UpdatedAtUtc);
+    }
+
+    public async Task<FinancialSettingsDto> SaveSettingsAsync(SaveFinancialSettingsRequest request, string by, CancellationToken cancellationToken)
+    {
+        if (request.ServicePercent is < 0 or >= 100)
+            throw new DomainException("The service charge is a percentage from 0 up to 100.");
+        var row = await db.FinancialSettings.SingleOrDefaultAsync(cancellationToken);
+        if (row is null)
+            db.FinancialSettings.Add(row = new FinancialSettings());
+        row.ServicePercent = Math.Round(request.ServicePercent, 2, MidpointRounding.AwayFromZero);
+        row.UpdatedBy = by;
+        row.UpdatedAtUtc = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+        return await GetSettingsAsync(cancellationToken);
+    }
+
+    // The bills' tax rate, or null before the delivery system has sent it.
+    private async Task<decimal?> TaxPercentAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await pricing.GetTaxPercentageAsync(cancellationToken);
+        }
+        catch (DeliverySystemUnavailableException)
+        {
+            return null;
+        }
     }
 
     // ---- Expense vouchers ----
@@ -405,7 +556,7 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock)
         return new SafeEntryRow(
             t.Id, t.Kind, t.Fund, t.BusinessDate, t.IsReversal ? $"Voided: {what}" : what, t.Amount > 0 ? t.Amount : 0, t.Amount < 0 ? -t.Amount : 0,
             balance is { } b ? Money(b) : null, t.Source, t.RevenueDate, t.SupplierId, t.PurchaseInvoiceId, t.ExpenseItemId, t.Notes, t.RecordedBy,
-            t.RecordedAtUtc, t.ApprovedBy, t.ReversalOf, t.VoidedAtUtc, t.VoidedBy);
+            t.RecordedAtUtc, t.ApprovedBy, t.ReversalOf, t.VoidedAtUtc, t.VoidedBy, t.IncludesTax, t.TaxPercent, t.TaxAmount);
     }
 
     private static string SourceName(FundingSource? source) => source switch

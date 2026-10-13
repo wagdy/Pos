@@ -10,7 +10,7 @@ function entry(overrides: Partial<SafeEntry>): SafeEntry {
   return {
     id: 'e', kind: 'Funding', fund: 'Safe', date: '2026-10-02', description: 'Funding · owners’ financing', in: 0, out: 0, balance: 0, source: null,
     revenueDate: null, supplierId: null, purchaseInvoiceId: null, expenseItemId: null, notes: null, recordedBy: 'Omar', recordedAtUtc: '2026-10-02T09:00:00Z',
-    approvedBy: null, reversalOf: null, voidedAtUtc: null, voidedBy: null, ...overrides,
+    approvedBy: null, reversalOf: null, voidedAtUtc: null, voidedBy: null, includesTax: false, taxPercent: null, tax: 0, ...overrides,
   };
 }
 
@@ -66,6 +66,18 @@ describe('the safe', () => {
     expect(rows[2]).toEqual(['5 Oct', 'Expense voucher Electricity', '', 'L.E 1,250.00', 'L.E 15,750.00', 'Mona approved by Omar']);
     // No opening balance to enter: it has one.
     expect([...el.querySelectorAll('button')].map(text)).not.toContain('flag Opening balance');
+  });
+
+  it('shows the tax in a day’s takings entered with it, and what they were before it', async () => {
+    safe.mockReturnValue(of({
+      ...month,
+      entries: [entry({ id: 't', kind: 'RevenueTransfer', description: 'Takings of 12 Oct', in: 1_140, balance: 13_140, includesTax: true, taxPercent: 14, tax: 140 })],
+    }));
+    const { el } = await render();
+
+    expect(text(el.querySelectorAll('tbody tr')[1].querySelectorAll('td')[1])).toBe(
+      'Takings in Takings of 12 Oct Tax in it at 14%: L.E 140.00 · L.E 1,000.00 before tax',
+    );
   });
 
   it('enters money in and out, and voids an entry through the approvals', async () => {

@@ -9,7 +9,7 @@ import { CostingApi, SafeEntry, SafeMonth, SafeTransactionKind, fundingSourceLab
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { Approvals, pendingLabel } from './approvals';
-import { Treasury } from './financials';
+import { Treasury, entryTax } from './financials';
 
 // The safe (الخزنة): what is in it now, and month by month the balance it opened with (carried
 // over from the month before, or the treasury's own opening entry, and from where), what came in
@@ -111,6 +111,9 @@ import { Treasury } from './financials';
                 <td class="nowrap">{{ e.date | date: 'd MMM' }}</td>
                 <td>
                   <span class="kind" [class]="e.kind">{{ kinds[e.kind].en }}</span> {{ e.description }}
+                  @if (entryTax(e); as t) {
+                    <div class="muted small">Tax in it at {{ t.percent }}%: {{ t.tax | money }} · {{ t.net | money }} before tax</div>
+                  }
                   @if (e.notes && !e.reversalOf) {
                     <div class="muted small">{{ e.notes }}</div>
                   }
@@ -204,6 +207,7 @@ export class SafePage {
   protected readonly approvals = inject(Approvals);
   protected readonly pendingLabel = pendingLabel;
   protected readonly kinds = safeKindLabels;
+  protected readonly entryTax = entryTax;
 
   protected readonly year = signal(new Date().getFullYear());
   protected readonly month = signal(new Date().getMonth() + 1);

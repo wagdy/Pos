@@ -194,10 +194,13 @@ internal sealed class SafeTransactionConfiguration : IEntityTypeConfiguration<Sa
         builder.Property(t => t.Fund).IsEnumName();
         builder.Property(t => t.Source).IsEnumName();
         builder.Property(t => t.Amount).HasPrecision(18, 2);
+        builder.Property(t => t.TaxPercent).HasPrecision(5, 2);
+        builder.Property(t => t.TaxAmount).HasPrecision(18, 2);
         builder.Property(t => t.Notes).HasMaxLength(300);
         builder.Property(t => t.RecordedBy).HasMaxLength(200);
         builder.Property(t => t.ApprovedBy).HasMaxLength(200);
         builder.Property(t => t.VoidedBy).HasMaxLength(200);
+        builder.Ignore(t => t.NetAmount);
         builder.Ignore(t => t.IsReversal);
         builder.Ignore(t => t.IsVoided);
         builder.HasOne<Supplier>().WithMany().HasForeignKey(t => t.SupplierId).OnDelete(DeleteBehavior.Restrict);

@@ -5,7 +5,7 @@ import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
 import { CostingApi, SafeVoucherInput } from '../../core/costing/costing.api';
 import { NotifyService } from '../../core/ui/notify.service';
-import { SafeVoucherDialog, SafeVoucherDialogData, Treasury } from './financials';
+import { SafeVoucherDialog, SafeVoucherDialogData, Treasury, taxIn } from './financials';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
@@ -69,6 +69,32 @@ describe('entering a safe entry', () => {
     expect([page['date'], page['today']]).toEqual(['2026-10-12', '2026-10-12']);
   });
 
+  it('takes the tax out of takings that include it, at the till’s rate, and says all of it goes into the safe', async () => {
+    const { el, page } = await dialog({ kind: 'RevenueTransfer', canApprove: true, revenueDate: '2026-10-12', amount: 1_140, taxPercent: 14, includesTax: true });
+
+    expect(page['taxSplit']()).toEqual({ net: 1_000, tax: 140 });
+    expect(text(el)).toContain('Before tax L.E 1,000.00 · tax at 14% L.E 140.00. All L.E 1,140.00 goes into the safe.');
+    page['done']();
+    expect(close.mock.lastCall![0]).toMatchObject({ kind: 'RevenueTransfer', amount: 1_140, includesTax: true });
+  });
+
+  it('enters takings typed by hand without tax unless ticked, and never with tax when the till has no rate', async () => {
+    const byHand = await dialog({ kind: 'RevenueTransfer', canApprove: true, amount: 500, taxPercent: 14 });
+    expect(byHand.page['includesTax']).toBe(false);
+    expect(byHand.page['taxSplit']()).toBeNull();
+    TestBed.resetTestingModule();
+
+    const { el, page } = await dialog({ kind: 'RevenueTransfer', canApprove: true, amount: 500, taxPercent: null, includesTax: true });
+    expect(text(el)).toContain('The till has no tax rate yet');
+    page['done']();
+    expect(close.mock.lastCall![0]).toMatchObject({ includesTax: false });
+  });
+
+  it('works the tax out to the piastre, as the server does', () => {
+    expect(taxIn(100, 14)).toEqual({ net: 87.72, tax: 12.28 });
+    expect(taxIn(1_140, 14)).toEqual({ net: 1_000, tax: 140 });
+  });
+
   it('moves a day’s takings in on that day or after it', async () => {
     const { page } = await dialog({ kind: 'RevenueTransfer', canApprove: true, revenueDate: '2026-10-10', amount: 3_200 });
     page['date'] = '2026-10-09';
@@ -87,13 +113,16 @@ describe('sending a safe entry', () => {
   const notify = { info: vi.fn(), error: vi.fn() };
   const voucher: SafeVoucherInput = {
     requestId: 'q', transactionId: 't', kind: 'ExpenseVoucher', amount: 1_250, date: '2026-10-12', source: null, revenueDate: null,
-    supplierId: null, expenseItemId: 'power', notes: null, reason: null,
+    supplierId: null, expenseItemId: 'power', notes: null, reason: null, includesTax: false,
   };
 
   function service(manager: boolean): Treasury {
     TestBed.configureTestingModule({
       providers: [
-        { provide: CostingApi, useValue: { recordVoucher, approvalRequests, businessToday: () => of({ today: '2026-10-12' }) } },
+        {
+          provide: CostingApi,
+          useValue: { recordVoucher, approvalRequests, businessToday: () => of({ today: '2026-10-12' }), financialSettings: () => of({ taxPercent: 14 }) },
+        },
         { provide: MatDialog, useValue: { open } },
         { provide: NotifyService, useValue: notify },
         { provide: AuthService, useValue: { can: (p: string) => p !== Permissions.ApprovalDecide || manager } },
@@ -126,6 +155,16 @@ describe('sending a safe entry', () => {
     expect(await service(false).enter('ExpenseVoucher')).toBe(true);
 
     expect(notify.info).toHaveBeenCalledWith('Submitted to the manager for approval. Nothing is made until it is approved.');
+  });
+
+  it('offers a day’s takings with the till’s tax rate, and says the tax in them once entered', async () => {
+    open.mockReturnValue({ afterClosed: () => of({ ...voucher, kind: 'RevenueTransfer', amount: 1_140, includesTax: true }) });
+    recordVoucher.mockReturnValue(of({ id: 't', kind: 'RevenueTransfer', amount: 1_140, includesTax: true, taxPercent: 14, taxAmount: 140 }));
+
+    expect(await service(true).enter('RevenueTransfer', { revenueDate: '2026-10-11', amount: 1_140, includesTax: true })).toBe(true);
+
+    expect(open.mock.lastCall![1].data).toMatchObject({ kind: 'RevenueTransfer', taxPercent: 14, includesTax: true, revenueDate: '2026-10-11' });
+    expect(notify.info).toHaveBeenCalledWith('Takings in entered: 1,140.00 L.E, tax in it 140.00 L.E.');
   });
 
   it('sends nothing when cancelled', async () => {

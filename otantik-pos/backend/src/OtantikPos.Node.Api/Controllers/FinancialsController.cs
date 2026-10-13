@@ -10,10 +10,12 @@ using OtantikPos.Node.Infrastructure.Costing;
 
 namespace OtantikPos.Node.Api.Controllers;
 
-// The treasury (الماليات): the safe, where its money came from, each day's cash, expense vouchers,
-// and what is owed to suppliers and paid them. Whoever keeps the books sees and enters it; a safe
-// entry by anyone who may not approve waits for a manager (202), and moves no cash until then.
-// Voiding an entry is a deletion request (POST /api/inventory/deletion-requests, module Treasury).
+// The treasury (الماليات): the safe, where its money came from, each day's cash and its
+// reconciliation with the sales, expense vouchers, and what is owed to suppliers and paid them.
+// Whoever keeps the books sees and enters it; a safe entry by anyone who may not approve waits for
+// a manager (202), and moves no cash until then. Voiding an entry is a deletion request
+// (POST /api/inventory/deletion-requests, module Treasury). The tax and service settings are a
+// manager's to change.
 [ApiController]
 [Route("api/financials")]
 [Authorize(Policy = Permissions.InventoryManage)]
@@ -35,6 +37,19 @@ public sealed class FinancialsController(ISender sender, TreasuryService treasur
     [HttpGet("revenue")]
     public Task<DayRevenueReport> GetDayRevenue([FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken cancellationToken) =>
         treasury.GetDayRevenueAsync(from, to, cancellationToken);
+
+    // Each day's cash before tax against the cash its sales should have brought in.
+    [HttpGet("reconciliation")]
+    public Task<ReconciliationReport> GetReconciliation([FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken cancellationToken) =>
+        treasury.GetReconciliationAsync(from, to, cancellationToken);
+
+    [HttpGet("settings")]
+    public Task<FinancialSettingsDto> GetSettings(CancellationToken cancellationToken) => treasury.GetSettingsAsync(cancellationToken);
+
+    [HttpPut("settings")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<FinancialSettingsDto> SaveSettings(SaveFinancialSettingsRequest request, CancellationToken cancellationToken) =>
+        treasury.SaveSettingsAsync(request, StaffName, cancellationToken);
 
     [HttpGet("expense-vouchers")]
     public Task<ExpenseVoucherReport> GetExpenseVouchers([FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken cancellationToken) =>
@@ -71,7 +86,7 @@ public sealed class FinancialsController(ISender sender, TreasuryService treasur
             request.RequestId,
             new SafeVoucher(
                 request.TransactionId, request.Kind, request.Amount, request.Date ?? treasury.Today, request.Source, request.RevenueDate,
-                request.SupplierId, request.ExpenseItemId, null, request.Notes),
+                request.SupplierId, request.ExpenseItemId, null, request.Notes, request.IncludesTax),
             request.Reason, StaffClaims.IdOf(User) ?? string.Empty, StaffName, CanApprove), cancellationToken);
         return result.Outcome == ApprovalOutcome.Requested
             ? Accepted(new ApprovalResultDto(result.Outcome, result.Request!))
@@ -94,6 +109,8 @@ public sealed record SafeVoucherRequest(
     Guid? SupplierId = null,
     Guid? ExpenseItemId = null,
     string? Notes = null,
-    string? Reason = null);
+    string? Reason = null,
+    // A day's takings counted with the tax in them: taken off at the till's own rate.
+    bool IncludesTax = false);
 
 public sealed record SupplierOpeningBalanceRequest(Guid EntryId, decimal Owed, DateOnly? Date = null);

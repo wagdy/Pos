@@ -3,8 +3,9 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 
-// Financials (الماليات): the safe, where its money comes from, the expense vouchers paid out of it,
-// what is owed to suppliers, and the payments made to them.
+// Financials (الماليات): the safe, where its money comes from, each day's cash reconciled with its
+// sales, the expense vouchers paid out of the safe, what is owed to suppliers and the payments made
+// to them, and the tax and service settings.
 @Component({
   selector: 'app-financials-shell',
   imports: [MatButtonModule, MatIconModule, RouterLink, RouterLinkActive, RouterOutlet],
@@ -37,8 +38,10 @@ export class FinancialsShell {
   protected readonly tabs = [
     { path: 'safe', icon: 'account_balance_wallet', en: 'Safe', ar: 'الخزنة' },
     { path: 'funding', icon: 'savings', en: 'Funding sources', ar: 'مصادر التمويل' },
+    { path: 'reconciliation', icon: 'rule', en: 'Reconciliation', ar: 'مطابقة الإيرادات' },
     { path: 'expenses', icon: 'receipt', en: 'Expense vouchers', ar: 'إذن صرف مصروفات' },
     { path: 'suppliers', icon: 'account_balance', en: 'Supplier debts', ar: 'مديونيات الموردين' },
     { path: 'payments', icon: 'payments', en: 'Supplier payments', ar: 'أذونات صرف الموردين' },
+    { path: 'tax-service', icon: 'percent', en: 'Tax & service', ar: 'الضريبة والخدمة' },
   ];
 }

@@ -96,6 +96,14 @@ public sealed class SafeTransaction : AggregateRoot
     public Guid? ExpenseItemId { get; private set; }
     public string? Notes { get; private set; }
 
+    // A day's takings entered as including tax (هل إجمالي الإيراد يشمل الضريبة؟): the rate taken off
+    // and the tax in Amount, signed as Amount is. Amount stays the whole sum counted, the cash in
+    // the safe; NetAmount is the takings before tax, as the menu's prices are.
+    public bool IncludesTax { get; private set; }
+    public decimal? TaxPercent { get; private set; }
+    public decimal TaxAmount { get; private set; }
+    public decimal NetAmount => Amount - TaxAmount;
+
     public string RecordedBy { get; private set; } = string.Empty;
     public DateTime RecordedAtUtc { get; private set; }
 
@@ -127,16 +135,35 @@ public sealed class SafeTransaction : AggregateRoot
         new(id, SafeTransactionKind.Funding, CashFund.Safe, Positive(amount), date, notes, recordedBy, approvedBy) { Source = Defined(source) };
 
     // A day's cash takings counted into the safe: what was counted, which may differ from what
-    // the till says, so a shortfall shows on that day.
+    // the till says, so a shortfall shows on that day. With taxPercent, the sum counted includes
+    // tax at that rate, and the tax in it is kept apart: all of it still goes into the safe.
     public static SafeTransaction RevenueTransfer(
-        Guid id, decimal amount, DateOnly date, DateOnly revenueDate, string? notes, string recordedBy, string? approvedBy = null)
+        Guid id, decimal amount, DateOnly date, DateOnly revenueDate, string? notes, string recordedBy, string? approvedBy = null,
+        decimal? taxPercent = null)
     {
         if (revenueDate > date)
             throw new DomainException("A day's takings are moved into the safe on that day or after it.");
-        return new SafeTransaction(id, SafeTransactionKind.RevenueTransfer, CashFund.Safe, Positive(amount), date, notes, recordedBy, approvedBy)
+        var entry = new SafeTransaction(id, SafeTransactionKind.RevenueTransfer, CashFund.Safe, Positive(amount), date, notes, recordedBy, approvedBy)
         {
             RevenueDate = revenueDate,
         };
+        if (taxPercent is { } rate)
+        {
+            entry.IncludesTax = true;
+            entry.TaxPercent = rate;
+            entry.TaxAmount = TaxIn(entry.Amount, rate);
+        }
+
+        return entry;
+    }
+
+    // The tax in a sum that includes it: the sum less the sum before tax, which is the sum over
+    // (1 + rate), to the piastre. So the two always add back up to the sum.
+    public static decimal TaxIn(decimal gross, decimal percent)
+    {
+        if (percent is < 0 or >= 100)
+            throw new DomainException("A tax rate is a percentage from 0 up to 100.");
+        return gross - Math.Round(gross / (1 + percent / 100m), 2, MidpointRounding.AwayFromZero);
     }
 
     public static SafeTransaction ExpenseVoucher(
@@ -180,6 +207,9 @@ public sealed class SafeTransaction : AggregateRoot
         VoidedBy = voidedBy;
         return new SafeTransaction(reversalId, Kind, Fund, -Amount, today, "Voided", voidedBy, null)
         {
+            IncludesTax = IncludesTax,
+            TaxPercent = TaxPercent,
+            TaxAmount = -TaxAmount,
             RevenueDate = RevenueDate,
             Source = Source,
             SupplierId = SupplierId,
