@@ -55,9 +55,10 @@ export class Shell implements OnInit, OnDestroy {
     { initialValue: false },
   );
 
-  // A role with none of the money rights: a captain who reached the till, say. Told plainly
-  // rather than left wondering where the buttons went.
-  protected readonly orderTakingOnly = computed(() => !this.auth.canAny(MoneyPermissions));
+  // A role that takes orders but has none of the money rights: a captain who reached the till,
+  // say. Told plainly rather than left wondering where the buttons went. Not said to the
+  // accountant, who takes no orders at all.
+  protected readonly orderTakingOnly = computed(() => this.auth.can(Permissions.OrderCreate) && !this.auth.canAny(MoneyPermissions));
 
   protected readonly cloudLabel = computed(() => {
     switch (this.connectivity.cloud()?.state) {

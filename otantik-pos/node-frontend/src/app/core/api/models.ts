@@ -20,7 +20,7 @@ export type PaymentMethod = 'Cash' | 'Visa' | 'Instapay';
 
 export type VoidType = 'BeforeKitchen' | 'AfterKitchen' | 'AfterPayment';
 
-export type UserRole = 'Customer' | 'Admin' | 'CaptainOrder' | 'Cashier' | 'Manager' | 'DeliveryCaptain';
+export type UserRole = 'Customer' | 'Admin' | 'CaptainOrder' | 'Cashier' | 'Manager' | 'DeliveryCaptain' | 'Accountant';
 
 export interface OrderItemAddOn {
   id: number;
