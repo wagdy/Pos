@@ -375,9 +375,11 @@ public class NodeTests
             PaymentStatus = PaymentStatus.Confirmed,
             OrderItems = [new OrderItem { MenuItemId = FakeDeliverySystem.Burger, MenuItemName = "Burger", UnitPrice = 120, Quantity = burgers }],
         };
+        // Priced as the delivery system prices them, at its 14%.
         var instapay = Online(PaymentMethod.Instapay, 3);
         instapay.DiscountAmount = 30;
         instapay.DeliveryFee = 20;
+        OrderPricing.Reprice(instapay, 14m);
         var cash = Online(PaymentMethod.Cash, 1);
         lock (node.Cloud.OnlineOrders)
             node.Cloud.OnlineOrders.AddRange([instapay, cash, Online(PaymentMethod.Instapay, 5, OrderStatus.Cancelled)]);
@@ -388,9 +390,12 @@ public class NodeTests
         Assert.True(await TestNode.WaitFor(async () => await Patties() == 47));
 
         // Cash on delivery counts once the driver has handed it over.
+        // Part paid with 10 of points.
         var delivered = Online(PaymentMethod.Cash, 1, OrderStatus.Delivered);
         delivered.PublicId = cash.PublicId;
         delivered.OrderItems.Single().PublicId = cash.OrderItems.Single().PublicId;
+        delivered.PointsDiscountAmount = 10;
+        OrderPricing.Reprice(delivered, 14m);
         lock (node.Cloud.OnlineOrders)
         {
             node.Cloud.OnlineOrders.Remove(cash);
@@ -407,6 +412,18 @@ public class NodeTests
         // Revenue: 360 less the 30 promo, the delivered 120, and the 20 delivery fee.
         var month = (await node.Service<KpiService>(scope).GetAsync(today.Year, today.Month, ct)).Statement;
         Assert.Equal((470m, 2), (month.Revenue, month.PaidOrders));
+
+        // The day's cash is what the driver brought back: the burger, its VAT, less the points:
+        // 120 + 16.80 - 10. The Instapay order was paid online, never in cash.
+        var treasury = node.Service<TreasuryService>(scope);
+        Assert.Equal(126.80m, delivered.TotalAmount);
+        Assert.Equal(126.80m, (await treasury.GetDayRevenueAsync(today, today, ct)).Days.Single().CashSales);
+        // Reconciled before tax: 480 of burgers, less the 30 promo and the 10 of points, plus the 20
+        // delivery fee; the Instapay order's 350 paid online; 110 to come in as cash.
+        var day = (await treasury.GetReconciliationAsync(today, today, ct)).Days.Single();
+        Assert.Equal(
+            (480m, 30m, 10m, 20m, 350m, 110m),
+            (day.ItemSales, day.Discounts, day.Points, day.DeliveryFees, day.CardAndOnline, day.ExpectedCash));
 
         // Not the till's orders: nothing to take payment for, and not in its takings.
         Assert.Empty(await node.Send(new GetOpenOrdersQuery()));

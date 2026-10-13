@@ -33,6 +33,14 @@ public sealed class OnlineSale
     public decimal DiscountAmount { get; init; }
     public decimal DeliveryFee { get; init; }
 
+    // What the customer was charged, as the delivery system priced it: the items less the promo
+    // discount, plus VAT and the delivery fee, less the points the bill was paid with. The cash a
+    // driver brings back for cash on delivery. The VAT and the points in it, apart. A sale recorded
+    // before these were kept has its items less the discount plus the fee, and no VAT or points.
+    public decimal TotalAmount { get; init; }
+    public decimal TaxAmount { get; init; }
+    public decimal PointsDiscountAmount { get; init; }
+
     public List<OnlineSaleLine> Lines { get; init; } = [];
 }
 
@@ -109,6 +117,9 @@ public sealed class OnlineSalesImporter(NodeDbContext db, IEventOutbox outbox)
                 PaymentMethod = order.PaymentMethod,
                 DiscountAmount = order.DiscountAmount,
                 DeliveryFee = Math.Max(order.DeliveryFee - order.DeliveryDiscountAmount, 0),
+                TotalAmount = order.TotalAmount,
+                TaxAmount = order.TaxAmount,
+                PointsDiscountAmount = order.PointsDiscountAmount,
                 Lines = live.Select(i => new OnlineSaleLine
                 {
                     PublicId = i.PublicId,

@@ -10,8 +10,7 @@ public sealed record SaleOrder(bool Online, decimal DiscountAmount, decimal Bill
 {
     // For the reconciliation of each day's cash: when it was paid and how, what was charged, and
     // the parts of that which are not the food: tax, the points it was paid with, money handed
-    // back. An online sale is kept before tax, without points or refunds: Charged is its items
-    // less its discount, plus its delivery fee.
+    // back. An online sale has no refunds: one refunded before the till saw it paid is no sale.
     public DateTime SoldAtUtc { get; init; }
     public PaymentMethod PaymentMethod { get; init; }
     public decimal Charged { get; init; }
@@ -65,7 +64,9 @@ public sealed class SalesLedger(NodeDbContext db)
             {
                 SoldAtUtc = s.SoldAtUtc,
                 PaymentMethod = s.PaymentMethod,
-                Charged = s.Lines.Sum(l => l.LineTotal) - s.DiscountAmount + s.DeliveryFee,
+                Charged = s.TotalAmount,
+                Tax = s.TaxAmount,
+                Points = s.PointsDiscountAmount,
             }),
         ];
     }

@@ -259,7 +259,8 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
     }
 
     // What each business day took in cash, as the day report counts it: the till's paid orders of
-    // that day paid in cash, less refunds, and the online orders paid cash on delivery.
+    // that day paid in cash, less refunds, and the online orders paid cash on delivery, as charged
+    // (VAT in, points off): what the driver brought back.
     public async Task<IReadOnlyDictionary<DateOnly, decimal>> CashSalesAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken)
     {
         var (fromUtc, _) = clock.Bounds(from);
@@ -271,9 +272,9 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
             .Select(o => (Day: clock.BusinessDateOf(o.CreatedAt), Amount: o.TotalAmount - o.RefundedAmount));
         var online = (await db.OnlineSales.AsNoTracking()
                 .Where(s => s.PaymentMethod == PaymentMethod.Cash && s.SoldAtUtc >= fromUtc && s.SoldAtUtc < toUtc)
-                .Include(s => s.Lines)
+                .Select(s => new { s.SoldAtUtc, s.TotalAmount })
                 .ToListAsync(cancellationToken))
-            .Select(s => (Day: clock.BusinessDateOf(s.SoldAtUtc), Amount: s.Lines.Sum(l => l.LineTotal) - s.DiscountAmount + s.DeliveryFee));
+            .Select(s => (Day: clock.BusinessDateOf(s.SoldAtUtc), Amount: s.TotalAmount));
         return till.Concat(online).GroupBy(x => x.Day).ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
     }
 
