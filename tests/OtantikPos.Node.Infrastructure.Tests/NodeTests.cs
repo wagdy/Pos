@@ -1470,6 +1470,66 @@ public class NodeTests
         Assert.Equal([today], (await treasury.GetDayRevenueAsync(today.AddDays(-7), today, ct)).Days.Select(d => d.Date));
     }
 
+    // A day's purchases entered together (يومية المشتريات المجمعة): an invoice for each supplier, each
+    // its own posted invoice with its own payment, never one for the lot; none saved unless all can be.
+    [Fact]
+    public async Task A_days_purchases_entered_together_are_an_invoice_for_each_supplier()
+    {
+        await using var node = await TestNode.StartAsync();
+        var ct = TestContext.Current.CancellationToken;
+        using var scope = node.Scope();
+        var treasury = node.Service<TreasuryService>(scope);
+        var today = treasury.Today;
+        var tomatoes = (await node.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram))).Id;
+        var milk = (await node.Send(new CreateRawMaterialCommand("Milk", UnitOfMeasure.Millilitre))).Id;
+        var nile = (await node.Send(new SaveSupplierCommand(Guid.NewGuid(), "Nile Farms"))).Id;
+        var delta = (await node.Send(new SaveSupplierCommand(Guid.NewGuid(), "Delta Dairy"))).Id;
+        await node.Send(new RecordSafeVoucherCommand(
+            Guid.NewGuid(), new SafeVoucher(Guid.NewGuid(), SafeTransactionKind.OpeningBalance, 10_000, today, FundingSource.CarriedOver),
+            null, "staff-omar", "Omar", CanApprove: true));
+        async Task<decimal> Safe() => (await treasury.GetSafeAsync(today.Year, today.Month, ct)).BalanceNow;
+        Task<decimal> OnHand(Guid id) => node.Db(db => db.RawMaterials.Where(m => m.Id == id).Select(m => m.QuantityOnHand).SingleAsync());
+        BatchInvoice Tomatoes(Guid? supplier, decimal cost = 100) => new(Guid.NewGuid(), supplier, "F-1", [new(tomatoes, 5, "kg", 1000, cost)]);
+        BatchInvoice Milk(Guid? supplier) => new(Guid.NewGuid(), supplier, null, [new(milk, 10, "L", 1000, 420)]);
+        Task<IReadOnlyList<PurchaseInvoiceDto>> Batch(PurchasePaymentMethod method, bool manager, params BatchInvoice[] invoices) =>
+            node.Send(new PostPurchaseBatchCommand(today, method, null, invoices, manager ? "Omar" : "Mona", manager ? "staff-omar" : "staff-mona", manager));
+
+        // A manager's, paid from the safe: two invoices, each its supplier's, each paid on its own.
+        var paid = await Batch(PurchasePaymentMethod.Safe, true, Tomatoes(nile), Milk(delta));
+        Assert.Equal([("Nile Farms", 100m), ("Delta Dairy", 420m)], paid.Select(i => (i.SupplierName!, i.Total)));
+        Assert.All(paid, i => Assert.Equal((PurchaseInvoiceStatus.Posted, today, InvoicePaymentStatus.Paid), (i.Status, i.InvoiceDate!.Value, i.PaymentStatus)));
+        Assert.Equal(10_000m - 520, await Safe());
+        var payments = await node.Db(db => db.SafeTransactions.Where(t => t.Kind == SafeTransactionKind.InvoicePayment).ToListAsync());
+        Assert.Equal(paid.Select(i => (Guid?)i.Id).Order(), payments.Select(t => t.PurchaseInvoiceId).Order());
+        Assert.Equal((5_000m, 10_000m), (await OnHand(tomatoes), await OnHand(milk)));
+
+        // On credit, one with no supplier: nothing is saved, and the problem names its invoice.
+        var refused = await Assert.ThrowsAsync<DomainException>(() => Batch(PurchasePaymentMethod.Credit, true, Tomatoes(nile), Milk(null)));
+        Assert.StartsWith("Invoice 2: ", refused.Message);
+        Assert.Equal(2, await node.Db(db => db.PurchaseInvoices.CountAsync()));
+        Assert.Equal(5_000m, await OnHand(tomatoes));
+
+        // On credit, each owed to its own supplier.
+        await Batch(PurchasePaymentMethod.Credit, true, Tomatoes(nile, 150), Milk(delta));
+        Assert.Equal((150m, 420m), ((await treasury.GetSupplierStatementAsync(nile, ct))!.Balance, (await treasury.GetSupplierStatementAsync(delta, ct))!.Balance));
+
+        // The accountant's from the safe: the stock is in, a payment asked of a manager for each, the safe as it was.
+        var safeBefore = await Safe();
+        var asked = await Batch(PurchasePaymentMethod.Safe, false, Tomatoes(nile), Milk(delta));
+        Assert.All(asked, i => Assert.Equal(InvoicePaymentStatus.Pending, i.PaymentStatus));
+        var pending = (await node.Send(new GetApprovalRequestsQuery())).Pending.Where(r => r.Module == ApprovalModule.Treasury).ToList();
+        Assert.Equal(asked.Select(i => i.Id).Order(), pending.Select(r => r.RecordId).Order());
+        Assert.Equal(safeBefore, await Safe());
+        Assert.Equal(15_000m, await OnHand(tomatoes));
+
+        // Sent again after a lost answer: the same invoices, nothing twice.
+        var again = new[] { Tomatoes(nile), Milk(delta) };
+        await Batch(PurchasePaymentMethod.Safe, true, again);
+        var count = await node.Db(db => db.PurchaseInvoices.CountAsync());
+        Assert.Equal(again.Select(i => i.InvoiceId), (await Batch(PurchasePaymentMethod.Safe, true, again)).Select(i => i.Id));
+        Assert.Equal(count, await node.Db(db => db.PurchaseInvoices.CountAsync()));
+    }
+
     // The reconciliation (مطابقة الإيرادات): the day's cash before tax against what its sales, at
     // their prices before tax, should have brought in as cash.
     [Fact]

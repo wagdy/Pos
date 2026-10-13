@@ -208,17 +208,12 @@ public sealed record SavePurchaseInvoiceCommand(
     PurchasePaymentMethod? PaymentMethod = null,
     DateOnly? RevenueDate = null) : IRequest<PurchaseInvoiceDto>;
 
-internal sealed class SavePurchaseInvoiceCommandHandler(
-    IPurchaseInvoiceRepository invoices,
-    IRawMaterialRepository materials,
-    IExpenseItemRepository expenses,
-    IPurchaseCategoryRepository categories,
-    ISupplierRepository suppliers,
-    ISafeTransactionRepository safe,
-    IApprovalRequestRepository requests,
-    IUnitOfWork unitOfWork) : IRequestHandler<SavePurchaseInvoiceCommand, PurchaseInvoiceDto>
+// The checks and the recording of an invoice as entered, for a draft saved on its own and for each
+// invoice of a daily batch alike. Tracked, for the caller to save.
+internal sealed class InvoiceRecorder(
+    IPurchaseInvoiceRepository invoices, IRawMaterialRepository materials, IExpenseItemRepository expenses, ISupplierRepository suppliers)
 {
-    public async Task<PurchaseInvoiceDto> Handle(SavePurchaseInvoiceCommand request, CancellationToken cancellationToken)
+    public async Task<PurchaseInvoice> RecordAsync(SavePurchaseInvoiceCommand request, CancellationToken cancellationToken)
     {
         // A draft can be saved before its lines, to attach its paper first.
         var materialIds = request.Lines
@@ -263,6 +258,23 @@ internal sealed class SavePurchaseInvoiceCommandHandler(
         }
 
         invoice.Record(request.SupplierId, request.SupplierInvoiceNumber, request.InvoiceDate, request.Lines, request.PaymentMethod, request.RevenueDate);
+        return invoice;
+    }
+}
+
+internal sealed class SavePurchaseInvoiceCommandHandler(
+    InvoiceRecorder recorder,
+    IRawMaterialRepository materials,
+    IExpenseItemRepository expenses,
+    IPurchaseCategoryRepository categories,
+    ISupplierRepository suppliers,
+    ISafeTransactionRepository safe,
+    IApprovalRequestRepository requests,
+    IUnitOfWork unitOfWork) : IRequestHandler<SavePurchaseInvoiceCommand, PurchaseInvoiceDto>
+{
+    public async Task<PurchaseInvoiceDto> Handle(SavePurchaseInvoiceCommand request, CancellationToken cancellationToken)
+    {
+        var invoice = await recorder.RecordAsync(request, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return await new InvoiceReading(materials, expenses, categories, suppliers, safe, requests).DtoAsync(invoice, cancellationToken);
     }
@@ -275,16 +287,32 @@ internal sealed class SavePurchaseInvoiceCommandHandler(
 public sealed record PostPurchaseInvoiceCommand(Guid InvoiceId, string StaffName = "", string StaffId = "", bool CanApprove = true)
     : IRequest<PurchaseInvoiceDto>, IRetryOnConflict;
 
+// Posting an invoice: its stock in and its payment settled, for an invoice posted on its own and for
+// each invoice of a daily batch alike. Tracked, for the caller to save.
+internal sealed class InvoicePoster(
+    IRawMaterialRepository materials, IStockMovementRepository movements, IApprovalRequestRepository requests, TreasuryWriter treasury)
+{
+    public async Task PostAsync(PurchaseInvoice invoice, string staffName, string staffId, bool canApprove, CancellationToken cancellationToken)
+    {
+        var materialIds = invoice.Lines.Where(l => l.RawMaterialId is not null).Select(l => l.RawMaterialId!.Value).ToList();
+        IReadOnlyDictionary<Guid, RawMaterial> byId = materialIds.Count == 0
+            ? new Dictionary<Guid, RawMaterial>()
+            : await materials.GetRequiredByIdsAsync(materialIds, cancellationToken);
+        foreach (var movement in invoice.Post(byId, staffName))
+            movements.Add(movement);
+        await treasury.SettleAsync(invoice, Guid.NewGuid(), staffId, staffName, canApprove, requests, cancellationToken);
+    }
+}
+
 internal sealed class PostPurchaseInvoiceCommandHandler(
     IPurchaseInvoiceRepository invoices,
     IRawMaterialRepository materials,
     IExpenseItemRepository expenses,
     IPurchaseCategoryRepository categories,
     ISupplierRepository suppliers,
-    IStockMovementRepository movements,
     ISafeTransactionRepository safe,
     IApprovalRequestRepository requests,
-    TreasuryWriter treasury,
+    InvoicePoster poster,
     IUnitOfWork unitOfWork) : IRequestHandler<PostPurchaseInvoiceCommand, PurchaseInvoiceDto>
 {
     public async Task<PurchaseInvoiceDto> Handle(PostPurchaseInvoiceCommand request, CancellationToken cancellationToken)
@@ -294,14 +322,7 @@ internal sealed class PostPurchaseInvoiceCommandHandler(
         if (invoice.Status == PurchaseInvoiceStatus.Posted)
             return await reading.DtoAsync(invoice, cancellationToken);
 
-        var materialIds = invoice.Lines.Where(l => l.RawMaterialId is not null).Select(l => l.RawMaterialId!.Value).ToList();
-        IReadOnlyDictionary<Guid, RawMaterial> byId = materialIds.Count == 0
-            ? new Dictionary<Guid, RawMaterial>()
-            : await materials.GetRequiredByIdsAsync(materialIds, cancellationToken);
-        foreach (var movement in invoice.Post(byId, request.StaffName))
-            movements.Add(movement);
-        await treasury.SettleAsync(invoice, Guid.NewGuid(), request.StaffId, request.StaffName, request.CanApprove, requests, cancellationToken);
-
+        await poster.PostAsync(invoice, request.StaffName, request.StaffId, request.CanApprove, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return await reading.DtoAsync(invoice, cancellationToken);
     }

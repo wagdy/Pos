@@ -503,6 +503,51 @@ public class ApiTests
         Assert.Contains("could not be read as an Excel workbook", await notExcel.Content.ReadAsStringAsync(Cancel));
     }
 
+    // A day's purchases entered together: each supplier's its own invoice, none saved unless all
+    // can be, each problem said by its invoice; an accountant's paid only once a manager approves.
+    [Fact]
+    public async Task A_days_purchases_are_sent_together_as_an_invoice_for_each_supplier()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var cashier = await api.CashierAsync(manager);
+        var accountant = await api.AccountantAsync(manager);
+
+        async Task<JsonElement> Json(HttpResponseMessage response)
+        {
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(Cancel));
+            return await response.Content.ReadFromJsonAsync<JsonElement>(Cancel);
+        }
+
+        var tomatoes = (await Json(await manager.PostAsJsonAsync("/api/inventory/raw-materials", new { name = "Tomatoes", unit = "Gram" }, Cancel)))
+            .GetProperty("id").GetGuid();
+        var nile = (await Json(await manager.PutAsJsonAsync($"/api/inventory/suppliers/{Guid.NewGuid()}", new { name = "Nile Farms" }, Cancel)))
+            .GetProperty("id").GetGuid();
+        object Invoice(Guid? supplier, decimal cost) => new
+        {
+            invoiceId = Guid.NewGuid(), supplierId = supplier, supplierInvoiceNumber = (string?)null,
+            lines = new[] { new { rawMaterialId = tomatoes, enteredQuantity = 5, unitLabel = "kg", unitSize = 1000, cost, itemType = "Inventory" } },
+        };
+        object Batch(string method, params object[] invoices) => new { invoiceDate = "2026-10-13", paymentMethod = method, invoices };
+
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await cashier.PostAsJsonAsync("/api/inventory/purchase-invoices/batch", Batch("Safe", Invoice(nile, 100)), Cancel)).StatusCode);
+
+        // On credit, the second has no supplier: refused, said by its invoice, and nothing saved.
+        var refused = await manager.PostAsJsonAsync("/api/inventory/purchase-invoices/batch", Batch("Credit", Invoice(nile, 100), Invoice(null, 50)), Cancel);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, refused.StatusCode);
+        var problem = (await refused.Content.ReadFromJsonAsync<JsonElement>(Cancel)).GetProperty("errors")[0].GetString()!;
+        Assert.StartsWith("Invoice 2: ", problem);
+        Assert.Empty((await Json(await manager.GetAsync("/api/inventory/purchase-invoices", Cancel))).EnumerateArray());
+
+        // The accountant's from the safe: both posted, each payment waiting for a manager.
+        var made = (await Json(await accountant.PostAsJsonAsync("/api/inventory/purchase-invoices/batch",
+            Batch("Safe", Invoice(nile, 100), Invoice(null, 60)), Cancel))).EnumerateArray().ToList();
+        Assert.Equal([("Posted", "Pending"), ("Posted", "Pending")], made.Select(i => (i.GetProperty("status").GetString(), i.GetProperty("paymentStatus").GetString())));
+        var pending = (await Json(await manager.GetAsync("/api/inventory/approval-requests", Cancel))).GetProperty("pending").EnumerateArray().ToList();
+        Assert.Equal(2, pending.Count(r => r.GetProperty("module").GetString() == "Treasury"));
+    }
+
     // A sheet of batch recipes (المصنعات), as kitchens write them: a prep item's name on its own row,
     // a heading row, then its ingredients. A manager's import makes them; an accountant's asks.
     [Fact]

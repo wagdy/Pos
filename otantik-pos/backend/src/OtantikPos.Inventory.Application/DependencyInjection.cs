@@ -14,6 +14,8 @@ public static class DependencyInjection
         services.AddScoped<Production.PrepItemWriter>();
         services.AddScoped<Production.ProductionWriter>();
         services.AddScoped<Treasury.TreasuryWriter>();
+        services.AddScoped<Purchases.InvoiceRecorder>();
+        services.AddScoped<Purchases.InvoicePoster>();
         return services;
     }
 }

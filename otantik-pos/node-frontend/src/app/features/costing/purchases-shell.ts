@@ -37,6 +37,7 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 export class PurchasesShell {
   protected readonly tabs = [
     { path: 'new', icon: 'add_shopping_cart', en: 'New invoice', ar: 'فاتورة جديدة' },
+    { path: 'batch', icon: 'library_add', en: 'Daily batch', ar: 'يومية المشتريات' },
     { path: 'invoices', icon: 'history', en: 'Invoices', ar: 'أرشيف الفواتير' },
     { path: 'spending', icon: 'pie_chart', en: 'Spending by category', ar: 'المشتريات حسب الفئة' },
     { path: 'suppliers', icon: 'local_shipping', en: 'Suppliers', ar: 'إدارة الموردين' },

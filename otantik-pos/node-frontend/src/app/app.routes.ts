@@ -49,6 +49,10 @@ export const routes: Routes = [
                 loadComponent: () => import('./features/costing/purchases-page').then((m) => m.PurchasesPage),
               },
               {
+                path: 'batch',
+                loadComponent: () => import('./features/costing/purchase-batch-page').then((m) => m.PurchaseBatchPage),
+              },
+              {
                 path: 'invoices',
                 loadComponent: () => import('./features/costing/invoices-page').then((m) => m.InvoicesPage),
               },

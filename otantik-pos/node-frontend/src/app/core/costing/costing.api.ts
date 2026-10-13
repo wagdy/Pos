@@ -836,6 +836,15 @@ export interface SavePurchaseInvoice {
 }
 
 // A stock line names its material; an expense line its expense item, in units of 1, with its cost.
+// A day's purchases entered together (يومية المشتريات المجمعة): the date and how they were paid,
+// chosen once, and an invoice for each supplier, each its own invoice. InvoiceId is made here.
+export interface PurchaseBatch {
+  invoiceDate: string;
+  paymentMethod: PurchasePaymentMethod;
+  revenueDate: string | null;
+  invoices: { invoiceId: string; supplierId: string | null; supplierInvoiceNumber: string | null; lines: SavePurchaseLine[] }[];
+}
+
 export interface SavePurchaseLine {
   itemType: PurchaseItemType;
   rawMaterialId: string | null;
@@ -1138,6 +1147,11 @@ export class CostingApi {
   }
 
   // Step one: kept as a draft. The id is made here, once per invoice.
+  // A day's purchases entered together: each invoice made, posted and paid as chosen, or none.
+  postPurchaseBatch(batch: PurchaseBatch): Observable<PurchaseInvoice[]> {
+    return this.http.post<PurchaseInvoice[]>('/api/inventory/purchase-invoices/batch', batch);
+  }
+
   savePurchaseInvoice(id: string, invoice: SavePurchaseInvoice): Observable<PurchaseInvoice> {
     return this.http.put<PurchaseInvoice>(`/api/inventory/purchase-invoices/${id}`, invoice);
   }

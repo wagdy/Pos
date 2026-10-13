@@ -112,6 +112,15 @@ public sealed class InventoryController(ISender sender) : ControllerBase
     public Task<PurchaseInvoiceDto> PostPurchaseInvoice(Guid invoiceId, CancellationToken cancellationToken) =>
         sender.Send(new PostPurchaseInvoiceCommand(invoiceId, StaffName, StaffId, CanApprove), cancellationToken);
 
+    // A day's purchases entered together: the date and payment chosen once, an invoice for each
+    // supplier. Each becomes its own posted invoice, paid as chosen (a manager's at once, anyone
+    // else's asked of one); none is saved unless all can be (422, each problem by its invoice).
+    [HttpPost("purchase-invoices/batch")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public Task<IReadOnlyList<PurchaseInvoiceDto>> PostPurchaseBatch(PurchaseBatchRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new PostPurchaseBatchCommand(
+            request.InvoiceDate, request.PaymentMethod, request.RevenueDate, request.Invoices, StaffName, StaffId, CanApprove), cancellationToken);
+
     // Pays a posted cash invoice that is not paid (its payment was rejected or voided), or puts it
     // on credit. RequestId is made by the till.
     [HttpPost("purchase-invoices/{invoiceId:guid}/pay")]
@@ -483,6 +492,9 @@ public sealed record SavePurchaseInvoiceRequest(
     DateOnly? RevenueDate = null);
 
 public sealed record PayPurchaseInvoiceRequest(Guid RequestId, PurchasePaymentMethod Method, DateOnly? RevenueDate = null);
+
+public sealed record PurchaseBatchRequest(
+    DateOnly InvoiceDate, PurchasePaymentMethod PaymentMethod, IReadOnlyList<BatchInvoice> Invoices, DateOnly? RevenueDate = null);
 
 public sealed record SavePrepItemRequest(
     string Name,
