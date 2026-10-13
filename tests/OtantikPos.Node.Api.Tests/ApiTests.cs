@@ -503,6 +503,76 @@ public class ApiTests
         Assert.Contains("could not be read as an Excel workbook", await notExcel.Content.ReadAsStringAsync(Cancel));
     }
 
+    // A sheet of batch recipes (المصنعات), as kitchens write them: a prep item's name on its own row,
+    // a heading row, then its ingredients. A manager's import makes them; an accountant's asks.
+    [Fact]
+    public async Task Prep_items_are_imported_from_a_sheet_of_batch_recipes()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var cashier = await api.CashierAsync(manager);
+        var accountant = await api.AccountantAsync(manager);
+
+        async Task<JsonElement> Json(HttpResponseMessage response)
+        {
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(Cancel));
+            return await response.Content.ReadFromJsonAsync<JsonElement>(Cancel);
+        }
+        static MultipartFormDataContent Upload(byte[] bytes) =>
+            new() { { new ByteArrayContent(bytes), "file", "مصنعات.xlsx" } };
+        static byte[] Sheet(params object[][] rows)
+        {
+            using var workbook = new ClosedXML.Excel.XLWorkbook();
+            var sheet = workbook.AddWorksheet("Sheet1");
+            for (var r = 0; r < rows.Length; r++)
+                for (var c = 0; c < rows[r].Length; c++)
+                    sheet.Cell(r + 1, c + 1).Value = ClosedXML.Excel.XLCellValue.FromObject(rows[r][c]);
+            using var stream = new MemoryStream();
+            workbook.SaveAs(stream);
+            return stream.ToArray();
+        }
+
+        await Json(await manager.PostAsJsonAsync("/api/inventory/raw-materials", new { name = "زبدة_فيرن_", unit = "Gram" }, Cancel));
+        object[] heading = ["الصنف", "الوحدة", "الكمية"];
+        var sheet = Sheet(
+            heading,
+            ["صوص_دميجلاس"],
+            heading,
+            ["زبدة_فيرن_", "كيلو", 0.2],
+            ["كريمه", "لتر", 0.3],
+            ["ملح_", "", 0.025],
+            ["طبق_فاكهه"],
+            heading,
+            ["تفاح", "كيلو", 0.1]);
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PostAsync("/api/inventory/prep-items/import", Upload(sheet), Cancel)).StatusCode);
+        var made = await Json(await manager.PostAsync("/api/inventory/prep-items/import", Upload(sheet), Cancel));
+        Assert.Equal(["صوص_دميجلاس", "طبق_فاكهه"], made.GetProperty("imported").EnumerateArray().Select(i => i.GetProperty("name").GetString()));
+        var sauce = made.GetProperty("imported")[0];
+        Assert.Equal((500m, 2, false), (sauce.GetProperty("batchQuantity").GetDecimal(), sauce.GetProperty("ingredients").GetInt32(), sauce.GetProperty("requested").GetBoolean()));
+        Assert.Contains(sauce.GetProperty("notes").EnumerateArray(), n => n.GetString() == "ملح_ 0.025: no unit, left out.");
+        Assert.Equal(["كريمه", "تفاح"], made.GetProperty("materialsAdded").EnumerateArray().Select(m => m.GetProperty("name").GetString()));
+        Assert.Equal("مصنعات", made.GetProperty("categoryAdded").GetString());
+
+        // On the prep items list, as prep items, with their recipes.
+        var items = (await Json(await manager.GetAsync("/api/inventory/prep-items", Cancel))).EnumerateArray().ToList();
+        var listed = items.Single(i => i.GetProperty("name").GetString() == "صوص_دميجلاس");
+        Assert.Equal(("مصنعات", "Gram", 500m, 2), (listed.GetProperty("category").GetString(), listed.GetProperty("unit").GetString(),
+            listed.GetProperty("batchQuantity").GetDecimal(), listed.GetProperty("ingredients").GetArrayLength()));
+
+        // The accountant's: asked of a manager, nothing made until then.
+        var asked = await Json(await accountant.PostAsync("/api/inventory/prep-items/import", Upload(Sheet(heading, ["بطاطس_بوريه"], heading, ["بطاطس", "كيلو", 2.5])), Cancel));
+        Assert.True(asked.GetProperty("imported")[0].GetProperty("requested").GetBoolean());
+        var pending = (await Json(await manager.GetAsync("/api/inventory/approval-requests", Cancel))).GetProperty("pending").EnumerateArray().ToList();
+        Assert.Contains(pending, r => r.GetProperty("module").GetString() == "PrepItem" && r.GetProperty("action").GetString() == "Create");
+        Assert.DoesNotContain((await Json(await manager.GetAsync("/api/inventory/prep-items", Cancel))).EnumerateArray(),
+            i => i.GetProperty("name").GetString() == "بطاطس_بوريه");
+
+        // Not a workbook at all: said so.
+        var notExcel = await manager.PostAsync("/api/inventory/prep-items/import", Upload("not a workbook"u8.ToArray()), Cancel);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, notExcel.StatusCode);
+    }
+
     // An accountant's prep item and batch: each answered 202, a request, with nothing made until
     // the manager approves; the manager sees what approving would move, at today's averages. A
     // manager's own correction is done at once (200), and kept with the approvals.

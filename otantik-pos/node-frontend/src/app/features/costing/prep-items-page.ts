@@ -2,21 +2,25 @@ import { DatePipe, DecimalPipe } from '@angular/common';
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
+import { MatDialog } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
-import { CostingApi, PrepItem } from '../../core/costing/costing.api';
+import { CostingApi, PrepImportResult, PrepItem } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
+import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals, pendingLabel } from './approvals';
+import { PrepImportDialog } from './prep-import-dialog';
 
 // The prep items: made in the kitchen from their own recipes, kept in stock, used by dishes.
 // Each with what it costs by its recipe at today's prices, what the batches on the shelf cost,
 // and how much is on the shelf. A row opens its profile. New ones asked for by an accountant are
-// listed first, waiting for a manager: they are not prep items until approved.
+// listed first, waiting for a manager: they are not prep items until approved. Many at once from a
+// sheet of batch recipes (المصنعات): each prep item's name on a row of its own, then its ingredients.
 @Component({
   selector: 'app-prep-items-page',
   imports: [DatePipe, DecimalPipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatInputModule, MatProgressBarModule, MoneyPipe, RouterLink],
@@ -39,8 +43,16 @@ import { Approvals, pendingLabel } from './approvals';
         </mat-form-field>
         <span class="spacer"></span>
         <a mat-button routerLink="../production"><mat-icon>precision_manufacturing</mat-icon> Make a batch</a>
+        <button mat-stroked-button (click)="picker.click()" [disabled]="busy()">
+          <mat-icon>upload_file</mat-icon> Import from Excel<span class="inline-ar">استيراد</span>
+        </button>
+        <input #picker type="file" hidden accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          (change)="importFile(picker)" aria-label="Excel sheet of batch recipes to import" />
         <a mat-flat-button routerLink="new"><mat-icon>add</mat-icon> Add prep item</a>
       </div>
+      @if (busy()) {
+        <mat-progress-bar mode="indeterminate" />
+      }
       <div class="table-wrap">
         <table class="grid">
           <thead>
@@ -123,6 +135,8 @@ import { Approvals, pendingLabel } from './approvals';
 export class PrepItemsPage {
   private readonly api = inject(CostingApi);
   private readonly router = inject(Router);
+  private readonly dialog = inject(MatDialog);
+  private readonly notify = inject(NotifyService);
   protected readonly approvals = inject(Approvals);
   protected readonly pendingLabel = pendingLabel;
 
@@ -130,6 +144,7 @@ export class PrepItemsPage {
   protected readonly loading = signal(true);
   protected readonly error = signal<string | null>(null);
   protected readonly search = signal('');
+  protected readonly busy = signal(false);
 
   protected readonly shown = computed(() => {
     const text = this.search().trim().toLowerCase();
@@ -146,6 +161,26 @@ export class PrepItemsPage {
 
   protected open(item: PrepItem): void {
     void this.router.navigate(['/costing/recipes/prep', item.id]);
+  }
+
+  // The sheet chosen: imported, what it did shown, and the list read again. The picker is cleared,
+  // so the same file can be chosen again once it is put right.
+  protected async importFile(picker: HTMLInputElement): Promise<void> {
+    const file = picker.files?.[0];
+    picker.value = '';
+    if (!file) {
+      return;
+    }
+    this.busy.set(true);
+    try {
+      const result = await firstValueFrom(this.api.importPrepItems(file));
+      this.dialog.open<PrepImportDialog, PrepImportResult>(PrepImportDialog, { data: result, width: '820px', maxWidth: '95vw' });
+      await Promise.all([this.load(), this.approvals.refresh()]);
+    } catch (error) {
+      this.notify.error(error, 'The file could not be imported.');
+    } finally {
+      this.busy.set(false);
+    }
   }
 
   private async load(): Promise<void> {

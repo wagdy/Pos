@@ -1,5 +1,3 @@
-using System.Globalization;
-using System.Text;
 using MediatR;
 using Otantik.BuildingBlocks;
 using OtantikPos.Inventory.Application.Categories;
@@ -108,7 +106,7 @@ internal sealed class ImportRawMaterialsHandler(IRawMaterialRepository materials
         var onSheet = new Dictionary<string, int>();
         foreach (var row in request.Rows.OrderBy(r => r.Row))
         {
-            var name = Clean(row.Name);
+            var name = SheetText.Clean(row.Name);
             string? Problem()
             {
                 if (name is null)
@@ -123,18 +121,18 @@ internal sealed class ImportRawMaterialsHandler(IRawMaterialRepository materials
                 if (onSheet.TryGetValue(key, out var first))
                     return $"Also on row {first}, which is the one imported.";
                 if (SheetUnits.Parse(row.Unit) is null)
-                    return Clean(row.Unit) is { } unit
+                    return SheetText.Clean(row.Unit) is { } unit
                         ? $"\"{unit}\" is not a unit the till knows: Kg, Liter or Piece."
                         : "No unit of measure: Kg, Liter or Piece.";
-                if (Clean(row.InitialCost) is { } cost)
+                if (SheetText.Clean(row.InitialCost) is { } cost)
                 {
-                    if (Amount(cost) is not { } amount)
+                    if (SheetText.Amount(cost) is not { } amount)
                         return $"\"{cost}\" is not a cost: write a number, such as 85.50.";
                     if (amount < 0)
                         return "A cost cannot be negative.";
                 }
 
-                return Clean(row.Category)?.Length > 100 ? "The category's name is longer than 100 characters." : null;
+                return SheetText.Clean(row.Category)?.Length > 100 ? "The category's name is longer than 100 characters." : null;
             }
 
             if (Problem() is { } reason)
@@ -144,9 +142,9 @@ internal sealed class ImportRawMaterialsHandler(IRawMaterialRepository materials
             }
 
             var made = new RawMaterial(name!, SheetUnits.Parse(row.Unit)!.Value);
-            var filed = await CategoryAsync(Clean(row.Category), known, added, cancellationToken);
+            var filed = await CategoryAsync(SheetText.Clean(row.Category), known, added, cancellationToken);
             made.Describe(null, filed.Id);
-            var initialCost = Clean(row.InitialCost) is { } written ? Amount(written) : null;
+            var initialCost = SheetText.Clean(row.InitialCost) is { } written ? SheetText.Amount(written) : null;
             if (initialCost is { } price)
                 made.SetCost(price);
             materials.Add(made);
@@ -173,24 +171,5 @@ internal sealed class ImportRawMaterialsHandler(IRawMaterialRepository materials
         known[PurchaseCategory.Normalize(name)] = category;
         added.Add(category.Name);
         return category;
-    }
-
-    // A cell as a person reads it: trimmed, and null when empty.
-    private static string? Clean(string? text) => string.IsNullOrWhiteSpace(text) ? null : string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-
-    // A number as written, in Western or Arabic digits, with or without thousands separators.
-    private static decimal? Amount(string text)
-    {
-        var western = new StringBuilder(text.Length);
-        foreach (var c in text)
-            western.Append(c switch
-            {
-                >= '٠' and <= '٩' => (char)('0' + (c - '٠')),
-                >= '۰' and <= '۹' => (char)('0' + (c - '۰')),
-                '٫' => '.',
-                '٬' => ',',
-                _ => c,
-            });
-        return decimal.TryParse(western.ToString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var amount) ? amount : null;
     }
 }

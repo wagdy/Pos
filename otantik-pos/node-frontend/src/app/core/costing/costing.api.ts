@@ -1222,6 +1222,12 @@ export class CostingApi {
     return this.http.get(`/api/inventory/purchase-invoices/${id}/attachment`, { responseType: 'blob' });
   }
 
+  importPrepItems(file: File): Observable<PrepImportResult> {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return this.http.post<PrepImportResult>('/api/inventory/prep-items/import', form);
+  }
+
   prepItems(): Observable<PrepItem[]> {
     return this.http.get<PrepItem[]>('/api/inventory/prep-items');
   }
@@ -1360,6 +1366,26 @@ export interface RawMaterialImportResult {
   created: ImportedRawMaterial[];
   skipped: SkippedSheetRow[];
   categoriesAdded: string[];
+}
+
+// Prep items brought in from a sheet of batch recipes (المصنعات): each made, or asked of a manager
+// (requested), its batch in grams and what to check on it; the rows skipped and why; the raw
+// materials added for the recipes, and the category added for the prep items.
+export interface ImportedPrepItem {
+  row: number;
+  id: string;
+  name: string;
+  batchQuantity: number;
+  ingredients: number;
+  requested: boolean;
+  notes: string[];
+}
+
+export interface PrepImportResult {
+  imported: ImportedPrepItem[];
+  skipped: SkippedSheetRow[];
+  materialsAdded: { id: string; name: string; unit: UnitOfMeasure }[];
+  categoryAdded: string | null;
 }
 
 // Stock is counted and reported in kg, litres and pieces, whatever it is bought in: a count of

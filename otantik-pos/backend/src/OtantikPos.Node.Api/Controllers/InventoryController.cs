@@ -244,6 +244,19 @@ public sealed class InventoryController(ISender sender) : ControllerBase
     public Task<IActionResult> UpdatePrepItem(Guid prepItemId, SavePrepItemRequest request, CancellationToken cancellationToken) =>
         SavePrepItem(prepItemId, request, cancellationToken);
 
+    // A sheet of batch recipes (المصنعات): each prep item named on a row of its own, then its
+    // ingredients. Made at once for a manager; asked of one, item by item, for anyone else.
+    [HttpPost("prep-items/import")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    [RequestSizeLimit(MaxImportBytes + 64 * 1024)]
+    public async Task<PrepImportResult> ImportPrepItems(IFormFile file, CancellationToken cancellationToken)
+    {
+        if (file.Length > MaxImportBytes)
+            throw new Otantik.BuildingBlocks.DomainException("The file is larger than 5 MB: a sheet of recipes is far smaller. Is it the right file?");
+        await using var stream = file.OpenReadStream();
+        return await sender.Send(new ImportPrepItemsCommand(PrepItemWorkbook.Read(stream), StaffId, StaffName, CanApprove), cancellationToken);
+    }
+
     private async Task<IActionResult> SavePrepItem(Guid? prepItemId, SavePrepItemRequest request, CancellationToken cancellationToken)
     {
         var command = request.ToCommand(prepItemId);
