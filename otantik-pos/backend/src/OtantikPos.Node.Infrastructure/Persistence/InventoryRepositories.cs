@@ -348,6 +348,9 @@ internal sealed class PrepRecipeRepository(NodeDbContext db) : IPrepRecipeReposi
 
     public async Task<IReadOnlyList<PrepRecipe>> GetAllAsync(CancellationToken cancellationToken = default) =>
         await WithIngredients.AsNoTracking().ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<PrepRecipe>> GetInCategoryAsync(Guid recipeCategoryId, CancellationToken cancellationToken = default) =>
+        await WithIngredients.Where(r => r.RecipeCategoryId == recipeCategoryId).ToListAsync(cancellationToken);
 }
 
 internal sealed class ProductionOrderRepository(NodeDbContext db) : IProductionOrderRepository

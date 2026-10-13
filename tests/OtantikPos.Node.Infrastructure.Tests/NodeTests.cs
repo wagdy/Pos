@@ -810,6 +810,41 @@ public class NodeTests
         Assert.Equal(((Guid?)sauces, "Sauce bar", "صوصات"), (card.RecipeCategoryId, card.RecipeCategory, card.RecipeCategoryAr));
     }
 
+    // Prep items are sorted under the kitchen's recipe categories too, as the dishes are: counted
+    // in them, changed through a manager's approval like the rest of a prep item, and moved with
+    // a category that is deleted.
+    [Fact]
+    public async Task Prep_items_are_sorted_under_recipe_categories_and_move_with_them()
+    {
+        await using var node = await TestNode.StartAsync();
+        var flour = (await node.Send(new CreateRawMaterialCommand("Flour", UnitOfMeasure.Gram))).Id;
+        var sauces = (await node.Send(new SaveRecipeCategoryCommand(Guid.NewGuid(), "Sauces", "صوصات"))).Id;
+        var doughs = (await node.Send(new SaveRecipeCategoryCommand(Guid.NewGuid(), "Doughs", "عجين"))).Id;
+        SavePrepItemCommand Dough(Guid? category) =>
+            new(null, "Pizza dough", UnitOfMeasure.Gram, 10_000, [new(flour, 6_000)], RecipeCategoryId: category);
+
+        var gone = await Assert.ThrowsAsync<DomainException>(() => node.Send(Dough(Guid.NewGuid())));
+        Assert.Equal("That recipe category is no longer on the list. Choose it again, or add it.", gone.Message);
+        var dough = await node.Send(Dough(sauces));
+        Assert.Equal((Guid?)sauces, dough.RecipeCategoryId);
+        Assert.Equal((Guid?)sauces, (await node.Send(new GetPrepItemsQuery())).Single().RecipeCategoryId);
+        Assert.Equal([("Doughs", 0, 0), ("Sauces", 0, 1)], (await node.Send(new GetRecipeCategoriesQuery())).Select(c => (c.Name, c.Recipes, c.PrepItems)));
+
+        // The accountant moves it to Doughs: asked, and said so line by line; approved, it moves.
+        var change = Dough(doughs).Change;
+        var asked = await node.Send(new RequestPrepItemChangeCommand(Guid.NewGuid(), dough.Id, change, null, "staff-mona", "Mona"));
+        Assert.Equal([new ApprovalChange("Recipe category", "Sauces", "Doughs")], asked.Request.Changes);
+        await node.Send(new ApproveRequestCommand(asked.Request.Id, "Omar"));
+        Assert.Equal((Guid?)doughs, (await node.Send(new GetPrepItemQuery(dough.Id)))!.RecipeCategoryId);
+
+        // Doughs holds it: deleted only with somewhere for it to go, and it goes there.
+        var held = await Assert.ThrowsAsync<DomainException>(() => node.Send(new DeleteRecipeCategoryCommand(doughs)));
+        Assert.Equal("Doughs has 1 recipe. Choose the category it moves to.", held.Message);
+        await node.Send(new DeleteRecipeCategoryCommand(doughs, sauces));
+        Assert.Equal((Guid?)sauces, (await node.Send(new GetPrepItemQuery(dough.Id)))!.RecipeCategoryId);
+        Assert.Equal([("Sauces", 1)], (await node.Send(new GetRecipeCategoriesQuery())).Select(c => (c.Name, c.PrepItems)));
+    }
+
     // The categories typed on off-menu recipes before categories were kept become categories on
     // the update, one per name however spelt; the rest are left to be sorted.
     [Fact]

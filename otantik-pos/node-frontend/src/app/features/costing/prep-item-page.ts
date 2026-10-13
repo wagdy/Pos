@@ -10,7 +10,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
-import { CostingApi, MaterialCost, PrepItem, ProductionOrder, SavePrepItem, UnitOfMeasure, isRequested } from '../../core/costing/costing.api';
+import { CostingApi, MaterialCost, PrepItem, ProductionOrder, RecipeCategory, SavePrepItem, UnitOfMeasure, isRequested } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
@@ -126,6 +126,16 @@ const displayUnits: Record<UnitOfMeasure, [string, number]> = { Gram: ['kg', 100
           <input matInput [(ngModel)]="code" maxlength="32" placeholder="PREP-01" />
         </mat-form-field>
         <app-purchase-category-field [(ngModel)]="categoryId" class="category-field" />
+        <mat-form-field>
+          <mat-label>Recipe category · قسم الوصفة</mat-label>
+          <mat-select [(ngModel)]="recipeCategoryId" aria-label="Recipe category">
+            <mat-option [value]="null">None · بدون قسم</mat-option>
+            @for (c of recipeCategories(); track c.id) {
+              <mat-option [value]="c.id">{{ c.name }}{{ c.nameAr ? ' · ' + c.nameAr : '' }}</mat-option>
+            }
+          </mat-select>
+          <mat-hint>Sorted with the dishes' recipes</mat-hint>
+        </mat-form-field>
         <mat-form-field>
           <mat-label>Kept in · وحدة التخزين</mat-label>
           <mat-select [(ngModel)]="unit" (ngModelChange)="unitChanged($event)" [disabled]="!!saved()">
@@ -358,6 +368,7 @@ export class PrepItemPage {
 
   protected readonly saved = signal<PrepItem | null>(null);
   protected readonly materials = signal<MaterialCost[]>([]);
+  protected readonly recipeCategories = signal<RecipeCategory[]>([]);
   protected readonly lines = signal<Line[]>([this.blank()]);
   protected readonly loading = signal(true);
   protected readonly saving = signal(false);
@@ -366,6 +377,7 @@ export class PrepItemPage {
   protected name = '';
   protected code = '';
   protected categoryId: string | null = null;
+  protected recipeCategoryId: string | null = null;
   protected unit: UnitOfMeasure = 'Gram';
   protected displayUnit = 'kg';
   protected displayUnitSize = 1000;
@@ -501,6 +513,7 @@ export class PrepItemPage {
         .map((l) => ({ rawMaterialId: l.rawMaterialId!, quantity: l.quantity!, yieldPercent: l.yieldPercent })),
       code: this.code.trim() || null,
       categoryId: this.categoryId,
+      recipeCategoryId: this.recipeCategoryId,
       displayUnit: this.displayUnit,
       displayUnitSize: this.displayUnitSize,
       reorderLevel: PrepItemPage.toBase(this.reorder ?? 0, this.displayUnitSize),
@@ -542,6 +555,7 @@ export class PrepItemPage {
     this.name = item.name;
     this.code = item.code ?? '';
     this.categoryId = item.categoryId;
+    this.recipeCategoryId = item.recipeCategoryId ?? null;
     this.unit = item.unit;
     this.displayUnit = item.displayUnit;
     this.displayUnitSize = item.displayUnitSize;
@@ -560,11 +574,13 @@ export class PrepItemPage {
     this.error.set(null);
     void this.approvals.refresh();
     try {
-      const [materials, item] = await Promise.all([
+      const [materials, item, recipeCategories] = await Promise.all([
         firstValueFrom(this.api.materials()),
         id === 'new' ? Promise.resolve(null) : firstValueFrom(this.api.prepItem(id)),
+        firstValueFrom(this.api.recipeCategories()),
       ]);
       this.materials.set(materials);
+      this.recipeCategories.set(recipeCategories);
       if (id !== 'new' && !item) {
         this.error.set('No such prep item.');
       } else if (item) {

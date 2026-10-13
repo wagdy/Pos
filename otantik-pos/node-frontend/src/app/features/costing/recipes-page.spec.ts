@@ -61,8 +61,8 @@ const trial = card({
   recipeId: 'r2', recipe: 'Smash trial', recipeName: 'Smash trial', targetKind: null, catalogItemId: null, itemCode: '', linkedTo: null,
   isStandalone: true, menuPrice: 60, plannedPrice: 60, foodCostPercentActual: 55, status: 'AboveTarget', recipeCategoryId: null, recipeCategory: null,
 });
-const mains: RecipeCategory = { id: 'mains', name: 'Mains', nameAr: null, recipes: 1 };
-const sauces: RecipeCategory = { id: 'sauces', name: 'Sauces', nameAr: 'صوصات', recipes: 1 };
+const mains: RecipeCategory = { id: 'mains', name: 'Mains', nameAr: null, recipes: 1, prepItems: 0 };
+const sauces: RecipeCategory = { id: 'sauces', name: 'Sauces', nameAr: 'صوصات', recipes: 1, prepItems: 0 };
 const garlicDip = card({
   recipeId: 'r4', recipe: 'Garlic dip', recipeName: 'Garlic dip', targetKind: null, catalogItemId: null, itemCode: '', linkedTo: null,
   isStandalone: true, menuPrice: null, costPerPortion: 4, foodCostPercentActual: null, status: 'NoPrice',

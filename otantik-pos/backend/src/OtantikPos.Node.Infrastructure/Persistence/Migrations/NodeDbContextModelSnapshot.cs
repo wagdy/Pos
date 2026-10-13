@@ -741,6 +741,9 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasPrecision(18, 3)
                         .HasColumnType("numeric(18,3)");
 
+                    b.Property<Guid?>("RecipeCategoryId")
+                        .HasColumnType("uuid");
+
                     b.Property<uint>("Version")
                         .IsConcurrencyToken()
                         .ValueGeneratedOnAddOrUpdate()
@@ -748,6 +751,8 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasColumnName("xmin");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("RecipeCategoryId");
 
                     b.ToTable("PrepRecipes", "inventory");
                 });
@@ -2096,6 +2101,11 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasForeignKey("OtantikPos.Inventory.Domain.Production.PrepRecipe", "Id")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.HasOne("OtantikPos.Inventory.Domain.Recipes.RecipeCategory", null)
+                        .WithMany()
+                        .HasForeignKey("RecipeCategoryId")
+                        .OnDelete(DeleteBehavior.SetNull);
                 });
 
             modelBuilder.Entity("OtantikPos.Inventory.Domain.Production.ProductionOrder", b =>

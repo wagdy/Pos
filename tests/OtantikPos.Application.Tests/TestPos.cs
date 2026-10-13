@@ -530,6 +530,8 @@ public sealed class PrepRecipeStore : IPrepRecipeRepository
     public Task<PrepRecipe?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(_recipes.SingleOrDefault(r => r.Id == id));
     public void Add(PrepRecipe aggregate) => _recipes.Add(aggregate);
     public Task<IReadOnlyList<PrepRecipe>> GetAllAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PrepRecipe>>(_recipes.ToList());
+    public Task<IReadOnlyList<PrepRecipe>> GetInCategoryAsync(Guid recipeCategoryId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<PrepRecipe>>(_recipes.Where(r => r.RecipeCategoryId == recipeCategoryId).ToList());
 }
 
 public sealed class ProductionStore : IProductionOrderRepository

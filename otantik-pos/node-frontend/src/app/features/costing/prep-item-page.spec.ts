@@ -4,7 +4,7 @@ import { Router, provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
-import { ApprovalRequest, CostingApi, MaterialCost, PrepItem, ProductionOrder } from '../../core/costing/costing.api';
+import { ApprovalRequest, CostingApi, MaterialCost, PrepItem, ProductionOrder, RecipeCategory } from '../../core/costing/costing.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { PrepItemPage } from './prep-item-page';
 import { ProductionOrderDialog } from './production-order-dialog';
@@ -64,6 +64,7 @@ const batch: ProductionOrder = {
 };
 
 const dough: PrepItem = {
+  recipeCategoryId: null,
   id: 'dough',
   code: 'PREP-1',
   name: 'Pizza dough',
@@ -90,6 +91,8 @@ const dough: PrepItem = {
   recent: [batch],
 };
 
+const recipeCategories: RecipeCategory[] = [{ id: 'doughs', name: 'Doughs', nameAr: 'عجين', recipes: 0, prepItems: 1 }];
+
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
 describe('a prep item', () => {
@@ -104,7 +107,7 @@ describe('a prep item', () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: CostingApi, useValue: { materials, prepItem, savePrepItem, approvalRequests } },
+        { provide: CostingApi, useValue: { materials, prepItem, savePrepItem, approvalRequests, recipeCategories: () => of(recipeCategories) } },
         { provide: MatDialog, useValue: { open } },
         { provide: NotifyService, useValue: notify },
         { provide: AuthService, useValue: { can: (p: string) => p !== Permissions.ApprovalDecide || manager } },
@@ -181,8 +184,10 @@ describe('a prep item', () => {
     expect(page['ingredientChoices']().map((m: MaterialCost) => m.id)).toEqual(['flour', 'yeast', 'oil', 'salt']);
   });
 
-  it('is added with its batch and reorder level in grams, and opened once saved', async () => {
+  it('is added with its batch, reorder level in grams and recipe category, and opened once saved', async () => {
     const { page } = await render('new');
+    expect(page['recipeCategories']()).toEqual(recipeCategories);
+    page['recipeCategoryId'] = 'doughs';
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     expect(prepItem).not.toHaveBeenCalled();
     page['name'] = ' Pizza dough ';
@@ -206,6 +211,7 @@ describe('a prep item', () => {
       ],
       code: null,
       categoryId: null,
+      recipeCategoryId: 'doughs',
       displayUnit: 'kg',
       displayUnitSize: 1000,
       reorderLevel: 2_500,

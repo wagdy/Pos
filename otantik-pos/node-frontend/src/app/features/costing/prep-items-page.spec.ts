@@ -27,6 +27,7 @@ function prep(overrides: Partial<PrepItem>): PrepItem {
     lastProducedAtUtc: null,
     lastBatchCostPerDisplayUnit: null,
     recent: [],
+    recipeCategoryId: null,
     ...overrides,
   };
 }
@@ -55,7 +56,10 @@ describe('the prep items', () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: CostingApi, useValue: { prepItems: () => of([dough, sauce, glaze]), approvalRequests: () => of({ pending, decided: [] }) } },
+        {
+          provide: CostingApi,
+          useValue: { prepItems: () => of([dough, sauce, glaze]), approvalRequests: () => of({ pending, decided: [] }), recipeCategories: () => of([]) },
+        },
         { provide: AuthService, useValue: { can: () => true } },
       ],
     });

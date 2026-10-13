@@ -30,6 +30,7 @@ function prep(overrides: Partial<PrepItem>): PrepItem {
     lastProducedAtUtc: null,
     lastBatchCostPerDisplayUnit: null,
     recent: [],
+    recipeCategoryId: null,
     ...overrides,
   };
 }

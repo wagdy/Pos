@@ -83,8 +83,8 @@ const bunLine: RecipeCostLine = {
 // The cheeseburger sells by recipe r1; garlic bread has none yet.
 const cheeseburgerMenu = card({ hasRecipe: true, recipeId: 'r1', status: 'WithinTarget' });
 const garlicBreadMenu = card({ catalogItemId: 1, itemCode: '1', recipe: 'Garlic Bread', linkedTo: 'Garlic Bread', menuPrice: 11.99 });
-const mains: RecipeCategory = { id: 'mains', name: 'Mains', nameAr: 'أطباق رئيسية', recipes: 2 };
-const sauces: RecipeCategory = { id: 'sauces', name: 'Sauces', nameAr: null, recipes: 0 };
+const mains: RecipeCategory = { id: 'mains', name: 'Mains', nameAr: 'أطباق رئيسية', recipes: 2, prepItems: 0 };
+const sauces: RecipeCategory = { id: 'sauces', name: 'Sauces', nameAr: null, recipes: 0, prepItems: 0 };
 const r1 = card({
   hasRecipe: true, recipeId: 'r1', recipeName: 'House burger', recipe: 'House burger', portions: 1, lines: [bunLine], status: 'WithinTarget',
   recipeCategoryId: 'mains', recipeCategory: 'Mains', recipeCategoryAr: 'أطباق رئيسية',
@@ -296,7 +296,7 @@ describe('a recipe', () => {
     });
 
     it('can be a new one, added over the recipe without losing it', async () => {
-      const staff: RecipeCategory = { id: 'staff', name: 'Staff meals', nameAr: null, recipes: 0 };
+      const staff: RecipeCategory = { id: 'staff', name: 'Staff meals', nameAr: null, recipes: 0, prepItems: 0 };
       open.mockReturnValue({ afterClosed: () => of(staff) });
       const { page } = await render('new');
       write(page, [['bun', 2]]);

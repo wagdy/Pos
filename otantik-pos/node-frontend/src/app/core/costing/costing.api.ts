@@ -97,8 +97,9 @@ export interface RecipeCategory {
   id: string;
   name: string;
   nameAr: string | null;
-  // Active recipes in it.
+  // Active recipes in it, and prep items still in use.
   recipes: number;
+  prepItems: number;
 }
 
 // A recipe as written: name and link optional on the menu, the name required off it; the
@@ -700,6 +701,8 @@ export interface PrepItem {
   lastProducedAtUtc: string | null;
   lastBatchCostPerDisplayUnit: number | null;
   recent: ProductionOrder[];
+  // The kitchen's recipe category it is sorted under, as dishes are; null for none.
+  recipeCategoryId: string | null;
 }
 
 export interface SavePrepItem {
@@ -709,6 +712,7 @@ export interface SavePrepItem {
   ingredients: { rawMaterialId: string; quantity: number; yieldPercent: number | null }[];
   code: string | null;
   categoryId: string | null;
+  recipeCategoryId: string | null;
   displayUnit: string;
   displayUnitSize: number;
   reorderLevel: number;

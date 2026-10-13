@@ -496,10 +496,11 @@ public sealed record SavePrepItemRequest(
     decimal ReorderLevel = 0,
     // For a request: made by the till, so a retry is recorded once; and why, for the manager.
     Guid? RequestId = null,
-    string? Reason = null)
+    string? Reason = null,
+    Guid? RecipeCategoryId = null)
 {
     public SavePrepItemCommand ToCommand(Guid? id) =>
-        new(id, Name, Unit, BatchQuantity, Ingredients ?? [], Code, CategoryId, DisplayUnit, DisplayUnitSize, ReorderLevel);
+        new(id, Name, Unit, BatchQuantity, Ingredients ?? [], Code, CategoryId, DisplayUnit, DisplayUnitSize, ReorderLevel, RecipeCategoryId);
 }
 
 public sealed record SaveRecipeRequest(

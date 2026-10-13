@@ -7,9 +7,9 @@ import { NotifyService } from '../../core/ui/notify.service';
 import { RecipeCategoriesPage } from './recipe-categories-page';
 import { RecipeCategoryDialog } from './recipe-category-dialog';
 
-const sauces: RecipeCategory = { id: 'sauces', name: 'Sauces', nameAr: 'صوصات', recipes: 3 };
-const staff: RecipeCategory = { id: 'staff', name: 'Staff meals', nameAr: null, recipes: 0 };
-const catering: RecipeCategory = { id: 'catering', name: 'Catering orders', nameAr: null, recipes: 1 };
+const sauces: RecipeCategory = { id: 'sauces', name: 'Sauces', nameAr: 'صوصات', recipes: 3, prepItems: 0 };
+const staff: RecipeCategory = { id: 'staff', name: 'Staff meals', nameAr: null, recipes: 0, prepItems: 0 };
+const catering: RecipeCategory = { id: 'catering', name: 'Catering orders', nameAr: null, recipes: 1, prepItems: 0 };
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 

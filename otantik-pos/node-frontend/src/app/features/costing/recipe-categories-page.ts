@@ -13,9 +13,10 @@ import { errorMessage } from '../../core/http/error-message';
 import { NotifyService } from '../../core/ui/notify.service';
 import { RecipeCategoryDialog, RecipeCategoryDialogData } from './recipe-category-dialog';
 
-// The kitchen's own recipe categories (أقسام الوصفات), apart from the menu's: added, renamed,
-// deleted. One holding recipes is deleted only after choosing where they move, so no recipe is
-// left without one. A count opens the recipes in it.
+// The kitchen's own recipe categories (أقسام الوصفات), apart from the menu's: the dishes' recipes
+// and the prep items' are sorted under them. Added, renamed, deleted: one holding recipes or prep
+// items is deleted only after choosing where they move, so none is left without one. A count
+// opens the recipes or prep items in it.
 @Component({
   selector: 'app-recipe-categories-page',
   imports: [FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatProgressBarModule, MatSelectModule, RouterLink],
@@ -41,6 +42,7 @@ import { RecipeCategoryDialog, RecipeCategoryDialogData } from './recipe-categor
               <th>Category<span class="ar">القسم</span></th>
               <th>Arabic name<span class="ar">الاسم بالعربية</span></th>
               <th class="num">Recipes<span class="ar">الوصفات</span></th>
+              <th class="num">Prep items<span class="ar">المصنعات</span></th>
               <th class="num"><span class="visually-hidden">Actions</span></th>
             </tr>
           </thead>
@@ -56,6 +58,13 @@ import { RecipeCategoryDialog, RecipeCategoryDialogData } from './recipe-categor
                     0
                   }
                 </td>
+                <td class="num">
+                  @if (c.prepItems) {
+                    <a [routerLink]="['/costing/recipes/prep']" [queryParams]="{ category: c.id }">{{ c.prepItems }}</a>
+                  } @else {
+                    0
+                  }
+                </td>
                 <td class="num actions">
                   <button mat-icon-button (click)="edit(c)" [attr.aria-label]="'Rename ' + c.name"><mat-icon>edit</mat-icon></button>
                   <button mat-icon-button class="danger" (click)="ask(c)" [disabled]="confirming() === c.id" [attr.aria-label]="'Delete ' + c.name">
@@ -65,10 +74,10 @@ import { RecipeCategoryDialog, RecipeCategoryDialogData } from './recipe-categor
               </tr>
               @if (confirming() === c.id) {
                 <tr class="confirm-row">
-                  <td colspan="4">
+                  <td colspan="5">
                     <div class="confirm">
-                      @if (c.recipes) {
-                        <span>Delete {{ c.name }}? Its {{ c.recipes }} {{ c.recipes === 1 ? 'recipe moves' : 'recipes move' }} to</span>
+                      @if (held(c)) {
+                        <span>Delete {{ c.name }}? Its {{ heldText(c) }} to</span>
                         <mat-form-field subscriptSizing="dynamic" class="move">
                           <mat-select [(ngModel)]="moveTo" placeholder="Choose a category" aria-label="Move its recipes to">
                             @for (o of others(c); track o.id) {
@@ -81,18 +90,18 @@ import { RecipeCategoryDialog, RecipeCategoryDialogData } from './recipe-categor
                       }
                       <span class="spacer"></span>
                       <button mat-button (click)="confirming.set(null)" [disabled]="saving()">Cancel</button>
-                      <button mat-flat-button class="danger-fill" (click)="remove(c)" [disabled]="saving() || (c.recipes > 0 && !moveTo)">
-                        {{ c.recipes ? 'Move and delete' : 'Delete' }}
+                      <button mat-flat-button class="danger-fill" (click)="remove(c)" [disabled]="saving() || (held(c) > 0 && !moveTo)">
+                        {{ held(c) ? 'Move and delete' : 'Delete' }}
                       </button>
                     </div>
-                    @if (c.recipes && others(c).length === 0) {
+                    @if (held(c) && others(c).length === 0) {
                       <p class="small">Add another category first: its recipes need somewhere to go.</p>
                     }
                   </td>
                 </tr>
               }
             } @empty {
-              <tr><td colspan="4" class="muted">No categories yet. Add the first, such as Sauces or Staff meals.</td></tr>
+              <tr><td colspan="5" class="muted">No categories yet. Add the first, such as Sauces or Staff meals.</td></tr>
             }
           </tbody>
         </table>
@@ -160,6 +169,20 @@ export class RecipeCategoriesPage {
     void this.load();
   }
 
+  // What a category holds: its recipes and its prep items, which move with it.
+  protected held(category: RecipeCategory): number {
+    return category.recipes + category.prepItems;
+  }
+
+  // "3 recipes and 1 prep item move", as the delete asks.
+  protected heldText(category: RecipeCategory): string {
+    const parts = [
+      category.recipes ? `${category.recipes} ${category.recipes === 1 ? 'recipe' : 'recipes'}` : null,
+      category.prepItems ? `${category.prepItems} ${category.prepItems === 1 ? 'prep item' : 'prep items'}` : null,
+    ].filter((p) => p !== null);
+    return `${parts.join(' and ')} ${this.held(category) === 1 ? 'moves' : 'move'}`;
+  }
+
   protected others(category: RecipeCategory): RecipeCategory[] {
     return this.categories().filter((c) => c.id !== category.id);
   }
@@ -184,9 +207,9 @@ export class RecipeCategoriesPage {
   protected async remove(category: RecipeCategory): Promise<void> {
     this.saving.set(true);
     try {
-      await firstValueFrom(this.api.deleteRecipeCategory(category.id, category.recipes ? this.moveTo : null));
+      await firstValueFrom(this.api.deleteRecipeCategory(category.id, this.held(category) ? this.moveTo : null));
       const to = this.categories().find((c) => c.id === this.moveTo)?.name;
-      this.notify.info(category.recipes && to ? `${category.name} deleted; its recipes are in ${to} now.` : `${category.name} deleted.`);
+      this.notify.info(this.held(category) && to ? `${category.name} deleted; its recipes are in ${to} now.` : `${category.name} deleted.`);
       this.confirming.set(null);
       await this.load();
     } catch (error) {

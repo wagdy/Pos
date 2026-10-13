@@ -8,6 +8,7 @@ using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.Production;
 using OtantikPos.Inventory.Domain.RawMaterials;
+using OtantikPos.Inventory.Domain.Recipes;
 
 namespace OtantikPos.Inventory.Application.Production;
 
@@ -60,7 +61,9 @@ public sealed record PrepItemDto(
     DateTime? LastProducedAtUtc,
     decimal? LastBatchCostPerDisplayUnit,
     IReadOnlyList<ProductionOrderDto> Recent,
-    Guid CategoryId);
+    Guid CategoryId,
+    // The kitchen's recipe category it is sorted under; none when not given one.
+    Guid? RecipeCategoryId = null);
 
 public sealed record PrepIngredientEntry(Guid RawMaterialId, decimal Quantity, decimal? YieldPercent = null);
 
@@ -121,7 +124,8 @@ internal static class PrepItemCosting
             last?.ProducedAtUtc,
             last is null ? null : Money(last.UnitCost * item.PurchaseUnitSize),
             orders.Where(o => o.PrepItemId == item.Id).Select(o => ProductionOrderDto.From(o, materials)).ToList(),
-            item.CategoryId);
+            item.CategoryId,
+            recipe?.RecipeCategoryId);
     }
 
     // Would `prepItemId` end up made from itself, through the ingredients given and the other
@@ -205,11 +209,13 @@ public sealed record PrepItemChange(
     Guid? CategoryId = null,
     string? DisplayUnit = null,
     decimal? DisplayUnitSize = null,
-    decimal ReorderLevel = 0);
+    decimal ReorderLevel = 0,
+    Guid? RecipeCategoryId = null);
 
 // Saves prep items, for a manager's own save and for an approval alike; checks and describes one
 // asked for without changing anything.
-internal sealed class PrepItemWriter(IRawMaterialRepository materials, IPrepRecipeRepository recipes, IPurchaseCategoryRepository categories)
+internal sealed class PrepItemWriter(
+    IRawMaterialRepository materials, IPrepRecipeRepository recipes, IPurchaseCategoryRepository categories, IRecipeCategoryRepository recipeCategories)
 {
     // Adds it (under newId when given: a request's record) or changes existingId. Tracked, for
     // the caller to save. Its unit cannot change once it exists: its stock and batches are in it.
@@ -242,11 +248,13 @@ internal sealed class PrepItemWriter(IRawMaterialRepository materials, IPrepReci
         if (PrepItemCosting.Loop(item.Id, ingredients.Select(i => i.Material.Id), await recipes.GetAllAsync(cancellationToken), all) is { } through)
             throw new DomainException($"{through} is made with {item.Name}, so {item.Name} cannot be made with {through}.");
 
+        await RecipeCategoryNameAsync(change.RecipeCategoryId, cancellationToken);
         if (recipe is null)
             recipes.Add(recipe = new PrepRecipe(item, change.BatchQuantity));
         else
             recipe.SetBatch(change.BatchQuantity);
         recipe.Replace(ingredients);
+        recipe.MoveTo(change.RecipeCategoryId);
         all[item.Id] = item;
         return (item, recipe, category);
     }
@@ -264,6 +272,7 @@ internal sealed class PrepItemWriter(IRawMaterialRepository materials, IPrepReci
         if (change.DisplayUnit is { } unit && change.DisplayUnitSize is { } size)
             copy.SetPurchaseUnit(unit, size);
         await CategoryNameAsync(change.CategoryId, cancellationToken);
+        await RecipeCategoryNameAsync(change.RecipeCategoryId, cancellationToken);
 
         var ingredients = Ingredients(change, all, existing is null ? null : await recipes.GetByIdAsync(existing.Id, cancellationToken));
         if (PrepItemCosting.Loop(copy.Id, ingredients.Select(i => i.Material.Id), await recipes.GetAllAsync(cancellationToken), all) is { } through)
@@ -301,6 +310,8 @@ internal sealed class PrepItemWriter(IRawMaterialRepository materials, IPrepReci
         Add("Code", existing?.Code, string.IsNullOrWhiteSpace(change.Code) ? null : change.Code.Trim());
         Add("Category", existing is null ? null : await CategoryNameAsync(existing.CategoryId, cancellationToken),
             await CategoryNameAsync(change.CategoryId, cancellationToken));
+        Add("Recipe category", recipe is null ? null : await RecipeCategoryNameAsync(recipe.RecipeCategoryId, cancellationToken),
+            await RecipeCategoryNameAsync(change.RecipeCategoryId, cancellationToken));
         Add("Kept in", existing is null ? null : $"{existing.PurchaseUnit} ({existing.PurchaseUnitSize.ToString("0.###", CultureInfo.InvariantCulture)} {Base(existing.Unit)})",
             $"{unit} ({size.ToString("0.###", CultureInfo.InvariantCulture)} {Base(change.Unit)})");
         Add("One batch makes", recipe is null || existing is null ? null : PrepItemCosting.Amount(recipe.BatchQuantity, existing),
@@ -344,6 +355,13 @@ internal sealed class PrepItemWriter(IRawMaterialRepository materials, IPrepReci
             })
             .ToList();
 
+    // A recipe category's name; null for none. One no longer there is refused.
+    private async Task<string?> RecipeCategoryNameAsync(Guid? recipeCategoryId, CancellationToken cancellationToken) =>
+        recipeCategoryId is { } id
+            ? (await recipeCategories.GetByIdAsync(id, cancellationToken))?.Name
+              ?? throw new DomainException("That recipe category is no longer on the list. Choose it again, or add it.")
+            : null;
+
     // Its name, without adding General when it is not there yet.
     private async Task<string> CategoryNameAsync(Guid? categoryId, CancellationToken cancellationToken)
     {
@@ -380,9 +398,11 @@ public sealed record SavePrepItemCommand(
     Guid? CategoryId = null,
     string? DisplayUnit = null,
     decimal? DisplayUnitSize = null,
-    decimal ReorderLevel = 0) : IRequest<PrepItemDto>
+    decimal ReorderLevel = 0,
+    Guid? RecipeCategoryId = null) : IRequest<PrepItemDto>
 {
-    public PrepItemChange Change => new(Name, Unit, BatchQuantity, Ingredients, Code, CategoryId, DisplayUnit, DisplayUnitSize, ReorderLevel);
+    public PrepItemChange Change =>
+        new(Name, Unit, BatchQuantity, Ingredients, Code, CategoryId, DisplayUnit, DisplayUnitSize, ReorderLevel, RecipeCategoryId);
 }
 
 internal sealed class SavePrepItemCommandHandler(

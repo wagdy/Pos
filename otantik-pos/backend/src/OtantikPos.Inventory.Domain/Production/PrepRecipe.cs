@@ -25,6 +25,12 @@ public sealed class PrepRecipe : AggregateRoot
     // What one batch makes, in the prep item's own unit: 10,000 g.
     public decimal BatchQuantity { get; private set; }
 
+    // The kitchen's own recipe category (أقسام الوصفات) it is sorted under, with the dishes': sauces,
+    // doughs. None until it is given one. Its stock category, for the count sheet, is the prep item's.
+    public Guid? RecipeCategoryId { get; private set; }
+
+    public void MoveTo(Guid? categoryId) => RecipeCategoryId = categoryId;
+
     public IReadOnlyCollection<PrepIngredient> Ingredients => _ingredients.AsReadOnly();
 
     public void SetBatch(decimal batchQuantity) =>
@@ -87,4 +93,7 @@ public sealed class PrepIngredient : Entity
 public interface IPrepRecipeRepository : IRepository<PrepRecipe>
 {
     Task<IReadOnlyList<PrepRecipe>> GetAllAsync(CancellationToken cancellationToken = default);
+
+    // Those in a recipe category, deleted prep items' too: to be moved with it.
+    Task<IReadOnlyList<PrepRecipe>> GetInCategoryAsync(Guid recipeCategoryId, CancellationToken cancellationToken = default);
 }

@@ -355,6 +355,7 @@ internal sealed class PrepRecipeConfiguration : IEntityTypeConfiguration<PrepRec
         builder.HasOne<RawMaterial>().WithOne().HasForeignKey<PrepRecipe>(r => r.Id).OnDelete(DeleteBehavior.Cascade);
         builder.HasMany(r => r.Ingredients).WithOne().HasForeignKey(i => i.PrepRecipeId).OnDelete(DeleteBehavior.Cascade);
         builder.Navigation(r => r.Ingredients).HasField("_ingredients").UsePropertyAccessMode(PropertyAccessMode.Field);
+        builder.HasOne<RecipeCategory>().WithMany().HasForeignKey(r => r.RecipeCategoryId).OnDelete(DeleteBehavior.SetNull);
     }
 }
 

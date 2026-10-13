@@ -7,6 +7,7 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatSelectModule } from '@angular/material/select';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { firstValueFrom } from 'rxjs';
 import { CostingApi, ApprovalRequest, MaterialCost, RawMaterialImportResult, SaveMaterial, unitLabels } from '../../core/costing/costing.api';
@@ -20,15 +21,37 @@ import { MaterialImportDialog } from './material-import-dialog';
 
 // Raw materials and what they cost: AP$ per purchase unit (the weighted average of what was paid),
 // the default yield, and EP$ after it. Stock on hand and its value too. Many at once from Excel:
-// the template to fill in, and the filled-in sheet imported, each row a stock item.
+// the template to fill in, and the filled-in sheet imported, each row a stock item. Shown one stock
+// category at a time when the list is long.
 @Component({
   selector: 'app-materials-page',
-  imports: [DatePipe, DecimalPipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatInputModule, MatProgressBarModule, MatTooltipModule, MoneyPipe],
+  imports: [
+    DatePipe,
+    DecimalPipe,
+    FormsModule,
+    MatButtonModule,
+    MatFormFieldModule,
+    MatIconModule,
+    MatInputModule,
+    MatProgressBarModule,
+    MatSelectModule,
+    MatTooltipModule,
+    MoneyPipe,
+  ],
   template: `
     <div class="toolbar">
       <mat-form-field subscriptSizing="dynamic">
         <mat-label>Find · بحث</mat-label>
         <input matInput [ngModel]="search()" (ngModelChange)="search.set($event)" />
+      </mat-form-field>
+      <mat-form-field subscriptSizing="dynamic">
+        <mat-label>Filter by category · تصفية بالقسم</mat-label>
+        <mat-select [ngModel]="category()" (ngModelChange)="category.set($event)" aria-label="Filter by category">
+          <mat-option [value]="null">All categories · الكل</mat-option>
+          @for (c of categories(); track c.id) {
+            <mat-option [value]="c.id">{{ c.name }} ({{ c.count }})</mat-option>
+          }
+        </mat-select>
       </mat-form-field>
       <span class="spacer"></span>
       <span class="muted">Stock value · قيمة المخزون: <strong>{{ stockValue() | money }}</strong></span>
@@ -148,10 +171,26 @@ export class MaterialsPage {
   protected readonly search = signal('');
   protected readonly busy = signal(false);
 
+  // The stock categories the materials are in, by name, with how many each holds; the one shown
+  // (null: all).
+  protected readonly category = signal<string | null>(null);
+  protected readonly categories = computed(() => {
+    const byId = new Map<string, { id: string; name: string; count: number }>();
+    for (const m of this.materials()) {
+      const entry = byId.get(m.categoryId) ?? { id: m.categoryId, name: m.category ?? 'General', count: 0 };
+      entry.count++;
+      byId.set(m.categoryId, entry);
+    }
+    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+  });
+
   protected readonly shown = computed(() => {
     const needle = this.search().trim().toLowerCase();
+    const category = this.category();
     return this.materials().filter(
-      (m) => !needle || [m.name, m.code, m.category].some((v) => v?.toLowerCase().includes(needle)),
+      (m) =>
+        (category === null || m.categoryId === category) &&
+        (!needle || [m.name, m.code, m.category].some((v) => v?.toLowerCase().includes(needle))),
     );
   });
 

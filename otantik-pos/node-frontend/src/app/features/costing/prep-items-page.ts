@@ -1,5 +1,5 @@
 import { DatePipe, DecimalPipe } from '@angular/common';
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatDialog } from '@angular/material/dialog';
@@ -7,9 +7,10 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatSelectModule } from '@angular/material/select';
 import { Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
-import { CostingApi, PrepImportResult, PrepItem } from '../../core/costing/costing.api';
+import { CostingApi, PrepImportResult, PrepItem, RecipeCategory } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
@@ -21,9 +22,22 @@ import { PrepImportDialog } from './prep-import-dialog';
 // and how much is on the shelf. A row opens its profile. New ones asked for by an accountant are
 // listed first, waiting for a manager: they are not prep items until approved. Many at once from a
 // sheet of batch recipes (المصنعات): each prep item's name on a row of its own, then its ingredients.
+// Sorted under the kitchen's recipe categories, as the dishes are, and shown one category at a time.
 @Component({
   selector: 'app-prep-items-page',
-  imports: [DatePipe, DecimalPipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatInputModule, MatProgressBarModule, MoneyPipe, RouterLink],
+  imports: [
+    DatePipe,
+    DecimalPipe,
+    FormsModule,
+    MatButtonModule,
+    MatFormFieldModule,
+    MatIconModule,
+    MatInputModule,
+    MatProgressBarModule,
+    MatSelectModule,
+    MoneyPipe,
+    RouterLink,
+  ],
   template: `
     <p class="note">
       Made here from other materials (dough, house sauces) and kept in stock like them. A dish's recipe uses the prep item, so a sale
@@ -40,6 +54,16 @@ import { PrepImportDialog } from './prep-import-dialog';
           <mat-icon matPrefix>search</mat-icon>
           <mat-label>Search · بحث</mat-label>
           <input matInput [ngModel]="search()" (ngModelChange)="search.set($event)" />
+        </mat-form-field>
+        <mat-form-field subscriptSizing="dynamic">
+          <mat-label>Filter by category · تصفية بالقسم</mat-label>
+          <mat-select [ngModel]="category()" (ngModelChange)="category.set($event)" aria-label="Filter by category">
+            <mat-option [value]="null">All categories · الكل</mat-option>
+            @for (c of categories(); track c.id) {
+              <mat-option [value]="c.id">{{ c.name }}{{ c.nameAr ? ' · ' + c.nameAr : '' }}</mat-option>
+            }
+            <mat-option [value]="uncategorized">Uncategorized · بدون قسم</mat-option>
+          </mat-select>
         </mat-form-field>
         <span class="spacer"></span>
         <a mat-button routerLink="../production"><mat-icon>precision_manufacturing</mat-icon> Make a batch</a>
@@ -86,6 +110,9 @@ import { PrepImportDialog } from './prep-import-dialog';
                     <span class="muted">{{ p.code }} · </span>
                   }
                   {{ p.name }}
+                  @if (categoryName(p); as c) {
+                    <div class="muted small">{{ c }}</div>
+                  }
                   @if (asked) {
                     <div>
                       <span class="pending-badge">{{ pendingLabel(asked).en }}<span class="ar">{{ pendingLabel(asked).ar }}</span></span>
@@ -146,17 +173,40 @@ export class PrepItemsPage {
   protected readonly search = signal('');
   protected readonly busy = signal(false);
 
+  // The kitchen's recipe categories; the one shown (null: all), or none for the unsorted ones.
+  protected readonly categories = signal<RecipeCategory[]>([]);
+  protected readonly category = signal<string | null>(null);
+  protected readonly uncategorized = 'none';
+
+  // From the query: a category to show, from the recipe categories' counts.
+  readonly categoryParam = input<string | undefined>(undefined, { alias: 'category' });
+
   protected readonly shown = computed(() => {
     const text = this.search().trim().toLowerCase();
-    return this.items().filter((p) => !text || p.name.toLowerCase().includes(text) || (p.code ?? '').toLowerCase().includes(text));
+    const category = this.category();
+    return this.items().filter(
+      (p) =>
+        (!text || p.name.toLowerCase().includes(text) || (p.code ?? '').toLowerCase().includes(text)) &&
+        (category === null || (category === this.uncategorized ? !p.recipeCategoryId : p.recipeCategoryId === category)),
+    );
   });
+
+  private readonly categoryNames = computed(() => new Map(this.categories().map((c) => [c.id, c.name] as const)));
 
   // New prep items asked for, waiting for a manager: not made yet, so not openable.
   protected readonly waiting = computed(() => this.approvals.waitingToBeMade('PrepItem'));
 
   constructor() {
+    effect(() => {
+      const category = this.categoryParam();
+      untracked(() => this.category.set(category ?? null));
+    });
     void this.load();
     void this.approvals.refresh();
+  }
+
+  protected categoryName(item: PrepItem): string | null {
+    return item.recipeCategoryId ? (this.categoryNames().get(item.recipeCategoryId) ?? null) : null;
   }
 
   protected open(item: PrepItem): void {
@@ -185,7 +235,9 @@ export class PrepItemsPage {
 
   private async load(): Promise<void> {
     try {
-      this.items.set(await firstValueFrom(this.api.prepItems()));
+      const [items, categories] = await Promise.all([firstValueFrom(this.api.prepItems()), firstValueFrom(this.api.recipeCategories())]);
+      this.items.set(items);
+      this.categories.set(categories);
     } catch (error) {
       this.error.set(errorMessage(error, 'The prep items could not be loaded.'));
     } finally {

@@ -24,7 +24,7 @@ describe('the recipe category dialog', () => {
   }
 
   beforeEach(() => {
-    saveRecipeCategory.mockReset().mockImplementation((id: string, body: { name: string; nameAr: string | null }) => of({ id, ...body, recipes: 0 }));
+    saveRecipeCategory.mockReset().mockImplementation((id: string, body: { name: string; nameAr: string | null }) => of({ id, ...body, recipes: 0, prepItems: 0 }));
     close.mockReset();
   });
 
@@ -41,7 +41,7 @@ describe('the recipe category dialog', () => {
   });
 
   it('renames one under its own id', async () => {
-    const { page } = await render({ category: { id: 'sauces', name: 'Sauces', nameAr: 'صوصات', recipes: 2 } });
+    const { page } = await render({ category: { id: 'sauces', name: 'Sauces', nameAr: 'صوصات', recipes: 2, prepItems: 0 } });
     page['form'].patchValue({ name: 'Sauce bar' });
 
     await page['save']();

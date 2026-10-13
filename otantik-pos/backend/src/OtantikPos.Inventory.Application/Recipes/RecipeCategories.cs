@@ -1,30 +1,50 @@
 using MediatR;
 using Otantik.BuildingBlocks;
 using OtantikPos.Inventory.Application.Common;
+using OtantikPos.Inventory.Domain.Production;
+using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
 
 namespace OtantikPos.Inventory.Application.Recipes;
 
-// The kitchen's recipe categories, its own and not the menu's. CategoryId is made by the till.
+// The kitchen's recipe categories, its own and not the menu's: the dishes' recipes and the prep
+// items' are sorted under them alike. CategoryId is made by the till.
 
-// Recipes: how many active recipes are in it.
-public sealed record RecipeCategoryDto(Guid Id, string Name, string? NameAr, int Recipes)
+// Recipes: how many active dish recipes are in it; PrepItems, how many prep items still in use.
+public sealed record RecipeCategoryDto(Guid Id, string Name, string? NameAr, int Recipes, int PrepItems = 0)
 {
-    public static RecipeCategoryDto From(RecipeCategory category, int recipes) => new(category.Id, category.Name, category.NameAr, recipes);
+    public static RecipeCategoryDto From(RecipeCategory category, int recipes, int prepItems) =>
+        new(category.Id, category.Name, category.NameAr, recipes, prepItems);
+}
+
+internal static class PrepItemsInCategories
+{
+    // How many prep items still in use are in each recipe category.
+    public static async Task<IReadOnlyDictionary<Guid, int>> CountAsync(
+        IPrepRecipeRepository prepRecipes, IRawMaterialRepository materials, CancellationToken cancellationToken)
+    {
+        var deleted = (await materials.GetAllAsync(cancellationToken)).Where(m => m.IsArchived).Select(m => m.Id).ToHashSet();
+        return (await prepRecipes.GetAllAsync(cancellationToken))
+            .Where(r => r.RecipeCategoryId is not null && !deleted.Contains(r.PrepItemId))
+            .GroupBy(r => r.RecipeCategoryId!.Value)
+            .ToDictionary(g => g.Key, g => g.Count());
+    }
 }
 
 // By name.
 public sealed record GetRecipeCategoriesQuery : IRequest<IReadOnlyList<RecipeCategoryDto>>;
 
-internal sealed class GetRecipeCategoriesHandler(IRecipeCategoryRepository categories, IRecipeRepository recipes)
+internal sealed class GetRecipeCategoriesHandler(
+    IRecipeCategoryRepository categories, IRecipeRepository recipes, IPrepRecipeRepository prepRecipes, IRawMaterialRepository materials)
     : IRequestHandler<GetRecipeCategoriesQuery, IReadOnlyList<RecipeCategoryDto>>
 {
     public async Task<IReadOnlyList<RecipeCategoryDto>> Handle(GetRecipeCategoriesQuery request, CancellationToken cancellationToken)
     {
         var counts = await recipes.CountByCategoryAsync(cancellationToken);
+        var prepCounts = await PrepItemsInCategories.CountAsync(prepRecipes, materials, cancellationToken);
         return (await categories.GetAllAsync(cancellationToken))
             .OrderBy(c => c.Name, StringComparer.CurrentCultureIgnoreCase)
-            .Select(c => RecipeCategoryDto.From(c, counts.GetValueOrDefault(c.Id)))
+            .Select(c => RecipeCategoryDto.From(c, counts.GetValueOrDefault(c.Id), prepCounts.GetValueOrDefault(c.Id)))
             .ToList();
     }
 }
@@ -32,7 +52,9 @@ internal sealed class GetRecipeCategoriesHandler(IRecipeCategoryRepository categ
 // Adds the category, or renames it. Two cannot share a name: the recipes table could not tell them apart.
 public sealed record SaveRecipeCategoryCommand(Guid CategoryId, string Name, string? NameAr = null) : IRequest<RecipeCategoryDto>;
 
-internal sealed class SaveRecipeCategoryHandler(IRecipeCategoryRepository categories, IRecipeRepository recipes, IUnitOfWork unitOfWork)
+internal sealed class SaveRecipeCategoryHandler(
+    IRecipeCategoryRepository categories, IRecipeRepository recipes, IPrepRecipeRepository prepRecipes, IRawMaterialRepository materials,
+    IUnitOfWork unitOfWork)
     : IRequestHandler<SaveRecipeCategoryCommand, RecipeCategoryDto>
 {
     public async Task<RecipeCategoryDto> Handle(SaveRecipeCategoryCommand request, CancellationToken cancellationToken)
@@ -49,15 +71,21 @@ internal sealed class SaveRecipeCategoryHandler(IRecipeCategoryRepository catego
             category.Rename(request.Name, request.NameAr);
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        return RecipeCategoryDto.From(category, (await recipes.CountByCategoryAsync(cancellationToken)).GetValueOrDefault(category.Id));
+        return RecipeCategoryDto.From(
+            category,
+            (await recipes.CountByCategoryAsync(cancellationToken)).GetValueOrDefault(category.Id),
+            (await PrepItemsInCategories.CountAsync(prepRecipes, materials, cancellationToken)).GetValueOrDefault(category.Id));
     }
 }
 
-// Deletes the category. Its recipes move first to MoveToId: one with active recipes is not deleted
-// without somewhere for them to go. Deleted recipes in it move with them, or are left uncategorized.
+// Deletes the category. Its recipes and prep items move first to MoveToId: one with active recipes
+// or prep items in use is not deleted without somewhere for them to go. Deleted ones in it move
+// with them, or are left uncategorized.
 public sealed record DeleteRecipeCategoryCommand(Guid CategoryId, Guid? MoveToId = null) : IRequest;
 
-internal sealed class DeleteRecipeCategoryHandler(IRecipeCategoryRepository categories, IRecipeRepository recipes, IUnitOfWork unitOfWork)
+internal sealed class DeleteRecipeCategoryHandler(
+    IRecipeCategoryRepository categories, IRecipeRepository recipes, IPrepRecipeRepository prepRecipes, IRawMaterialRepository materials,
+    IUnitOfWork unitOfWork)
     : IRequestHandler<DeleteRecipeCategoryCommand>
 {
     public async Task Handle(DeleteRecipeCategoryCommand request, CancellationToken cancellationToken)
@@ -67,7 +95,9 @@ internal sealed class DeleteRecipeCategoryHandler(IRecipeCategoryRepository cate
             return;
 
         var inIt = await recipes.GetInCategoryAsync(category.Id, cancellationToken);
-        var active = inIt.Count(r => !r.IsDeleted);
+        var prepInIt = await prepRecipes.GetInCategoryAsync(category.Id, cancellationToken);
+        var deleted = (await materials.GetAllAsync(cancellationToken)).Where(m => m.IsArchived).Select(m => m.Id).ToHashSet();
+        var active = inIt.Count(r => !r.IsDeleted) + prepInIt.Count(r => !deleted.Contains(r.PrepItemId));
         if (request.MoveToId is { } moveToId)
         {
             if (moveToId == category.Id)
@@ -82,6 +112,8 @@ internal sealed class DeleteRecipeCategoryHandler(IRecipeCategoryRepository cate
 
         foreach (var recipe in inIt)
             recipe.MoveTo(request.MoveToId);
+        foreach (var prepRecipe in prepInIt)
+            prepRecipe.MoveTo(request.MoveToId);
         categories.Remove(category);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }

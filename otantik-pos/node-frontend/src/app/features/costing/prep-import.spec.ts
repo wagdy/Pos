@@ -34,7 +34,10 @@ describe('prep items from a sheet of batch recipes', () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: CostingApi, useValue: { importPrepItems, prepItems, approvalRequests: () => of({ pending: [], decided: [] }) } },
+        {
+          provide: CostingApi,
+          useValue: { importPrepItems, prepItems, approvalRequests: () => of({ pending: [], decided: [] }), recipeCategories: () => of([]) },
+        },
         { provide: AuthService, useValue: { can: () => true } },
         { provide: MatDialog, useValue: { open } },
         { provide: NotifyService, useValue: notify },
