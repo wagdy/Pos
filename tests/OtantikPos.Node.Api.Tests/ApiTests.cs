@@ -11,6 +11,7 @@ using Otantik.SharedKernel.Identity;
 using Otantik.SharedKernel.Orders;
 using OtantikPos.Node.Api.Controllers;
 using OtantikPos.Node.Infrastructure.DeliverySystem;
+using OtantikPos.Node.Infrastructure.Excel;
 using OtantikPos.Node.Infrastructure.Tests;
 using OtantikPos.Ordering.Application.Reports;
 using OtantikPos.Ordering.Domain;
@@ -396,6 +397,110 @@ public class ApiTests
         var report = await Json(await accountant.GetAsync($"/api/financials/reconciliation?from={today}&to={today}", Cancel));
         var total = report.GetProperty("total");
         Assert.Equal((1_000m, 0m, 1_000m), (total.GetProperty("netCash").GetDecimal(), total.GetProperty("expectedCash").GetDecimal(), total.GetProperty("difference").GetDecimal()));
+    }
+
+    // Raw materials brought in from Excel: the template downloaded, filled in and imported by
+    // whoever manages stock, never a cashier. Each good row a purchased stock item; a name already
+    // taken, or a unit the till does not know, skipped and said why.
+    [Fact]
+    public async Task Raw_materials_are_imported_from_the_excel_template()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var cashier = await api.CashierAsync(manager);
+        var accountant = await api.AccountantAsync(manager);
+
+        async Task<JsonElement> Json(HttpResponseMessage response)
+        {
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(Cancel));
+            return await response.Content.ReadFromJsonAsync<JsonElement>(Cancel);
+        }
+        MultipartFormDataContent Upload(byte[] bytes, string name = "materials.xlsx")
+        {
+            var file = new ByteArrayContent(bytes);
+            file.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(RawMaterialWorkbook.ContentType);
+            return new MultipartFormDataContent { { file, "file", name } };
+        }
+        static byte[] Saved(ClosedXML.Excel.XLWorkbook workbook)
+        {
+            using var stream = new MemoryStream();
+            workbook.SaveAs(stream);
+            return stream.ToArray();
+        }
+
+        // Dairy and Tomatoes are there already.
+        await Json(await manager.PutAsJsonAsync($"/api/inventory/purchase-categories/{Guid.NewGuid()}", new { name = "Dairy" }, Cancel));
+        await Json(await manager.PostAsJsonAsync("/api/inventory/raw-materials", new { name = "Tomatoes", unit = "Gram" }, Cancel));
+
+        // The template: its headings, nothing to import by mistake, and the dropdowns' lists.
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync("/api/inventory/raw-materials/template", Cancel)).StatusCode);
+        var download = await accountant.GetAsync("/api/inventory/raw-materials/template", Cancel);
+        Assert.True(download.IsSuccessStatusCode);
+        Assert.Equal(RawMaterialWorkbook.ContentType, download.Content.Headers.ContentType!.MediaType);
+        Assert.Equal(RawMaterialWorkbook.FileName, download.Content.Headers.ContentDisposition!.FileNameStar);
+        using var template = new ClosedXML.Excel.XLWorkbook(await download.Content.ReadAsStreamAsync(Cancel));
+        var sheet = template.Worksheet(RawMaterialWorkbook.DataSheetName);
+        Assert.Equal(
+            [RawMaterialWorkbook.NameHeader, RawMaterialWorkbook.CategoryHeader, RawMaterialWorkbook.UnitHeader, RawMaterialWorkbook.CostHeader],
+            sheet.Row(1).CellsUsed().Select(c => c.GetString()));
+        Assert.True(sheet.Cell(2, 1).IsEmpty());
+        var lists = template.Worksheet("Lists");
+        Assert.Equal(ClosedXML.Excel.XLWorksheetVisibility.Hidden, lists.Visibility);
+        Assert.Contains("Dairy", lists.Column(1).CellsUsed().Select(c => c.GetString()));
+        Assert.Equal(["Kg", "Liter", "Piece"], lists.Column(2).CellsUsed().Skip(1).Select(c => c.GetString()));
+        Assert.Equal(3, sheet.DataValidations.Count());
+
+        // Filled in: a new material in a new category, one in Dairy, one already there, one in sacks.
+        object[][] rows =
+        [
+            ["Chicken breast", "Poultry", "Kg", 185],
+            ["Milk", "dairy", "Liter", 42.5],
+            ["tomatoes", "", "Kg", ""],
+            ["Flour", "Dry goods", "Sack", 500],
+        ];
+        for (var r = 0; r < rows.Length; r++)
+            for (var c = 0; c < rows[r].Length; c++)
+                sheet.Cell(r + 2, c + 1).Value = ClosedXML.Excel.XLCellValue.FromObject(rows[r][c]);
+
+        var filled = Saved(template);
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PostAsync("/api/inventory/raw-materials/import", Upload(filled), Cancel)).StatusCode);
+        var result = await Json(await accountant.PostAsync("/api/inventory/raw-materials/import", Upload(filled), Cancel));
+        Assert.Equal(["Chicken breast", "Milk"], result.GetProperty("created").EnumerateArray().Select(m => m.GetProperty("name").GetString()));
+        Assert.Equal(
+            [(4, "Tomatoes is already on the list."), (5, "\"Sack\" is not a unit the till knows: Kg, Liter or Piece.")],
+            result.GetProperty("skipped").EnumerateArray().Select(s => (s.GetProperty("row").GetInt32(), s.GetProperty("reason").GetString())));
+        Assert.Equal(["Poultry"], result.GetProperty("categoriesAdded").EnumerateArray().Select(c => c.GetString()));
+
+        // On the costing list as stock items, priced per kg and per litre.
+        var materials = (await Json(await manager.GetAsync("/api/costing/materials", Cancel))).EnumerateArray().ToList();
+        JsonElement Named(string name) => materials.Single(m => m.GetProperty("name").GetString() == name);
+        (string?, string?, string?, decimal, string?) Seen(JsonElement m) => (
+            m.GetProperty("category").GetString(), m.GetProperty("unit").GetString(), m.GetProperty("purchaseUnit").GetString(),
+            m.GetProperty("costPerPurchaseUnit").GetDecimal(), m.GetProperty("kind").GetString());
+        Assert.Equal(("Poultry", "Gram", "kg", 185m, "Purchased"), Seen(Named("Chicken breast")));
+        Assert.Equal(("Dairy", "Millilitre", "L", 42.5m, "Purchased"), Seen(Named("Milk")));
+        Assert.Single(materials, m => m.GetProperty("name").GetString() == "Tomatoes");
+
+        // Headed in Arabic only, its columns in another order: read as written.
+        using var arabic = new ClosedXML.Excel.XLWorkbook();
+        var ws = arabic.AddWorksheet("خامات");
+        string[] headings = ["وحدة القياس", "اسم الخامة", "التكلفة المبدئية", "القسم"];
+        for (var c = 0; c < headings.Length; c++)
+            ws.Cell(1, c + 1).Value = headings[c];
+        ws.Cell(2, 1).Value = "قطعة";
+        ws.Cell(2, 2).Value = "بيض";
+        ws.Cell(2, 3).Value = 4.25;
+        ws.Cell(2, 4).Value = "Dairy";
+        var eggs = (await Json(await manager.PostAsync("/api/inventory/raw-materials/import", Upload(Saved(arabic)), Cancel))).GetProperty("created")[0];
+        Assert.Equal(
+            ("بيض", "Dairy", "Piece", 4.25m),
+            (eggs.GetProperty("name").GetString(), eggs.GetProperty("category").GetString(), eggs.GetProperty("unit").GetString(),
+                eggs.GetProperty("costPerPurchaseUnit").GetDecimal()));
+
+        // Not a workbook at all: said so.
+        var notExcel = await manager.PostAsync("/api/inventory/raw-materials/import", Upload("not a workbook"u8.ToArray(), "notes.xlsx"), Cancel);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, notExcel.StatusCode);
+        Assert.Contains("could not be read as an Excel workbook", await notExcel.Content.ReadAsStringAsync(Cancel));
     }
 
     // An accountant's prep item and batch: each answered 202, a request, with nothing made until

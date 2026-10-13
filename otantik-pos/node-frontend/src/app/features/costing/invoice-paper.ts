@@ -161,7 +161,8 @@ export function viewInvoicePaper(dialog: MatDialog, invoiceId: string, fileName:
   dialog.open<InvoicePaperDialog, InvoicePaperData>(InvoicePaperDialog, { data: { invoiceId, fileName }, maxWidth: '95vw' });
 }
 
-function saveBlob(blob: Blob, fileName: string): void {
+// Hands a file fetched with the sign-in to the browser to save.
+export function saveBlob(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;

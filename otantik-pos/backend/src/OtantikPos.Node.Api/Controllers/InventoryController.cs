@@ -18,6 +18,7 @@ using OtantikPos.Inventory.Domain.Purchases;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Node.Api.Auth;
+using OtantikPos.Node.Infrastructure.Excel;
 
 namespace OtantikPos.Node.Api.Controllers;
 
@@ -50,6 +51,29 @@ public sealed class InventoryController(ISender sender) : ControllerBase
         sender.Send(new UpdateRawMaterialCommand(
             rawMaterialId, request.Name, request.ReorderLevel, request.Code, request.CategoryId,
             request.PurchaseUnit, request.PurchaseUnitSize, request.DefaultYieldPercent, request.CostPerPurchaseUnit), cancellationToken);
+
+    // The spreadsheet to bring raw materials in from: the columns, the unit and category lists.
+    [HttpGet("raw-materials/template")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public async Task<IActionResult> GetRawMaterialsTemplate(CancellationToken cancellationToken)
+    {
+        var categories = await sender.Send(new GetPurchaseCategoriesQuery(), cancellationToken);
+        return File(RawMaterialWorkbook.Build(categories.Select(c => c.Name).ToList()), RawMaterialWorkbook.ContentType, RawMaterialWorkbook.FileName);
+    }
+
+    // A filled-in template: every good row made a purchased stock item, the rest said why not.
+    [HttpPost("raw-materials/import")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    [RequestSizeLimit(MaxImportBytes + 64 * 1024)]
+    public async Task<RawMaterialImportResult> ImportRawMaterials(IFormFile file, CancellationToken cancellationToken)
+    {
+        if (file.Length > MaxImportBytes)
+            throw new Otantik.BuildingBlocks.DomainException("The file is larger than 5 MB: a sheet of materials is far smaller. Is it the right file?");
+        await using var stream = file.OpenReadStream();
+        return await sender.Send(new ImportRawMaterialsCommand(RawMaterialWorkbook.Read(stream)), cancellationToken);
+    }
+
+    private const int MaxImportBytes = 5 * 1024 * 1024;
 
     // Goods received in one request, filed as a posted invoice paid from the safe (waiting for a
     // manager's approval when someone else sends it). PurchaseId is made by the till,

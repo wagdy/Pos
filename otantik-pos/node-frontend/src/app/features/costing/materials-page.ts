@@ -9,15 +9,18 @@ import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { firstValueFrom } from 'rxjs';
-import { CostingApi, ApprovalRequest, MaterialCost, SaveMaterial, unitLabels } from '../../core/costing/costing.api';
+import { CostingApi, ApprovalRequest, MaterialCost, RawMaterialImportResult, SaveMaterial, unitLabels } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals, pendingLabel } from './approvals';
+import { saveBlob } from './invoice-paper';
 import { MaterialDialog } from './material-dialog';
+import { MaterialImportDialog } from './material-import-dialog';
 
 // Raw materials and what they cost: AP$ per purchase unit (the weighted average of what was paid),
-// the default yield, and EP$ after it. Stock on hand and its value too.
+// the default yield, and EP$ after it. Stock on hand and its value too. Many at once from Excel:
+// the template to fill in, and the filled-in sheet imported, each row a stock item.
 @Component({
   selector: 'app-materials-page',
   imports: [DatePipe, DecimalPipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatInputModule, MatProgressBarModule, MatTooltipModule, MoneyPipe],
@@ -29,8 +32,19 @@ import { MaterialDialog } from './material-dialog';
       </mat-form-field>
       <span class="spacer"></span>
       <span class="muted">Stock value · قيمة المخزون: <strong>{{ stockValue() | money }}</strong></span>
+      <button mat-stroked-button (click)="downloadTemplate()" [disabled]="busy()">
+        <mat-icon>download</mat-icon> Excel template<span class="inline-ar">نموذج إكسل</span>
+      </button>
+      <button mat-stroked-button (click)="picker.click()" [disabled]="busy()">
+        <mat-icon>upload_file</mat-icon> Import from Excel<span class="inline-ar">استيراد</span>
+      </button>
+      <input #picker type="file" hidden accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        (change)="importFile(picker)" aria-label="Excel file to import" />
       <button mat-flat-button (click)="edit(null)"><mat-icon>add</mat-icon> New material</button>
     </div>
+    @if (busy()) {
+      <mat-progress-bar mode="indeterminate" />
+    }
     @if (loading()) {
       <mat-progress-bar mode="indeterminate" />
     } @else if (error()) {
@@ -132,6 +146,7 @@ export class MaterialsPage {
   protected readonly loading = signal(true);
   protected readonly error = signal<string | null>(null);
   protected readonly search = signal('');
+  protected readonly busy = signal(false);
 
   protected readonly shown = computed(() => {
     const needle = this.search().trim().toLowerCase();
@@ -185,6 +200,39 @@ export class MaterialsPage {
       await this.load();
     } catch (error) {
       this.notify.error(error, 'The material could not be saved.');
+    }
+  }
+
+  protected async downloadTemplate(): Promise<void> {
+    this.busy.set(true);
+    try {
+      saveBlob(await firstValueFrom(this.api.rawMaterialsTemplate()), 'raw-materials-template.xlsx');
+    } catch (error) {
+      this.notify.error(error, 'The template could not be downloaded.');
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  // The sheet chosen: imported, what it did shown, and the list read again. The picker is cleared,
+  // so the same file can be chosen again once it is put right.
+  protected async importFile(picker: HTMLInputElement): Promise<void> {
+    const file = picker.files?.[0];
+    picker.value = '';
+    if (!file) {
+      return;
+    }
+    this.busy.set(true);
+    try {
+      const result = await firstValueFrom(this.api.importRawMaterials(file));
+      this.dialog.open<MaterialImportDialog, RawMaterialImportResult>(MaterialImportDialog, { data: result, width: '640px', maxWidth: '95vw' });
+      if (result.created.length) {
+        await this.load();
+      }
+    } catch (error) {
+      this.notify.error(error, 'The file could not be imported.');
+    } finally {
+      this.busy.set(false);
     }
   }
 

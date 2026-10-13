@@ -1080,6 +1080,17 @@ export class CostingApi {
     return this.http.get<SpendingReport>('/api/costing/purchases/spending', { params: { from, to } });
   }
 
+  // The Excel template to fill in: the columns, and the unit and category lists.
+  rawMaterialsTemplate(): Observable<Blob> {
+    return this.http.get('/api/inventory/raw-materials/template', { responseType: 'blob' });
+  }
+
+  importRawMaterials(file: File): Observable<RawMaterialImportResult> {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return this.http.post<RawMaterialImportResult>('/api/inventory/raw-materials/import', form);
+  }
+
   saveMaterial(id: string | null, material: SaveMaterial): Observable<unknown> {
     return id
       ? this.http.put(`/api/inventory/raw-materials/${id}`, material)
@@ -1326,6 +1337,30 @@ export const statusLabels: Record<CostStatus, { en: string; ar: string }> = {
 };
 
 export const unitLabels: Record<UnitOfMeasure, string> = { Gram: 'g', Millilitre: 'ml', Piece: 'pc' };
+
+// Raw materials brought in from the Excel template: each made a purchased stock item, or skipped
+// and said why, by its row on the sheet; and the categories added for them.
+export interface ImportedRawMaterial {
+  row: number;
+  id: string;
+  name: string;
+  category: string;
+  unit: UnitOfMeasure;
+  purchaseUnit: string;
+  costPerPurchaseUnit: number | null;
+}
+
+export interface SkippedSheetRow {
+  row: number;
+  name: string | null;
+  reason: string;
+}
+
+export interface RawMaterialImportResult {
+  created: ImportedRawMaterial[];
+  skipped: SkippedSheetRow[];
+  categoriesAdded: string[];
+}
 
 // Stock is counted and reported in kg, litres and pieces, whatever it is bought in: a count of
 // 3.25 kg of cheese, not 0.13 of a 25 kg sack. What is bought by the gram or millilitre, such as
