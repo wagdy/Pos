@@ -19,6 +19,8 @@ export const Permissions = {
   MenuManage: 'menu.manage',
   StaffManage: 'staff.manage',
   CostingView: 'costing.view',
+  // Deleting recipes, materials, invoices, waste and counts outright, and deciding others' requests.
+  ApprovalDecide: 'approvals.decide',
 } as const;
 
 export type Permission = (typeof Permissions)[keyof typeof Permissions];

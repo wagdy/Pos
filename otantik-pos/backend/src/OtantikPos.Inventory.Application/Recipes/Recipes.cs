@@ -1,7 +1,9 @@
 using MediatR;
 using Otantik.BuildingBlocks;
+using OtantikPos.Inventory.Application.Approvals;
 using OtantikPos.Inventory.Application.Common;
 using OtantikPos.Inventory.Application.RawMaterials;
+using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
 
@@ -43,6 +45,9 @@ internal static class RecipeWriting
         this Recipe recipe, IRawMaterialRepository materials, IReadOnlyList<RecipeIngredientDto> ingredients, int portions, CancellationToken cancellationToken)
     {
         var byId = await materials.GetRequiredByIdsAsync(ingredients.Select(i => i.RawMaterialId).ToList(), cancellationToken);
+        // One deleted since cannot come back in: a recipe that had it may keep it.
+        if (byId.Values.FirstOrDefault(m => m.IsArchived && !recipe.Ingredients.Any(i => i.RawMaterialId == m.Id)) is { } archived)
+            throw new DomainException($"{archived.Name} has been deleted from the raw materials.");
         foreach (var dropped in recipe.Ingredients.Where(i => !byId.ContainsKey(i.RawMaterialId)).ToList())
             recipe.RemoveIngredient(dropped.RawMaterialId);
 
@@ -75,20 +80,28 @@ public sealed record SetRecipeCommand(
     int? VariantId,
     IReadOnlyList<RecipeIngredientDto> Ingredients,
     int Portions = 1,
-    string StaffName = "") : IRequest<RecipeDto?>;
+    string StaffName = "",
+    // No ingredients deletes the recipe, so only for someone who may approve deletions; anyone
+    // else asks, from the recipes list.
+    bool CanDelete = true) : IRequest<RecipeDto?>;
 
-internal sealed class SetRecipeHandler(IRecipeRepository recipes, IRawMaterialRepository materials, IUnitOfWork unitOfWork)
+internal sealed class SetRecipeHandler(
+    IRecipeRepository recipes, IRawMaterialRepository materials, IApprovalRequestRepository approvals, IUnitOfWork unitOfWork)
     : IRequestHandler<SetRecipeCommand, RecipeDto?>
 {
     public async Task<RecipeDto?> Handle(SetRecipeCommand request, CancellationToken cancellationToken)
     {
         var target = new RecipeTarget(request.TargetKind, request.CatalogItemId, request.VariantId);
         var recipe = await recipes.GetByTargetAsync(target, cancellationToken);
+        if (recipe is not null)
+            await approvals.EnsureNotPendingAsync(recipe.Id, cancellationToken);
 
         if (request.Ingredients.Count == 0)
         {
             if (recipe is not null)
             {
+                if (!request.CanDelete)
+                    throw new DomainException("Deleting a recipe goes to a manager: delete it from the recipes list to ask.");
                 recipe.Delete(request.StaffName);
                 await unitOfWork.SaveChangesAsync(cancellationToken);
             }
@@ -131,7 +144,11 @@ public sealed record SaveRecipeCommand(
     decimal? PlannedPrice = null) : IRequest<RecipeDto>;
 
 internal sealed class SaveRecipeHandler(
-    IRecipeRepository recipes, IRecipeCategoryRepository categories, IRawMaterialRepository materials, IUnitOfWork unitOfWork)
+    IRecipeRepository recipes,
+    IRecipeCategoryRepository categories,
+    IRawMaterialRepository materials,
+    IApprovalRequestRepository approvals,
+    IUnitOfWork unitOfWork)
     : IRequestHandler<SaveRecipeCommand, RecipeDto>
 {
     public async Task<RecipeDto> Handle(SaveRecipeCommand request, CancellationToken cancellationToken)
@@ -152,6 +169,7 @@ internal sealed class SaveRecipeHandler(
             recipe = await recipes.GetRequiredAsync(recipeId, cancellationToken);
             if (recipe.IsDeleted)
                 throw new DomainException("This recipe is deleted. Restore it to change it.");
+            await approvals.EnsureNotPendingAsync(recipe.Id, cancellationToken);
             await recipes.EnsureFreeAsync(target, recipe.Id, cancellationToken);
             recipe.Define(request.Name, categoryId, request.PlannedPrice, target);
         }

@@ -14,6 +14,10 @@ public enum ExpenseLine
 
     // Other costs that do not move with sales: insurance, licences, loan repayments.
     OtherFixed = 3,
+
+    // Salaries and what comes with them, paid as expenses (a voucher from the safe): added to the
+    // month's wages and benefits.
+    Wages = 4,
 }
 
 // What the restaurant buys, grouped (Meat, Dairy, Packaging, Cleaning, Utilities): every raw

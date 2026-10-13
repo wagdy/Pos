@@ -7,6 +7,7 @@ using Otantik.BuildingBlocks;
 using Otantik.SharedKernel.Catalog;
 using Otantik.SharedKernel.Identity;
 using Otantik.SharedKernel.Orders;
+using OtantikPos.Inventory.Application.Approvals;
 using OtantikPos.Inventory.Application.Categories;
 using OtantikPos.Inventory.Application.Expenses;
 using OtantikPos.Inventory.Application.RawMaterials;
@@ -15,12 +16,16 @@ using OtantikPos.Inventory.Application.Purchases;
 using OtantikPos.Inventory.Application.Recipes;
 using OtantikPos.Inventory.Application.StockCounts;
 using OtantikPos.Inventory.Application.Suppliers;
+using OtantikPos.Inventory.Application.Treasury;
+using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Categories;
+using OtantikPos.Inventory.Domain.Production;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Purchases;
 using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
+using OtantikPos.Inventory.Domain.Treasury;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Costing;
 using OtantikPos.Node.Infrastructure.DeliverySystem;
@@ -55,7 +60,7 @@ public class NodeTests
 
         using var scope = node.Scope();
         var staff = node.Service<StaffDirectory>(scope);
-        Assert.Equal(["Omar", "Sara"], (await staff.GetTillStaffAsync(TestContext.Current.CancellationToken)).Select(s => s.FullName));
+        Assert.Equal(["Mona", "Omar", "Sara"], (await staff.GetTillStaffAsync(TestContext.Current.CancellationToken)).Select(s => s.FullName));
 
         // A PIN is the till's own; the next sync must not wipe it.
         await staff.SetPinAsync("staff-cashier", "2468", TestContext.Current.CancellationToken);
@@ -481,7 +486,7 @@ public class NodeTests
         var nileFarms = (await node.Send(new SaveSupplierCommand(Guid.NewGuid(), "Nile Farms"))).Id;
 
         var draft = await node.Send(new SavePurchaseInvoiceCommand(invoiceId, nileFarms, "F-1001", new DateOnly(2026, 10, 7),
-            [new PurchaseInvoiceLineEntry(tomatoes, 5, "kg", 1000, 100)], "Omar"));
+            [new PurchaseInvoiceLineEntry(tomatoes, 5, "kg", 1000, 100)], "Omar", PaymentMethod: PurchasePaymentMethod.Safe));
         Assert.Equal((PurchaseInvoiceStatus.Draft, 100m, 5000m), (draft.Status, draft.Total, draft.Lines.Single().Quantity));
         Assert.Equal(0m, await OnHand());
 
@@ -546,10 +551,10 @@ public class NodeTests
 
         // On a posted invoice and a draft: archived.
         var posted = Guid.NewGuid();
-        await node.Send(new SavePurchaseInvoiceCommand(posted, nileFarms, "F-1", null, OneKilo, "Omar"));
+        await node.Send(new SavePurchaseInvoiceCommand(posted, nileFarms, "F-1", null, OneKilo, "Omar", PaymentMethod: PurchasePaymentMethod.Safe));
         await node.Send(new PostPurchaseInvoiceCommand(posted, "Omar"));
         var draft = Guid.NewGuid();
-        await node.Send(new SavePurchaseInvoiceCommand(draft, nileFarms, "F-2", null, OneKilo, "Omar"));
+        await node.Send(new SavePurchaseInvoiceCommand(draft, nileFarms, "F-2", null, OneKilo, "Omar", PaymentMethod: PurchasePaymentMethod.Safe));
         Assert.Equal(SupplierRemoval.Archived, (await node.Send(new DeleteSupplierCommand(nileFarms))).Outcome);
 
         Assert.Empty(await Suppliers());
@@ -559,16 +564,16 @@ public class NodeTests
         Assert.Equal("Nile Farms", Assert.Single(await node.Send(new GetPurchaseInvoicesQuery(PurchaseInvoiceStatus.Posted))).SupplierName);
 
         // The draft that had it keeps it; a new invoice cannot take it, nor can it be added again.
-        await node.Send(new SavePurchaseInvoiceCommand(draft, nileFarms, "F-2", null, OneKilo, "Omar"));
+        await node.Send(new SavePurchaseInvoiceCommand(draft, nileFarms, "F-2", null, OneKilo, "Omar", PaymentMethod: PurchasePaymentMethod.Safe));
         var refused = await Assert.ThrowsAsync<DomainException>(() =>
-            node.Send(new SavePurchaseInvoiceCommand(Guid.NewGuid(), nileFarms, "F-3", null, OneKilo, "Omar")));
+            node.Send(new SavePurchaseInvoiceCommand(Guid.NewGuid(), nileFarms, "F-3", null, OneKilo, "Omar", PaymentMethod: PurchasePaymentMethod.Safe)));
         Assert.Contains("archived", refused.Message);
         Assert.Contains("archived", (await Assert.ThrowsAsync<DomainException>(() => node.Send(new SaveSupplierCommand(Guid.NewGuid(), "Nile Farms")))).Message);
 
         // Restored, it is back for new invoices.
         await node.Send(new RestoreSupplierCommand(nileFarms));
         Assert.Equal(["Nile Farms"], (await Suppliers()).Select(s => s.Name));
-        await node.Send(new SavePurchaseInvoiceCommand(Guid.NewGuid(), nileFarms, "F-3", null, OneKilo, "Omar"));
+        await node.Send(new SavePurchaseInvoiceCommand(Guid.NewGuid(), nileFarms, "F-3", null, OneKilo, "Omar", PaymentMethod: PurchasePaymentMethod.Safe));
     }
 
     // The supplier names typed on invoices before suppliers were kept become suppliers on the
@@ -890,7 +895,7 @@ public class NodeTests
 
         // Made, so not bought; and not made from what is made from it.
         var bought = await Assert.ThrowsAsync<DomainException>(() => node.Send(new SavePurchaseInvoiceCommand(
-            Guid.NewGuid(), null, null, null, [new PurchaseInvoiceLineEntry(dough.Id, 1, "kg", 1000, 18)], "Omar")));
+            Guid.NewGuid(), null, null, null, [new PurchaseInvoiceLineEntry(dough.Id, 1, "kg", 1000, 18)], "Omar", PaymentMethod: PurchasePaymentMethod.Safe)));
         Assert.StartsWith("Pizza dough is made in the kitchen", bought.Message);
         var sauce = await node.Send(new SavePrepItemCommand(null, "Dough crumb", UnitOfMeasure.Gram, 1_000, [new(dough.Id, 1_000)]));
         var loop = await Assert.ThrowsAsync<DomainException>(() => node.Send(new SavePrepItemCommand(
@@ -1006,15 +1011,15 @@ public class NodeTests
         PurchaseInvoiceLineEntry Spend(Guid item, decimal amount, decimal quantity = 1, string? unit = null) =>
             new(null, quantity, unit, 1, amount, PurchaseItemType.Expense, item);
         var draft = await node.Send(new SavePurchaseInvoiceCommand(bill, null, null, today,
-            [new(milk.Id, 10, "L", 1000, 300), Spend(electricity, 1_500), Spend(spray, 200, 4, "bottle")]));
+            [new(milk.Id, 10, "L", 1000, 300), Spend(electricity, 1_500), Spend(spray, 200, 4, "bottle")], PaymentMethod: PurchasePaymentMethod.Safe));
         Assert.Equal((300m, 1_700m, 2_000m), (draft.InventoryTotal, draft.ExpenseTotal, draft.Total));
         Assert.Equal([("Milk", PurchaseItemType.Inventory, "Dairy"), ("Electricity", PurchaseItemType.Expense, "Utilities"), ("Cleaning spray", PurchaseItemType.Expense, "Utilities")],
             draft.Lines.Select(l => (l.Material, l.ItemType, l.Category)));
         // An expense is its amount, and is one thing or the other.
         await Assert.ThrowsAsync<DomainException>(() => node.Send(new SavePurchaseInvoiceCommand(bill, null, null, today,
-            [new(null, 1, null, 1, null, PurchaseItemType.Expense, electricity)])));
+            [new(null, 1, null, 1, null, PurchaseItemType.Expense, electricity)], PaymentMethod: PurchasePaymentMethod.Safe)));
         await Assert.ThrowsAsync<DomainException>(() => node.Send(new SavePurchaseInvoiceCommand(bill, null, null, today,
-            [new(milk.Id, 1, null, 1, 50, PurchaseItemType.Expense, electricity)])));
+            [new(milk.Id, 1, null, 1, 50, PurchaseItemType.Expense, electricity)], PaymentMethod: PurchasePaymentMethod.Safe)));
 
         await node.Send(new PostPurchaseInvoiceCommand(bill, "Omar"));
         // The milk is in, at 0.03 a ml; the expenses moved nothing.
@@ -1024,12 +1029,12 @@ public class NodeTests
 
         // Rent and insurance on an invoice of their own; a draft and last month's bill do not count this month.
         var overheads = Guid.NewGuid();
-        await node.Send(new SavePurchaseInvoiceCommand(overheads, null, null, today, [Spend(shop, 8_000), Spend(cover, 600)]));
+        await node.Send(new SavePurchaseInvoiceCommand(overheads, null, null, today, [Spend(shop, 8_000), Spend(cover, 600)], PaymentMethod: PurchasePaymentMethod.Safe));
         await node.Send(new PostPurchaseInvoiceCommand(overheads, "Omar"));
-        await node.Send(new SavePurchaseInvoiceCommand(Guid.NewGuid(), null, null, today, [Spend(electricity, 999)]));
+        await node.Send(new SavePurchaseInvoiceCommand(Guid.NewGuid(), null, null, today, [Spend(electricity, 999)], PaymentMethod: PurchasePaymentMethod.Safe));
         var lastMonth = new DateOnly(today.Year, today.Month, 1).AddDays(-1);
         var earlier = Guid.NewGuid();
-        await node.Send(new SavePurchaseInvoiceCommand(earlier, null, null, lastMonth, [Spend(electricity, 1_400)]));
+        await node.Send(new SavePurchaseInvoiceCommand(earlier, null, null, lastMonth, [Spend(electricity, 1_400)], PaymentMethod: PurchasePaymentMethod.Safe));
         await node.Send(new PostPurchaseInvoiceCommand(earlier, "Omar"));
 
         var firstOfMonth = new DateOnly(today.Year, today.Month, 1);
@@ -1062,7 +1067,7 @@ public class NodeTests
 
         // On invoices, an expense is archived rather than deleted, and not put on another until restored.
         Assert.Equal(ExpenseItemRemoval.Archived, (await node.Send(new DeleteExpenseItemCommand(electricity))).Outcome);
-        await Assert.ThrowsAsync<DomainException>(() => node.Send(new SavePurchaseInvoiceCommand(Guid.NewGuid(), null, null, today, [Spend(electricity, 10)])));
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new SavePurchaseInvoiceCommand(Guid.NewGuid(), null, null, today, [Spend(electricity, 10)], PaymentMethod: PurchasePaymentMethod.Safe)));
         Assert.DoesNotContain(await node.Send(new GetExpenseItemsQuery()), e => e.Id == electricity);
         // On three invoices, the draft too; 1,500 and 1,400 posted.
         var archived = (await node.Send(new GetExpenseItemsQuery(IncludeArchived: true))).Single(e => e.Id == electricity);
@@ -1076,6 +1081,341 @@ public class NodeTests
         await node.Send(new DeletePurchaseCategoryCommand(insurance, rent));
         s = (await node.Service<KpiService>(node.Scope()).GetAsync(today.Year, today.Month, ct)).Statement;
         Assert.Equal((8_600m, 0m), (s.LoggedOccupationCost, s.LoggedOtherFixedCosts));
+    }
+
+    // Maker-checker deletion across the five modules. An accountant's delete is a request: the
+    // record still counts and is locked. A manager approves (a recipe deleted, a material
+    // archived, a posted invoice, waste entry or count voided by reversing entries dated now),
+    // rejects (it stays as it was), or deletes outright. Every decision is kept.
+    [Fact]
+    public async Task Deletions_wait_for_a_manager_and_voids_reverse_the_stock()
+    {
+        await using var node = await TestNode.StartAsync();
+        var ct = TestContext.Current.CancellationToken;
+        using var scope = node.Scope();
+        var today = node.Service<RestaurantClock>(scope).BusinessDateOf(DateTime.UtcNow);
+        Task<decimal> OnHand(Guid id) => node.Db(db => db.RawMaterials.Where(m => m.Id == id).Select(m => m.QuantityOnHand).SingleAsync());
+        Task<ApprovalResultDto> Ask(ApprovalModule module, Guid id, bool manager = false, string? reason = null) =>
+            node.Send(new RequestDeletionCommand(Guid.NewGuid(), module, id, reason, manager ? "staff-omar" : "staff-mona",
+                manager ? "Omar" : "Mona", CanApprove: manager));
+
+        var tomatoes = (await node.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram))).Id;
+        var salt = (await node.Send(new CreateRawMaterialCommand("Salt", UnitOfMeasure.Gram))).Id;
+        async Task<Guid> Invoice(decimal kg, decimal cost)
+        {
+            var id = Guid.NewGuid();
+            await node.Send(new SavePurchaseInvoiceCommand(id, null, $"F-{kg}", today, [new(tomatoes, kg, "kg", 1000, cost)], PaymentMethod: PurchasePaymentMethod.Safe));
+            await node.Send(new PostPurchaseInvoiceCommand(id, "Mona"));
+            return id;
+        }
+        var first = await Invoice(5, 100);
+        var second = await Invoice(5, 150);
+        var waste = Guid.NewGuid();
+        await node.Send(new RecordSpoilageCommand(waste, [new(tomatoes, 1_000, "Expired")], "Mona"));
+        var count = Guid.NewGuid();
+        await node.Send(new RecordStockCountCommand(count, [new(tomatoes, 8_900)], "Mona"));
+        var categoryId = (await node.Send(new SaveRecipeCategoryCommand(Guid.NewGuid(), "Sauces"))).Id;
+        var sauce = (await node.Send(new SaveRecipeCommand(null, "House sauce", null, null, null, 1, [new(tomatoes, 200)], categoryId))).Id;
+        var draft = Guid.NewGuid();
+        await node.Send(new SavePurchaseInvoiceCommand(draft, null, null, today, [new(tomatoes, 1, "kg", 1000, 20)], PaymentMethod: PurchasePaymentMethod.Safe));
+        Assert.Equal(8_900m, await OnHand(tomatoes));
+
+        // The accountant asks: nothing is deleted, and the stock is as it was.
+        foreach (var (module, id) in new[] { (ApprovalModule.Recipe, sauce), (ApprovalModule.PurchaseInvoice, second),
+                     (ApprovalModule.Waste, waste), (ApprovalModule.StockCount, count), (ApprovalModule.RawMaterial, salt) })
+            Assert.Equal(ApprovalOutcome.Requested, (await Ask(module, id, reason: "Entered by mistake")).Outcome);
+        Assert.Equal(8_900m, await OnHand(tomatoes));
+        Assert.False(await node.Db(db => db.Recipes.Where(r => r.Id == sauce).Select(r => r.DeletedAtUtc != null).SingleAsync()));
+
+        // Asked about, a record is locked until decided; and is not asked about twice.
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new SaveRecipeCommand(sauce, "Sauce", null, null, null, 1, [new(tomatoes, 250)], categoryId)));
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new UpdateRawMaterialCommand(salt, "Sea salt", 0)));
+        await Assert.ThrowsAsync<DomainException>(() => Ask(ApprovalModule.Recipe, sauce));
+        // What cannot be deleted is refused when asked: a material in a recipe and on the shelf, a draft.
+        await Assert.ThrowsAsync<DomainException>(() => Ask(ApprovalModule.RawMaterial, tomatoes));
+        await Assert.ThrowsAsync<DomainException>(() => Ask(ApprovalModule.PurchaseInvoice, draft));
+
+        var pending = (await node.Send(new GetApprovalRequestsQuery())).Pending;
+        Assert.Equal(
+            [(ApprovalModule.Recipe, "Recipe House sauce"),
+             (ApprovalModule.PurchaseInvoice, $"Invoice F-5 · {today:d MMM yyyy} · 1 line · L.E 150.00"),
+             (ApprovalModule.Waste, $"Waste of {today:d MMM yyyy} by Mona: Tomatoes 1 kg (Expired) · L.E 25.00"),
+             (ApprovalModule.StockCount, $"Stock count posted {today:d MMM yyyy} by Mona · 1 material"),
+             (ApprovalModule.RawMaterial, "Raw material Salt")],
+            pending.Select(p => (p.Module, p.Summary)));
+        Assert.All(pending, p => Assert.Equal(("Mona", "Entered by mistake"), (p.RequestedBy, p.Reason)));
+        var request = pending.ToDictionary(p => p.Module, p => p.Id);
+
+        // The manager decides.
+        await node.Send(new ApproveRequestCommand(request[ApprovalModule.Recipe], "Omar"));
+        Assert.True(await node.Db(db => db.Recipes.Where(r => r.Id == sauce).Select(r => r.DeletedAtUtc != null).SingleAsync()));
+
+        // The second delivery goes back out at its own price; the invoice is kept, voided.
+        await node.Send(new ApproveRequestCommand(request[ApprovalModule.PurchaseInvoice], "Omar"));
+        Assert.Equal(3_900m, await OnHand(tomatoes));
+        var voided = await node.Db(db => db.PurchaseInvoices.AsNoTracking().SingleAsync(i => i.Id == second));
+        Assert.Equal((PurchaseInvoiceStatus.Voided, "Omar"), (voided.Status, voided.VoidedBy));
+        Assert.Equal(100m, (await node.Service<PurchaseSpendingService>(scope).GetAsync(today, today, ct)).Total);
+        // The last price is the delivery that stands (20 a kg), not the voided one, nor its reversal.
+        Assert.Equal(20m, (await node.Service<CostingService>(scope).GetMaterialsAsync(ct)).Single(m => m.Id == tomatoes).LastPurchaseCostPerPurchaseUnit);
+
+        await node.Send(new RejectRequestCommand(request[ApprovalModule.Waste], "It was spoiled", "Omar"));
+        Assert.Single(await node.Service<VarianceService>(scope).GetSpoilageAsync(DateTime.UtcNow.AddDays(-1), DateTime.UtcNow.AddDays(1), ct));
+
+        // The count's 100 g shortfall is put back, and it is no longer a count to measure from.
+        await node.Send(new ApproveRequestCommand(request[ApprovalModule.StockCount], "Omar"));
+        Assert.Equal(4_000m, await OnHand(tomatoes));
+        await Assert.ThrowsAsync<DomainException>(() => node.Service<VarianceService>(scope).GetVarianceAsync(null, null, ct));
+
+        await node.Send(new ApproveRequestCommand(request[ApprovalModule.RawMaterial], "Omar"));
+        Assert.DoesNotContain(await node.Send(new GetRawMaterialsQuery()), m => m.Id == salt);
+        // Approving again after a lost answer changes nothing.
+        await node.Send(new ApproveRequestCommand(request[ApprovalModule.StockCount], "Omar"));
+        Assert.Equal(4_000m, await OnHand(tomatoes));
+
+        // A manager's own delete is done at once, and recorded as theirs.
+        var direct = await Ask(ApprovalModule.Waste, waste, manager: true);
+        Assert.Equal((ApprovalOutcome.Applied, ApprovalStatus.Approved, "Omar"), (direct.Outcome, direct.Request.Status, direct.Request.DecidedBy));
+        Assert.Equal(5_000m, await OnHand(tomatoes));
+        Assert.Empty(await node.Service<VarianceService>(scope).GetSpoilageAsync(DateTime.UtcNow.AddDays(-1), DateTime.UtcNow.AddDays(1), ct));
+        await Assert.ThrowsAsync<DomainException>(() => Ask(ApprovalModule.Waste, waste, manager: true));
+
+        var history = await node.Send(new GetApprovalRequestsQuery(Decided: 10));
+        Assert.Empty(history.Pending);
+        Assert.Equal(
+            [ApprovalStatus.Approved, ApprovalStatus.Approved, ApprovalStatus.Approved, ApprovalStatus.Rejected,
+             ApprovalStatus.Approved, ApprovalStatus.Approved],
+            history.Decided.Select(d => d.Status));
+        // Each void stands beside what it voided in the ledger: 1 purchase, 1 waste and 1 count reversed.
+        Assert.Equal(3, await node.Db(db => db.StockMovements.CountAsync(m => m.ReversalOf != null)));
+        _ = first;
+    }
+
+    // Prep items and batches by an accountant wait for a manager. A new prep item does not exist
+    // until approved; a batch moves nothing until approved, and then at the averages of that
+    // moment; a correction reverses the batch and makes it again; a deletion voids it.
+    [Fact]
+    public async Task Prep_items_and_batches_by_an_accountant_wait_for_a_manager()
+    {
+        await using var node = await TestNode.StartAsync();
+        Task<decimal> OnHand(Guid id) => node.Db(db => db.RawMaterials.Where(m => m.Id == id).Select(m => m.QuantityOnHand).SingleAsync());
+        Task<ApprovalRequestDto> Approve(ApprovalResultDto asked) => node.Send(new ApproveRequestCommand(asked.Request.Id, "Omar"));
+        var flour = (await node.Send(new CreateRawMaterialCommand("Flour", UnitOfMeasure.Gram))).Id;
+        var yeast = (await node.Send(new CreateRawMaterialCommand("Yeast", UnitOfMeasure.Gram))).Id;
+        // 0.02 a gram of flour, 0.50 a gram of yeast.
+        await node.Send(new ReceivePurchaseCommand(Guid.NewGuid(), [new(flour, 20_000, 400), new(yeast, 500, 250)]));
+
+        // A new prep item, asked for: nothing exists until it is approved.
+        var doughChange = new PrepItemChange("Pizza dough", UnitOfMeasure.Gram, 10_000, [new(flour, 6_000), new(yeast, 100)], Code: "PREP-1");
+        var newItem = await node.Send(new RequestPrepItemChangeCommand(Guid.NewGuid(), null, doughChange, "For the pizzas", "staff-mona", "Mona"));
+        Assert.Equal((ApprovalOutcome.Requested, ApprovalAction.Create, "New prep item PREP-1 · Pizza dough · 10 kg batch · 2 ingredients"),
+            (newItem.Outcome, newItem.Request.Action, newItem.Request.Summary));
+        Assert.Contains(new ApprovalChange("Flour", null, "6 kg"), newItem.Request.Changes);
+        Assert.Contains(new ApprovalChange("Yeast", null, "100 g"), newItem.Request.Changes);
+        Assert.Empty(await node.Send(new GetPrepItemsQuery()));
+        Assert.DoesNotContain(await node.Send(new GetRawMaterialsQuery()), m => m.Name == "Pizza dough");
+        // What could not be saved is refused when asked, not when approved.
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new RequestPrepItemChangeCommand(
+            Guid.NewGuid(), null, doughChange with { BatchQuantity = 0 }, null, "staff-mona", "Mona")));
+
+        await Approve(newItem);
+        var dough = newItem.Request.RecordId;
+        Assert.Equal(("Pizza dough", 2), await node.Send(new GetPrepItemQuery(dough)) is { } made0 ? (made0.Name, made0.Ingredients.Count) : default);
+
+        // A batch, asked for: no flour out, no dough in.
+        var orderId = Guid.NewGuid();
+        Task<ApprovalResultDto> AskBatch() => node.Send(new RequestProductionOrderCommand(
+            Guid.NewGuid(), orderId, dough, 10_000, 9_600, "Morning batch", null, "staff-mona", "Mona"));
+        var batch = await AskBatch();
+        Assert.Equal(batch.Request.Id, (await AskBatch()).Request.Id);
+        Assert.Equal((20_000m, 500m, 0m), (await OnHand(flour), await OnHand(yeast), await OnHand(dough)));
+        Assert.Empty(await node.Send(new GetProductionOrdersQuery()));
+        Assert.Contains(new ApprovalChange("Quantity to produce", null, "10 kg"), batch.Request.Changes);
+
+        // Flour costs more by the time the manager approves: the batch is costed then, at 0.025 a
+        // gram, as the preview shows.
+        await node.Send(new ReceivePurchaseCommand(Guid.NewGuid(), [new(flour, 20_000, 600)]));
+        var preview = (await node.Send(new GetApprovalPreviewQuery(batch.Request.Id)))!;
+        Assert.Equal((200m, 20.83m, (ProductionOrderDto?)null), (preview.Batch.TotalCost, preview.Batch.UnitCostPerDisplayUnit, preview.Replaces));
+        await Approve(batch);
+        var made = (await node.Send(new GetProductionOrderQuery(orderId)))!;
+        Assert.Equal((200m, "Mona", "Omar", ProductionOrderStatus.Made), (made.TotalCost, made.ProducedBy, made.ApprovedBy, made.Status));
+        Assert.Equal((34_000m, 400m, 9_600m), (await OnHand(flour), await OnHand(yeast), await OnHand(dough)));
+
+        // A correction, asked for: 12 kg planned, 11.5 kg made. Nothing moves; the batch is locked.
+        var corrected = Guid.NewGuid();
+        var correction = await node.Send(new ReviseProductionOrderCommand(
+            Guid.NewGuid(), orderId, corrected, 12_000, 11_500, "Morning batch", "Weighed again", "staff-mona", "Mona", CanApprove: false));
+        Assert.Equal(ApprovalOutcome.Requested, correction.Outcome);
+        Assert.Equal(
+            [new("Quantity to produce", "10 kg", "12 kg"), new("Came out", "9.6 kg", "11.5 kg"),
+             new("Flour taken", "6 kg", "7.2 kg"), new("Yeast taken", "100 g", "120 g")],
+            correction.Request.Changes);
+        Assert.Equal((34_000m, 9_600m), (await OnHand(flour), await OnHand(dough)));
+        // What the manager sees: the batch made again, and the one it replaces, going back first.
+        var correctionPreview = (await node.Send(new GetApprovalPreviewQuery(correction.Request.Id)))!;
+        Assert.Equal((7_200m, 6_000m, 200m), (correctionPreview.Batch.Lines.Single(l => l.Material == "Flour").Quantity,
+            correctionPreview.Replaces!.Lines.Single(l => l.Material == "Flour").Quantity, correctionPreview.Replaces.TotalCost));
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new RequestDeletionCommand(
+            Guid.NewGuid(), ApprovalModule.ProductionOrder, orderId, null, "staff-mona", "Mona", CanApprove: false)));
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new ReviseProductionOrderCommand(
+            Guid.NewGuid(), orderId, Guid.NewGuid(), 11_000, 11_000, null, null, "staff-omar", "Omar", CanApprove: true)));
+
+        // Approved: the batch reversed (its flour and yeast back, its dough out) and made again.
+        await Approve(correction);
+        var replaced = (await node.Send(new GetProductionOrderQuery(orderId)))!;
+        var remade = (await node.Send(new GetProductionOrderQuery(corrected)))!;
+        Assert.Equal((ProductionOrderStatus.Voided, corrected, "Omar"), (replaced.Status, replaced.ReplacedBy, replaced.VoidedBy));
+        Assert.Equal((orderId, 240m, "Mona", "Omar"), (remade.RevisionOf, remade.TotalCost, remade.ProducedBy, remade.ApprovedBy));
+        Assert.Equal((32_800m, 380m, 11_500m), (await OnHand(flour), await OnHand(yeast), await OnHand(dough)));
+        var profile = (await node.Send(new GetPrepItemQuery(dough)))!;
+        Assert.Equal((20.87m, 20.87m), (profile.AverageCostPerDisplayUnit, profile.LastBatchCostPerDisplayUnit));
+
+        // A change to its recipe, asked for and rejected: the recipe stays, and can be changed again.
+        var recipeChange = await node.Send(new RequestPrepItemChangeCommand(
+            Guid.NewGuid(), dough, doughChange with { Ingredients = [new(flour, 6_000), new(yeast, 150)] }, null, "staff-mona", "Mona"));
+        Assert.Equal([new ApprovalChange("Yeast", "100 g", "150 g")], recipeChange.Request.Changes);
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new SavePrepItemCommand(
+            dough, "Pizza dough", UnitOfMeasure.Gram, 10_000, [new(flour, 6_000)])));
+        await node.Send(new RejectRequestCommand(recipeChange.Request.Id, "Keep it as it is", "Omar"));
+        Assert.Equal(100m, (await node.Send(new GetPrepItemQuery(dough)))!.Ingredients.Single(i => i.Name == "Yeast").Quantity);
+
+        // The corrected batch, deleted: voided, and everything back where it was before it.
+        var deletion = await node.Send(new RequestDeletionCommand(
+            Guid.NewGuid(), ApprovalModule.ProductionOrder, corrected, "Never made", "staff-mona", "Mona", CanApprove: false));
+        Assert.StartsWith("Batch of Pizza dough made ", deletion.Request.Summary);
+        await Approve(deletion);
+        Assert.Equal((40_000m, 500m, 0m), (await OnHand(flour), await OnHand(yeast), await OnHand(dough)));
+        Assert.All(await node.Send(new GetProductionOrdersQuery()), o => Assert.Equal(ProductionOrderStatus.Voided, o.Status));
+        // Two batches of three entries each, every one reversed.
+        Assert.Equal(6, await node.Db(db => db.StockMovements.CountAsync(m => m.ReversalOf != null)));
+        Assert.Equal(5, (await node.Send(new GetApprovalRequestsQuery(Decided: 10))).Decided.Count);
+    }
+
+    // The treasury. The safe opens, is funded, and takes a day's cash; an invoice is paid from the
+    // takings, another bought on credit and paid by a voucher an accountant asks for; expense
+    // vouchers reach the profit and loss; and every void puts the cash back on the day it is made.
+    [Fact]
+    public async Task The_safe_and_the_suppliers_accounts_follow_every_payment()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        var ct = TestContext.Current.CancellationToken;
+        using var scope = node.Scope();
+        var treasury = node.Service<TreasuryService>(scope);
+        var today = treasury.Today;
+        Task<SafeVoucherResultDto> Voucher(SafeVoucher voucher, bool manager = true) => node.Send(new RecordSafeVoucherCommand(
+            Guid.NewGuid(), voucher, null, manager ? "staff-omar" : "staff-mona", manager ? "Omar" : "Mona", manager));
+        SafeVoucher New(SafeTransactionKind kind, decimal amount, FundingSource? source = null, DateOnly? takings = null, Guid? supplier = null, Guid? expense = null) =>
+            new(Guid.NewGuid(), kind, amount, today, source, takings, supplier, expense);
+        async Task<decimal> Safe() => (await treasury.GetSafeAsync(today.Year, today.Month, ct)).BalanceNow;
+        async Task<DayRevenue> Takings() => (await treasury.GetDayRevenueAsync(today, today, ct)).Days.Single();
+
+        // Opened with 10,000 carried over, once; then 5,000 of the owners' money.
+        await Voucher(New(SafeTransactionKind.OpeningBalance, 10_000, FundingSource.CarriedOver));
+        await Assert.ThrowsAsync<DomainException>(() => Voucher(New(SafeTransactionKind.OpeningBalance, 1, FundingSource.CarriedOver)));
+        await Voucher(New(SafeTransactionKind.Funding, 5_000, FundingSource.OwnerFinancing));
+        Assert.Equal(15_000m, await Safe());
+
+        // The day's cash: a table paid in cash.
+        var order = await node.Send(new OpenOrderCommand(OrderType.DineIn, TableNumber: "T1"));
+        await node.Send(new AddOrderItemCommand(order.PublicId, FakeDeliverySystem.Burger, 4));
+        await node.Send(new CheckoutCommand(order.PublicId, PaymentMethod.Cash));
+        var cash = (await Takings()).CashSales;
+        Assert.True(cash > 0);
+
+        // Tomatoes paid straight from the day's takings: the safe does not move.
+        var tomatoes = (await node.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram))).Id;
+        var market = Guid.NewGuid();
+        await node.Send(new SavePurchaseInvoiceCommand(market, null, null, today, [new(tomatoes, 5, "kg", 1000, 100)], "Omar",
+            PurchasePaymentMethod.DayRevenue, today));
+        Assert.Equal(InvoicePaymentStatus.Paid, (await node.Send(new PostPurchaseInvoiceCommand(market, "Omar"))).PaymentStatus);
+        Assert.Equal((100m, 15_000m), ((await Takings()).PaidOut, await Safe()));
+
+        // The rest of the day's cash counted into the safe, 10 short.
+        await Voucher(New(SafeTransactionKind.RevenueTransfer, cash - 110, takings: today));
+        Assert.Equal((cash - 110, 10m), ((await Takings()).Transferred, (await Takings()).Left));
+        Assert.Equal(15_000m + cash - 110, await Safe());
+
+        // Nile Farms: owed 500 from before, then 2,500 on credit, which needs the supplier.
+        var nileFarms = (await node.Send(new SaveSupplierCommand(Guid.NewGuid(), "Nile Farms"))).Id;
+        await node.Send(new SetSupplierOpeningBalanceCommand(Guid.NewGuid(), nileFarms, 500, today, "Omar"));
+        var credit = Guid.NewGuid();
+        await node.Send(new SavePurchaseInvoiceCommand(credit, null, "F-9", today, [new(tomatoes, 10, "kg", 1000, 2_500)], "Omar", PurchasePaymentMethod.Credit));
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new PostPurchaseInvoiceCommand(credit, "Omar")));
+        await node.Send(new SavePurchaseInvoiceCommand(credit, nileFarms, "F-9", today, [new(tomatoes, 10, "kg", 1000, 2_500)], "Omar", PurchasePaymentMethod.Credit));
+        Assert.Equal(InvoicePaymentStatus.OnCredit, (await node.Send(new PostPurchaseInvoiceCommand(credit, "Omar"))).PaymentStatus);
+        var safeBefore = await Safe();
+
+        // The accountant's payment voucher: asked, nothing moves; more than is owed is refused.
+        await Assert.ThrowsAsync<DomainException>(() => Voucher(New(SafeTransactionKind.SupplierPayment, 3_001, supplier: nileFarms), manager: false));
+        var asked = await Voucher(New(SafeTransactionKind.SupplierPayment, 1_000, supplier: nileFarms), manager: false);
+        Assert.Equal(ApprovalOutcome.Requested, asked.Outcome);
+        Assert.Contains(new ApprovalChange("Owed to Nile Farms", "L.E 3,000.00", "L.E 2,000.00"), asked.Request!.Changes);
+        Assert.Equal((safeBefore, 3_000m), (await Safe(), (await treasury.GetSupplierStatementAsync(nileFarms, ct))!.Balance));
+
+        // Approved: out of the safe, off the debt, set against the opening debt first.
+        await node.Send(new ApproveRequestCommand(asked.Request.Id, "Omar"));
+        var statement = (await treasury.GetSupplierStatementAsync(nileFarms, ct))!;
+        Assert.Equal((safeBefore - 1_000, 500m, 2_500m, 1_000m, 2_000m),
+            (await Safe(), statement.OpeningDebt, statement.CreditPurchases, statement.Payments, statement.Balance));
+        Assert.Equal((2_500m, 500m, 2_000m, OpenInvoiceStatus.PartlyPaid),
+            statement.OpenInvoices.Select(i => (i.Total, i.Paid, i.Remaining, i.Status)).Single());
+        Assert.Equal(["Owed before the treasury", "Invoice F-9 on credit", "Payment voucher"], statement.Lines.Select(l => l.Description));
+        var payment = Assert.Single(await treasury.GetSupplierPaymentsAsync(today, today, ct));
+        Assert.Equal(("Nile Farms", 1_000m, "Mona", "Omar"), (payment.Supplier, payment.Amount, payment.RecordedBy, payment.ApprovedBy));
+
+        // Expense vouchers: the electricity bill and the wages, on the profit and loss.
+        async Task<Guid> Category(string name, ExpenseLine line) => (await node.Send(new SavePurchaseCategoryCommand(Guid.NewGuid(), name, null, line))).Id;
+        var electricity = (await node.Send(new SaveExpenseItemCommand(Guid.NewGuid(), "Electricity", await Category("Utilities", ExpenseLine.Controllable), null, null))).Id;
+        var salaries = (await node.Send(new SaveExpenseItemCommand(Guid.NewGuid(), "Salaries", await Category("Staff", ExpenseLine.Wages), null, null))).Id;
+        var bill = (await Voucher(New(SafeTransactionKind.ExpenseVoucher, 1_250, expense: electricity))).Transaction!;
+        await Voucher(New(SafeTransactionKind.ExpenseVoucher, 3_000, expense: salaries));
+        Assert.Equal(safeBefore - 5_250, await Safe());
+        var spending = await node.Service<PurchaseSpendingService>(scope).GetAsync(today, today, ct);
+        Assert.Equal((4_250m, 2), (spending.Expenses, spending.Vouchers));
+        var s = (await node.Service<KpiService>(scope).GetAsync(today.Year, today.Month, ct)).Statement;
+        Assert.Equal((1_250m, 3_000m), (s.LoggedControllableCosts, s.LoggedWages));
+        // Wages paid count as wages: the net profit is there without typing them in.
+        Assert.NotNull(s.NetProfit);
+
+        // The bill voided: its cash back today, and out of the reports.
+        await node.Send(new RequestDeletionCommand(Guid.NewGuid(), ApprovalModule.Treasury, bill.Id, "Paid twice", "staff-omar", "Omar", CanApprove: true));
+        Assert.Equal(safeBefore - 4_000, await Safe());
+        Assert.Equal(3_000m, (await node.Service<PurchaseSpendingService>(scope).GetAsync(today, today, ct)).Expenses);
+        Assert.Equal(1, (await treasury.GetExpenseVouchersAsync(today, today, ct)).Vouchers.Count(v => v.VoidedAtUtc is not null));
+
+        // The accountant's cash invoice: its stock is in, its payment waits for approval.
+        var urgent = Guid.NewGuid();
+        await node.Send(new SavePurchaseInvoiceCommand(urgent, null, null, today, [new(tomatoes, 1, "kg", 1000, 40)], "Mona", PurchasePaymentMethod.Safe));
+        Assert.Equal(InvoicePaymentStatus.Pending,
+            (await node.Send(new PostPurchaseInvoiceCommand(urgent, "Mona", "staff-mona", CanApprove: false))).PaymentStatus);
+        Assert.Equal(safeBefore - 4_000, await Safe());
+        var waiting = (await node.Send(new GetApprovalRequestsQuery())).Pending.Single(r => r.RecordId == urgent);
+        // Rejected, it stays unpaid, and is paid again another way.
+        await node.Send(new RejectRequestCommand(waiting.Id, "Not from the safe", "Omar"));
+        Assert.Equal(InvoicePaymentStatus.Unpaid, (await node.Send(new GetPurchaseInvoiceQuery(urgent)))!.PaymentStatus);
+        Assert.Equal(InvoicePaymentStatus.Paid,
+            await node.Send(new PayPurchaseInvoiceCommand(Guid.NewGuid(), urgent, PurchasePaymentMethod.DayRevenue, today, "staff-omar", "Omar", CanApprove: true)));
+        Assert.Equal(140m, (await Takings()).PaidOut);
+
+        // Voiding the credit invoice takes it off Nile Farms' account; voiding the cash one puts
+        // its cash back into the day's takings.
+        await node.Send(new RequestDeletionCommand(Guid.NewGuid(), ApprovalModule.PurchaseInvoice, credit, null, "staff-omar", "Omar", CanApprove: true));
+        await node.Send(new RequestDeletionCommand(Guid.NewGuid(), ApprovalModule.PurchaseInvoice, urgent, null, "staff-omar", "Omar", CanApprove: true));
+        Assert.Equal(-500m, (await treasury.GetSupplierStatementAsync(nileFarms, ct))!.Balance);
+        Assert.Equal(100m, (await Takings()).PaidOut);
+
+        // The month: opened by its own opening entry, carried over; what came in and went out.
+        var month = await treasury.GetSafeAsync(today.Year, today.Month, ct);
+        Assert.Equal((0m, SafeOpening.OpeningEntry, (FundingSource?)FundingSource.CarriedOver), (month.OpeningBalance, month.OpeningKind, month.OpeningSource));
+        Assert.Equal(month.ClosingBalance, month.BalanceNow);
+        Assert.Equal(month.In - month.Out, month.ClosingBalance);
+        Assert.Equal("Opening balance · carried over", month.Entries[0].Description);
+        var funding = await treasury.GetFundingAsync(today, today, ct);
+        Assert.Equal((10_000m, 5_000m, cash - 110), (funding.CarriedOver, funding.OwnerFinancing, funding.Revenue));
+        // The days before the treasury opened are in its opening balance, not still to be moved in.
+        Assert.Equal([today], (await treasury.GetDayRevenueAsync(today.AddDays(-7), today, ct)).Days.Select(d => d.Date));
     }
 
     // The break-even worksheet: the month's sales at a year's pace, cost of sales at its ratio, the

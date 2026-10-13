@@ -276,6 +276,7 @@ public class ApiTests
             supplierId = (Guid?)null,
             supplierInvoiceNumber = "B-1",
             invoiceDate = "2026-10-05",
+            paymentMethod = "Safe",
             lines = new object[]
             {
                 new { rawMaterialId = milk.GetProperty("id").GetGuid(), enteredQuantity = 2, unitLabel = "L", unitSize = 1000, cost = 60 },
@@ -296,6 +297,179 @@ public class ApiTests
         Assert.Equal(HttpStatusCode.UnprocessableEntity, (await manager.DeleteAsync($"/api/inventory/purchase-categories/{dairy}", Cancel)).StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, (await manager.DeleteAsync($"/api/inventory/purchase-categories/{dairy}?moveTo={utilities}", Cancel)).StatusCode);
         Assert.Equal("Archived", (await Json(await manager.DeleteAsync($"/api/inventory/expense-items/{electricity}", Cancel))).GetProperty("outcome").GetString());
+    }
+
+    // The accountant: stock and costing data entry, no orders, and deletes that wait for a
+    // manager, who sees them, rejects or approves.
+    [Fact]
+    public async Task An_accountants_deletes_wait_for_a_manager()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+
+        async Task<System.Text.Json.JsonElement> Json(HttpResponseMessage response)
+        {
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(Cancel));
+            return await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(Cancel);
+        }
+
+        var me = (await accountant.GetFromJsonAsync<Me>("/api/auth/me", TestApi.Json, Cancel))!;
+        Assert.Equal(UserRole.Accountant, me.Role);
+        Assert.Equal(RolePermissions.For(UserRole.Accountant).Order(StringComparer.Ordinal), me.Permissions);
+        Assert.DoesNotContain(Permissions.ApprovalDecide, me.Permissions);
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.PostAsJsonAsync("/api/orders", new { type = "Takeaway" }, Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await accountant.GetAsync("/api/costing/menu", Cancel)).StatusCode);
+
+        var salt = (await Json(await accountant.PostAsJsonAsync("/api/inventory/raw-materials", new { name = "Salt", unit = "Gram" }, Cancel)))
+            .GetProperty("id").GetGuid();
+        object Ask(Guid id) => new { requestId = Guid.NewGuid(), module = "RawMaterial", recordId = id, reason = "Duplicate" };
+
+        var asked = await accountant.PostAsJsonAsync("/api/inventory/deletion-requests", Ask(salt), Cancel);
+        Assert.Equal(HttpStatusCode.Accepted, asked.StatusCode);
+        Assert.Equal("Requested", (await Json(asked)).GetProperty("outcome").GetString());
+        // Seen by both, to mark it; decided only by the manager, who also sees the history.
+        var seen = await Json(await accountant.GetAsync("/api/inventory/approval-requests?decided=10", Cancel));
+        var requestId = Assert.Single(seen.GetProperty("pending").EnumerateArray()).GetProperty("id").GetGuid();
+        Assert.Empty(seen.GetProperty("decided").EnumerateArray());
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await accountant.PostAsync($"/api/inventory/approval-requests/{requestId}/approve", null, Cancel)).StatusCode);
+        // Locked while it waits.
+        Assert.Equal(HttpStatusCode.UnprocessableEntity,
+            (await accountant.PutAsJsonAsync($"/api/inventory/raw-materials/{salt}", new { name = "Sea salt", reorderLevel = 0 }, Cancel)).StatusCode);
+
+        var rejected = await Json(await manager.PostAsJsonAsync($"/api/inventory/approval-requests/{requestId}/reject", new { note = "Still used" }, Cancel));
+        Assert.Equal(("Rejected", "Still used"), (rejected.GetProperty("status").GetString(), rejected.GetProperty("decisionNote").GetString()));
+        await Json(await accountant.PutAsJsonAsync($"/api/inventory/raw-materials/{salt}", new { name = "Sea salt", reorderLevel = 0 }, Cancel));
+
+        var again = await Json(await accountant.PostAsJsonAsync("/api/inventory/deletion-requests", Ask(salt), Cancel));
+        await Json(await manager.PostAsync($"/api/inventory/approval-requests/{again.GetProperty("request").GetProperty("id").GetGuid()}/approve", null, Cancel));
+        Assert.DoesNotContain((await Json(await manager.GetAsync("/api/inventory/raw-materials", Cancel))).EnumerateArray(), m => m.GetProperty("id").GetGuid() == salt);
+        var history = await Json(await manager.GetAsync("/api/inventory/approval-requests?decided=10", Cancel));
+        Assert.Equal(["Approved", "Rejected"], history.GetProperty("decided").EnumerateArray().Select(d => d.GetProperty("status").GetString()));
+
+        // A manager's delete is done (200); and the old recipe delete answers as before for them.
+        var pepper = (await Json(await manager.PostAsJsonAsync("/api/inventory/raw-materials", new { name = "Pepper", unit = "Gram" }, Cancel)))
+            .GetProperty("id").GetGuid();
+        var done = await manager.PostAsJsonAsync("/api/inventory/deletion-requests", Ask(pepper), Cancel);
+        Assert.Equal((HttpStatusCode.OK, "Applied"), (done.StatusCode, (await Json(done)).GetProperty("outcome").GetString()));
+    }
+
+    // An accountant's prep item and batch: each answered 202, a request, with nothing made until
+    // the manager approves; the manager sees what approving would move, at today's averages. A
+    // manager's own correction is done at once (200), and kept with the approvals.
+    [Fact]
+    public async Task An_accountants_prep_items_and_batches_wait_for_a_manager()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+
+        async Task<System.Text.Json.JsonElement> Json(HttpResponseMessage response)
+        {
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(Cancel));
+            return await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(Cancel);
+        }
+        async Task<System.Text.Json.JsonElement> Approved(HttpResponseMessage asked)
+        {
+            Assert.Equal(HttpStatusCode.Accepted, asked.StatusCode);
+            var request = (await Json(asked)).GetProperty("request");
+            return await Json(await manager.PostAsync($"/api/inventory/approval-requests/{request.GetProperty("id").GetGuid()}/approve", null, Cancel));
+        }
+
+        var flour = (await Json(await manager.PostAsJsonAsync("/api/inventory/raw-materials", new
+        {
+            name = "Flour", unit = "Gram", purchaseUnit = "kg", purchaseUnitSize = 1000, costPerPurchaseUnit = 20,
+        }, Cancel))).GetProperty("id").GetGuid();
+        await Json(await manager.PostAsJsonAsync("/api/inventory/stock-counts", new
+        {
+            stockCountId = Guid.NewGuid(), lines = new[] { new { rawMaterialId = flour, countedQuantity = 10_000 } },
+        }, Cancel));
+
+        var doughBody = new { name = "Pizza dough", unit = "Gram", batchQuantity = 10_000, ingredients = new[] { new { rawMaterialId = flour, quantity = 6_000 } } };
+        var approved = await Approved(await accountant.PostAsJsonAsync("/api/inventory/prep-items", doughBody, Cancel));
+        Assert.Equal(("PrepItem", "Create", "Approved"),
+            (approved.GetProperty("module").GetString(), approved.GetProperty("action").GetString(), approved.GetProperty("status").GetString()));
+        var dough = approved.GetProperty("recordId").GetGuid();
+        Assert.Equal("Pizza dough", (await Json(await accountant.GetAsync($"/api/inventory/prep-items/{dough}", Cancel))).GetProperty("name").GetString());
+
+        // Her batch: a request, with what it would move now, and nothing made.
+        var orderId = Guid.NewGuid();
+        var batch = await accountant.PutAsJsonAsync($"/api/inventory/production-orders/{orderId}",
+            new { prepItemId = dough, plannedQuantity = 10_000, producedQuantity = 10_000 }, Cancel);
+        Assert.Equal(HttpStatusCode.Accepted, batch.StatusCode);
+        var requestId = (await Json(batch)).GetProperty("request").GetProperty("id").GetGuid();
+        Assert.Empty((await Json(await manager.GetAsync("/api/inventory/production-orders", Cancel))).EnumerateArray());
+        var preview = await Json(await manager.GetAsync($"/api/inventory/approval-requests/{requestId}/preview", Cancel));
+        Assert.Equal(120m, preview.GetProperty("batch").GetProperty("totalCost").GetDecimal());
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await accountant.PostAsync($"/api/inventory/approval-requests/{requestId}/approve", null, Cancel)).StatusCode);
+        await Json(await manager.PostAsync($"/api/inventory/approval-requests/{requestId}/approve", null, Cancel));
+        var made = await Json(await manager.GetAsync($"/api/inventory/production-orders/{orderId}", Cancel));
+        Assert.Equal(("Made", "Boss"), (made.GetProperty("status").GetString(), made.GetProperty("approvedBy").GetString()));
+
+        // The manager's own correction: done at once, and kept with the decisions.
+        var corrected = Guid.NewGuid();
+        var correction = await manager.PostAsJsonAsync($"/api/inventory/production-orders/{orderId}/revision", new
+        {
+            requestId = Guid.NewGuid(), newOrderId = corrected, plannedQuantity = 10_000, producedQuantity = 9_500,
+        }, Cancel);
+        Assert.Equal((HttpStatusCode.OK, "Applied"), (correction.StatusCode, (await Json(correction)).GetProperty("outcome").GetString()));
+        Assert.Equal("Voided", (await Json(await manager.GetAsync($"/api/inventory/production-orders/{orderId}", Cancel))).GetProperty("status").GetString());
+        Assert.Equal(orderId, (await Json(await manager.GetAsync($"/api/inventory/production-orders/{corrected}", Cancel))).GetProperty("revisionOf").GetGuid());
+        var history = await Json(await manager.GetAsync("/api/inventory/approval-requests?decided=10", Cancel));
+        Assert.Equal(["Update", "Create", "Create"], history.GetProperty("decided").EnumerateArray().Select(d => d.GetProperty("action").GetString()));
+    }
+
+    // The treasury over HTTP: a cashier has none of it; an accountant's safe entry is a request
+    // (202) and her cash invoice's payment waits; a manager's are done (200).
+    [Fact]
+    public async Task An_accountants_safe_entries_wait_for_a_manager()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var cashier = await api.CashierAsync(manager);
+
+        async Task<System.Text.Json.JsonElement> Json(HttpResponseMessage response)
+        {
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(Cancel));
+            return await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(Cancel);
+        }
+        var today = DateTime.Now;
+        string Safe = $"/api/financials/safe?year={today.Year}&month={today.Month}";
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync(Safe, Cancel)).StatusCode);
+
+        object Opening(Guid id) => new { requestId = Guid.NewGuid(), transactionId = id, kind = "OpeningBalance", amount = 2_000, source = "OwnerFinancing" };
+        var asked = await accountant.PostAsJsonAsync("/api/financials/vouchers", Opening(Guid.NewGuid()), Cancel);
+        Assert.Equal(HttpStatusCode.Accepted, asked.StatusCode);
+        var request = (await Json(asked)).GetProperty("request");
+        Assert.Equal(("Treasury", "Create"), (request.GetProperty("module").GetString(), request.GetProperty("action").GetString()));
+        Assert.Equal(0m, (await Json(await manager.GetAsync(Safe, Cancel))).GetProperty("balanceNow").GetDecimal());
+        await Json(await manager.PostAsync($"/api/inventory/approval-requests/{request.GetProperty("id").GetGuid()}/approve", null, Cancel));
+        var month = await Json(await accountant.GetAsync(Safe, Cancel));
+        Assert.Equal((2_000m, "OpeningEntry"), (month.GetProperty("balanceNow").GetDecimal(), month.GetProperty("openingKind").GetString()));
+        Assert.Equal(("Mona", "Boss"), (month.GetProperty("entries")[0].GetProperty("recordedBy").GetString(), month.GetProperty("entries")[0].GetProperty("approvedBy").GetString()));
+
+        // The manager's own funding: done at once.
+        var funded = await manager.PostAsJsonAsync("/api/financials/vouchers",
+            new { requestId = Guid.NewGuid(), transactionId = Guid.NewGuid(), kind = "Funding", amount = 500, source = "Other", notes = "Loan" }, Cancel);
+        Assert.Equal(HttpStatusCode.OK, funded.StatusCode);
+        Assert.Equal(2_500m, (await Json(await manager.GetAsync(Safe, Cancel))).GetProperty("balanceNow").GetDecimal());
+
+        // The accountant's cash invoice: posted, its payment waiting.
+        var flour = (await Json(await manager.PostAsJsonAsync("/api/inventory/raw-materials", new { name = "Flour", unit = "Gram" }, Cancel))).GetProperty("id").GetGuid();
+        var invoiceId = Guid.NewGuid();
+        await Json(await accountant.PutAsJsonAsync($"/api/inventory/purchase-invoices/{invoiceId}", new
+        {
+            paymentMethod = "Safe",
+            lines = new[] { new { rawMaterialId = flour, enteredQuantity = 1, unitLabel = "kg", unitSize = 1000, cost = 30 } },
+        }, Cancel));
+        var posted = await Json(await accountant.PostAsync($"/api/inventory/purchase-invoices/{invoiceId}/post", null, Cancel));
+        Assert.Equal("Pending", posted.GetProperty("paymentStatus").GetString());
+        var listed = (await Json(await accountant.GetAsync("/api/inventory/purchase-invoices?status=Posted", Cancel))).EnumerateArray().Single();
+        Assert.Equal(("Pending", "Safe"), (listed.GetProperty("paymentStatus").GetString(), listed.GetProperty("paymentMethod").GetString()));
+        Assert.Equal(2_500m, (await Json(await manager.GetAsync(Safe, Cancel))).GetProperty("balanceNow").GetDecimal());
     }
 
     // Prep items and production orders: a manager's, as costs are on them. A batch is made under

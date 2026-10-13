@@ -73,7 +73,7 @@ public sealed class BreakEvenService(NodeDbContext db, RestaurantClock clock, Kp
 
             var e = report.Expenses;
             var s = report.Statement;
-            var logged = s.LoggedControllableCosts + s.LoggedOccupationCost + s.LoggedOtherFixedCosts;
+            var logged = s.LoggedControllableCosts + s.LoggedOccupationCost + s.LoggedOtherFixedCosts + s.LoggedWages;
             if (e.WagesAndBenefits is null && e.OtherControllableCosts is null && e.OccupationCost is null && e.Interest is null && e.Depreciation is null
                 && logged == 0)
             {
@@ -81,12 +81,12 @@ public sealed class BreakEvenService(NodeDbContext db, RestaurantClock clock, Kp
                 continue;
             }
             withCosts++;
-            controllable += (e.WagesAndBenefits ?? 0) + (e.OtherControllableCosts ?? 0) + s.LoggedControllableCosts;
+            controllable += (e.WagesAndBenefits ?? 0) + (e.OtherControllableCosts ?? 0) + s.LoggedControllableCosts + s.LoggedWages;
             occupation += (e.OccupationCost ?? 0) + s.LoggedOccupationCost;
             otherFixed += s.LoggedOtherFixedCosts;
             interest += e.Interest ?? 0;
             depreciation += e.Depreciation ?? 0;
-            controllableLogged += s.LoggedControllableCosts;
+            controllableLogged += s.LoggedControllableCosts + s.LoggedWages;
             occupationLogged += s.LoggedOccupationCost;
         }
 

@@ -1,7 +1,9 @@
 using MediatR;
+using OtantikPos.Inventory.Application.Approvals;
 using OtantikPos.Inventory.Application.Categories;
 using OtantikPos.Inventory.Application.Common;
 using Otantik.BuildingBlocks;
+using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.RawMaterials;
 
@@ -86,12 +88,16 @@ public sealed record UpdateRawMaterialCommand(
     decimal? DefaultYieldPercent = null,
     decimal? CostPerPurchaseUnit = null) : IRequest<RawMaterialDto>;
 
-internal sealed class UpdateRawMaterialCommandHandler(IRawMaterialRepository materials, IPurchaseCategoryRepository categories, IUnitOfWork unitOfWork)
+internal sealed class UpdateRawMaterialCommandHandler(
+    IRawMaterialRepository materials, IPurchaseCategoryRepository categories, IApprovalRequestRepository approvals, IUnitOfWork unitOfWork)
     : IRequestHandler<UpdateRawMaterialCommand, RawMaterialDto>
 {
     public async Task<RawMaterialDto> Handle(UpdateRawMaterialCommand request, CancellationToken cancellationToken)
     {
         var material = await materials.GetRequiredAsync(request.RawMaterialId, cancellationToken);
+        if (material.IsArchived)
+            throw new DomainException($"{material.Name} has been deleted.");
+        await approvals.EnsureNotPendingAsync(material.Id, cancellationToken);
         var category = await categories.ResolveAsync(request.CategoryId, cancellationToken);
 
         material.Rename(request.Name);
@@ -127,6 +133,7 @@ internal sealed class GetRawMaterialsQueryHandler(IRawMaterialRepository materia
             ? await materials.GetNeedingReorderAsync(cancellationToken)
             : await materials.GetAllAsync(cancellationToken);
 
-        return await categories.DtosAsync(found, cancellationToken);
+        // Deleted ones are kept for the records that name them, off the lists.
+        return await categories.DtosAsync(found.Where(m => !m.IsArchived), cancellationToken);
     }
 }

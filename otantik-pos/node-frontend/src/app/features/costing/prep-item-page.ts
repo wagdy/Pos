@@ -10,10 +10,12 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
-import { CostingApi, MaterialCost, PrepItem, ProductionOrder, SavePrepItem, UnitOfMeasure } from '../../core/costing/costing.api';
+import { CostingApi, MaterialCost, PrepItem, ProductionOrder, SavePrepItem, UnitOfMeasure, isRequested } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
+import { Approvals } from './approvals';
+import { ApprovalChanges } from './approval-changes';
 import { showProductionOrder } from './production-order-dialog';
 import { PurchaseCategoryField } from './purchase-category-field';
 
@@ -31,14 +33,34 @@ const displayUnits: Record<UnitOfMeasure, [string, number]> = { Gram: ['kg', 100
 // share, what that comes to per kg by the recipe at today's prices, and against it what the
 // batches on the shelf actually cost, how much is there, and the batches made. The recipe is
 // written here; costs follow as it is typed.
+//
+// Saved at once by a manager. Anyone else's save goes to a manager: a new prep item is not made
+// until approved, and a changed one stays as it was, locked, with what was asked shown here.
 @Component({
   selector: 'app-prep-item-page',
-  imports: [DatePipe, DecimalPipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatInputModule, MatProgressBarModule, MatSelectModule, MoneyPipe, PurchaseCategoryField, RouterLink],
+  imports: [
+    ApprovalChanges,
+    DatePipe,
+    DecimalPipe,
+    FormsModule,
+    MatButtonModule,
+    MatFormFieldModule,
+    MatIconModule,
+    MatInputModule,
+    MatProgressBarModule,
+    MatSelectModule,
+    MoneyPipe,
+    PurchaseCategoryField,
+    RouterLink,
+  ],
   template: `
     <div class="toolbar no-print">
       <a mat-button routerLink="/costing/recipes/prep"><mat-icon>arrow_back</mat-icon> All prep items</a>
       <span class="spacer"></span>
       @if (saved(); as p) {
+        @if (!pending()) {
+          <button mat-button class="danger" (click)="deleteItem()" [disabled]="saving()"><mat-icon>delete</mat-icon> Delete</button>
+        }
         <a mat-flat-button routerLink="/costing/recipes/production" [queryParams]="{ prepItemId: p.id }">
           <mat-icon>precision_manufacturing</mat-icon> Make a batch
         </a>
@@ -50,6 +72,24 @@ const displayUnits: Record<UnitOfMeasure, [string, number]> = { Gram: ['kg', 100
       <p class="error">{{ error() }}</p>
     } @else {
       <h2 class="title">{{ saved()?.name ?? 'New prep item' }} <span class="inline-ar">صنف نصف مصنع</span></h2>
+      @if (pending(); as r) {
+        <div class="pending-banner">
+          <mat-icon>lock_clock</mat-icon>
+          <div>
+            {{ r.requestedBy }} asked {{ r.action === 'Delete' ? 'to delete' : 'to change' }} this prep item on {{ r.requestedAtUtc | date: 'd MMM y, HH:mm' }}.
+            It stays as it is, and cannot be changed, until a manager decides.
+            <span class="inline-ar">بانتظار موافقة المدير.</span>
+            @if (r.changes.length) {
+              <app-approval-changes [changes]="r.changes" />
+            }
+          </div>
+        </div>
+      } @else if (!approvals.canApprove()) {
+        <p class="note">
+          A manager approves {{ saved() ? 'changes to prep items' : 'new prep items' }}: {{ saved() ? 'it stays as it is' : 'it is not added' }} until then.
+          <span class="inline-ar">يُرسل للمدير للموافقة.</span>
+        </p>
+      }
 
       <div class="figures">
         <div class="box key">
@@ -176,10 +216,18 @@ const displayUnits: Record<UnitOfMeasure, [string, number]> = { Gram: ['kg', 100
       @if (missing().length) {
         <p class="warn">No cost yet for {{ missing().join(', ') }}: the cost shown is short of it, and no batch can be made until it has one.</p>
       }
-      <div class="toolbar actions">
-        <span class="spacer"></span>
-        <button mat-flat-button (click)="save()" [disabled]="!ready() || saving()"><mat-icon>save</mat-icon> Save</button>
-      </div>
+      @if (!pending()) {
+        <div class="toolbar actions">
+          <span class="spacer"></span>
+          @if (approvals.canApprove()) {
+            <button mat-flat-button (click)="save()" [disabled]="!ready() || saving()"><mat-icon>save</mat-icon> Save</button>
+          } @else {
+            <button mat-flat-button (click)="save()" [disabled]="!ready() || saving()">
+              <mat-icon>send</mat-icon> Send for approval · إرسال للموافقة
+            </button>
+          }
+        </div>
+      }
 
       @if (saved(); as p) {
         <h3>Batches made <span class="inline-ar">سجل التصنيع</span></h3>
@@ -199,8 +247,13 @@ const displayUnits: Record<UnitOfMeasure, [string, number]> = { Gram: ['kg', 100
             </thead>
             <tbody>
               @for (o of p.recent; track o.id) {
-                <tr>
-                  <td class="nowrap">{{ o.producedAtUtc | date: 'd MMM y, HH:mm' }}</td>
+                <tr [class.voided]="o.status === 'Voided'">
+                  <td class="nowrap">
+                    {{ o.producedAtUtc | date: 'd MMM y, HH:mm' }}
+                    @if (o.status === 'Voided') {
+                      <div><span class="voided-badge">{{ o.replacedBy ? 'Corrected' : 'Voided' }}<span class="ar">{{ o.replacedBy ? 'مُصحح' : 'ملغى' }}</span></span></div>
+                    }
+                  </td>
                   <td class="num">{{ o.plannedQuantity / o.displayUnitSize | number: '1.0-3' }} {{ o.displayUnit }}</td>
                   <td class="num">{{ o.producedQuantity / o.displayUnitSize | number: '1.0-3' }} {{ o.displayUnit }}</td>
                   <td class="num">{{ o.yieldPercent | number: '1.0-1' }}%</td>
@@ -283,6 +336,14 @@ const displayUnits: Record<UnitOfMeasure, [string, number]> = { Gram: ['kg', 100
     .actions {
       margin-top: 12px;
     }
+    .danger {
+      color: var(--mat-sys-error);
+    }
+    tr.voided td {
+      color: var(--mat-sys-on-surface-variant);
+      text-decoration: line-through;
+      text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+    }
   `,
 })
 export class PrepItemPage {
@@ -290,6 +351,7 @@ export class PrepItemPage {
   private readonly router = inject(Router);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
+  protected readonly approvals = inject(Approvals);
 
   // From the route: an id, or 'new'.
   readonly id = input.required<string>();
@@ -313,6 +375,15 @@ export class PrepItemPage {
 
   // The form is changed in place; this bumps the signal so the costs follow.
   private readonly version = signal(0);
+
+  // A request is made under an id made here, so a retry is recorded once; a new one after each.
+  private requestId = crypto.randomUUID();
+
+  // What waits for a manager on this prep item: it is locked meanwhile.
+  protected readonly pending = computed(() => {
+    const id = this.saved()?.id;
+    return id ? this.approvals.pendingFor(id) : undefined;
+  });
 
   // What it can be made from: anything but itself.
   protected readonly ingredientChoices = computed(() => this.materials().filter((m) => m.id !== this.saved()?.id));
@@ -436,17 +507,33 @@ export class PrepItemPage {
     };
     this.saving.set(true);
     try {
-      const saved = await firstValueFrom(this.api.savePrepItem(this.saved()?.id ?? null, body));
-      this.notify.info(`${saved.name} saved.`);
-      if (this.saved()) {
-        this.fill(saved);
+      const saved = await firstValueFrom(this.api.savePrepItem(this.saved()?.id ?? null, { ...body, requestId: this.requestId }));
+      if (isRequested(saved)) {
+        this.requestId = crypto.randomUUID();
+        await this.approvals.requested(saved);
+        if (!this.saved()) {
+          await this.router.navigate(['/costing/recipes/prep']);
+        }
       } else {
-        await this.router.navigate(['/costing/recipes/prep', saved.id], { replaceUrl: true });
+        this.notify.info(`${saved.name} saved.`);
+        if (this.saved()) {
+          this.fill(saved);
+        } else {
+          await this.router.navigate(['/costing/recipes/prep', saved.id], { replaceUrl: true });
+        }
       }
     } catch (error) {
       this.notify.error(error, 'The prep item could not be saved.');
     } finally {
       this.saving.set(false);
+    }
+  }
+
+  // Archived for a manager (it then leaves the lists); asked of one for anyone else.
+  protected async deleteItem(): Promise<void> {
+    const item = this.saved();
+    if (item && (await this.approvals.delete('PrepItem', item.id, item.name)) === 'Applied') {
+      await this.router.navigate(['/costing/recipes/prep']);
     }
   }
 
@@ -471,6 +558,7 @@ export class PrepItemPage {
   private async load(id: string): Promise<void> {
     this.loading.set(true);
     this.error.set(null);
+    void this.approvals.refresh();
     try {
       const [materials, item] = await Promise.all([
         firstValueFrom(this.api.materials()),

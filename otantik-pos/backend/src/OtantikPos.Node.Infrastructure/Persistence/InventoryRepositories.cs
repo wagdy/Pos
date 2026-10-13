@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using OtantikPos.Inventory.Application.Approvals;
+using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.Expenses;
 using OtantikPos.Inventory.Domain.Production;
@@ -8,6 +10,8 @@ using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Inventory.Domain.Suppliers;
+using OtantikPos.Inventory.Domain.Treasury;
+using OtantikPos.Node.Infrastructure.Common;
 
 namespace OtantikPos.Node.Infrastructure.Persistence;
 
@@ -61,6 +65,9 @@ internal sealed class RecipeRepository(NodeDbContext db) : IRecipeRepository
     public async Task<IReadOnlyList<Recipe>> GetInCategoryAsync(Guid categoryId, CancellationToken cancellationToken = default) =>
         await WithIngredients.Where(r => r.RecipeCategoryId == categoryId).ToListAsync(cancellationToken);
 
+    public Task<int> CountUsingAsync(Guid rawMaterialId, CancellationToken cancellationToken = default) =>
+        db.Recipes.AsNoTracking().CountAsync(r => r.DeletedAtUtc == null && r.Ingredients.Any(i => i.RawMaterialId == rawMaterialId), cancellationToken);
+
     public async Task<IReadOnlyDictionary<Guid, int>> CountByCategoryAsync(CancellationToken cancellationToken = default) =>
         await db.Recipes.AsNoTracking()
             .Where(r => r.DeletedAtUtc == null && r.RecipeCategoryId != null)
@@ -93,6 +100,9 @@ internal sealed class StockMovementRepository(NodeDbContext db) : IStockMovement
 
     public Task<bool> ExistsAsync(Guid sourceId, StockMovementReason reason, CancellationToken cancellationToken = default) =>
         db.StockMovements.AnyAsync(m => m.SourceId == sourceId && m.Reason == reason, cancellationToken);
+
+    public async Task<IReadOnlyList<StockMovement>> GetBySourceAsync(Guid sourceId, StockMovementReason reason, CancellationToken cancellationToken = default) =>
+        await db.StockMovements.AsNoTracking().Where(m => m.SourceId == sourceId && m.Reason == reason).ToListAsync(cancellationToken);
 }
 
 internal sealed class StockCountRepository(NodeDbContext db) : IStockCountRepository
@@ -164,6 +174,75 @@ internal sealed class PurchaseInvoiceRepository(NodeDbContext db) : IPurchaseInv
 
     public Task<bool> AnyForExpenseItemAsync(Guid expenseItemId, CancellationToken cancellationToken = default) =>
         db.Set<PurchaseInvoiceLine>().AnyAsync(l => l.ExpenseItemId == expenseItemId, cancellationToken);
+}
+
+internal sealed class ApprovalRequestRepository(NodeDbContext db) : IApprovalRequestRepository
+{
+    public Task<ApprovalRequest?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.ApprovalRequests.SingleOrDefaultAsync(r => r.Id == id, cancellationToken);
+
+    public void Add(ApprovalRequest aggregate) => db.ApprovalRequests.Add(aggregate);
+
+    public async Task<IReadOnlyList<ApprovalRequest>> GetPendingAsync(CancellationToken cancellationToken = default) =>
+        await db.ApprovalRequests.AsNoTracking()
+            .Where(r => r.Status == ApprovalStatus.Pending)
+            .OrderBy(r => r.RequestedAtUtc)
+            .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<ApprovalRequest>> GetDecidedAsync(int take, CancellationToken cancellationToken = default) =>
+        await db.ApprovalRequests.AsNoTracking()
+            .Where(r => r.Status != ApprovalStatus.Pending)
+            .OrderByDescending(r => r.DecidedAtUtc)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+
+    // Tracked: a manager's own delete approves it.
+    public Task<ApprovalRequest?> GetPendingForAsync(Guid recordId, CancellationToken cancellationToken = default) =>
+        db.ApprovalRequests.SingleOrDefaultAsync(r => r.RecordId == recordId && r.Status == ApprovalStatus.Pending, cancellationToken);
+}
+
+internal sealed class SafeTransactionRepository(NodeDbContext db) : ISafeTransactionRepository
+{
+    public Task<SafeTransaction?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.SafeTransactions.SingleOrDefaultAsync(t => t.Id == id, cancellationToken);
+
+    public void Add(SafeTransaction aggregate) => db.SafeTransactions.Add(aggregate);
+
+    public async Task<decimal> SafeBalanceAsync(DateOnly? through = null, CancellationToken cancellationToken = default) =>
+        await db.SafeTransactions
+            .Where(t => t.Fund == CashFund.Safe && (through == null || t.BusinessDate <= through))
+            .SumAsync(t => t.Amount, cancellationToken);
+
+    // Tracked: voiding it marks it.
+    public Task<SafeTransaction?> GetPaymentOfInvoiceAsync(Guid invoiceId, CancellationToken cancellationToken = default) =>
+        db.SafeTransactions.SingleOrDefaultAsync(
+            t => t.PurchaseInvoiceId == invoiceId && t.Kind == SafeTransactionKind.InvoicePayment && t.ReversalOf == null && t.VoidedAtUtc == null,
+            cancellationToken);
+
+    public async Task<IReadOnlySet<Guid>> PaidInvoicesAsync(IReadOnlyCollection<Guid> invoiceIds, CancellationToken cancellationToken = default) =>
+        (await db.SafeTransactions.AsNoTracking()
+            .Where(t => t.Kind == SafeTransactionKind.InvoicePayment && t.ReversalOf == null && t.VoidedAtUtc == null
+                && t.PurchaseInvoiceId != null && invoiceIds.Contains(t.PurchaseInvoiceId.Value))
+            .Select(t => t.PurchaseInvoiceId!.Value)
+            .ToListAsync(cancellationToken))
+        .ToHashSet();
+
+    public Task<bool> AnyOpeningBalanceAsync(CancellationToken cancellationToken = default) =>
+        db.SafeTransactions.AnyAsync(t => t.Kind == SafeTransactionKind.OpeningBalance && t.ReversalOf == null && t.VoidedAtUtc == null, cancellationToken);
+}
+
+internal sealed class SupplierLedgerRepository(NodeDbContext db) : ISupplierLedgerRepository
+{
+    public Task<SupplierLedgerEntry?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.SupplierLedgerEntries.SingleOrDefaultAsync(e => e.Id == id, cancellationToken);
+
+    public void Add(SupplierLedgerEntry aggregate) => db.SupplierLedgerEntries.Add(aggregate);
+
+    public async Task<decimal> BalanceAsync(Guid supplierId, CancellationToken cancellationToken = default) =>
+        await db.SupplierLedgerEntries.Where(e => e.SupplierId == supplierId).SumAsync(e => e.Amount, cancellationToken);
+
+    public async Task<IReadOnlyList<SupplierLedgerEntry>> GetBySourceAsync(Guid sourceId, CancellationToken cancellationToken = default) =>
+        await db.SupplierLedgerEntries.Where(e => e.SourceId == sourceId).ToListAsync(cancellationToken);
 }
 
 internal sealed class PurchaseCategoryRepository(NodeDbContext db) : IPurchaseCategoryRepository
@@ -286,4 +365,25 @@ internal sealed class ProductionOrderRepository(NodeDbContext db) : IProductionO
             .OrderByDescending(o => o.ProducedAtUtc)
             .Take(take)
             .ToListAsync(cancellationToken);
+}
+
+// What a deletion request's summary needs from outside the inventory module: names from the
+// menu the till holds (deleted items too, as an old recipe may name one), and the business date.
+internal sealed class RecordDescriptions(NodeDbContext db, RestaurantClock clock) : IRecordDescriptions
+{
+    public async Task<string?> MenuItemNameAsync(RecipeTargetKind kind, int catalogItemId, int? variantId, CancellationToken cancellationToken)
+    {
+        if (kind == RecipeTargetKind.AddOn)
+            return await db.AddOns.AsNoTracking().IgnoreQueryFilters().Where(a => a.Id == catalogItemId).Select(a => a.Name).SingleOrDefaultAsync(cancellationToken);
+
+        var item = await db.MenuItems.AsNoTracking().IgnoreQueryFilters().Where(m => m.Id == catalogItemId).Select(m => m.Name).SingleOrDefaultAsync(cancellationToken);
+        if (item is null || variantId is null)
+            return item;
+        var variant = await db.MenuItemVariants.AsNoTracking().Where(v => v.Id == variantId).Select(v => v.Name).SingleOrDefaultAsync(cancellationToken);
+        return variant is null ? item : $"{item} ({variant})";
+    }
+
+    public DateOnly BusinessDateOf(DateTime utc) => clock.BusinessDateOf(utc);
+
+    public DateOnly LocalDateOf(DateTime utc) => clock.LocalDateOf(utc);
 }

@@ -188,10 +188,13 @@ public sealed class CostingService(NodeDbContext db, RestaurantClock clock, Sale
 
     public async Task<IReadOnlyList<MaterialCostDto>> GetMaterialsAsync(CancellationToken cancellationToken)
     {
-        var materials = await db.RawMaterials.AsNoTracking().OrderBy(m => m.Name).ToListAsync(cancellationToken);
+        // Deleted ones are kept for the records that name them, off the list.
+        var materials = await db.RawMaterials.AsNoTracking().Where(m => m.ArchivedAtUtc == null).OrderBy(m => m.Name).ToListAsync(cancellationToken);
         var categories = await db.PurchaseCategories.AsNoTracking().ToDictionaryAsync(c => c.Id, c => c.Name, cancellationToken);
+        // The last price that stands: a voided delivery or batch, and its reversal, are not one.
         var lastPurchases = await db.StockMovements.AsNoTracking()
-            .Where(m => (m.Reason == StockMovementReason.Purchase || m.Reason == StockMovementReason.ProductionOutput) && m.UnitCost != null)
+            .Where(m => (m.Reason == StockMovementReason.Purchase || m.Reason == StockMovementReason.ProductionOutput) && m.UnitCost != null
+                && m.ReversalOf == null && !db.StockMovements.Any(r => r.ReversalOf == m.Id))
             .GroupBy(m => m.RawMaterialId)
             .Select(g => g.OrderByDescending(m => m.OccurredAtUtc).Select(m => new { m.RawMaterialId, m.UnitCost, m.OccurredAtUtc }).First())
             .ToDictionaryAsync(p => p.RawMaterialId, cancellationToken);
@@ -476,7 +479,7 @@ public sealed class CostingService(NodeDbContext db, RestaurantClock clock, Sale
         // A prep item at what a batch costs by its recipe now, as a dish is; with no recipe to go
         // by, at what the batches on the shelf cost.
         var prepRecipes = await db.PrepRecipes.AsNoTracking().Include(r => r.Ingredients).ToDictionaryAsync(r => r.Id, cancellationToken);
-        foreach (var prep in data.Materials.Values.Where(m => m.IsPrepItem))
+        foreach (var prep in data.Materials.Values.Where(m => m.IsPrepItem && !m.IsArchived))
         {
             decimal? perUnit = prep.AverageCost * prep.PurchaseUnitSize;
             if (prepRecipes.GetValueOrDefault(prep.Id) is { Ingredients.Count: > 0 } recipe

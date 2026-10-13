@@ -17,8 +17,11 @@ public sealed class RawMaterial : AggregateRoot
 {
     private RawMaterial() { }
 
-    public RawMaterial(string name, UnitOfMeasure unit, decimal reorderLevel = 0, MaterialKind kind = MaterialKind.Purchased)
+    // id: one given beforehand, as a prep item asked for and approved later takes its request's.
+    public RawMaterial(string name, UnitOfMeasure unit, decimal reorderLevel = 0, MaterialKind kind = MaterialKind.Purchased, Guid? id = null)
     {
+        if (id is { } given)
+            Id = given;
         Rename(name);
         Unit = unit;
         Kind = kind;
@@ -199,11 +202,61 @@ public sealed class RawMaterial : AggregateRoot
     // refusing it would not un-sell the dish; it would only lose the record. A negative
     // balance is the signal that a delivery was never booked in or a recipe quantity is wrong,
     // and a stock count puts it right.
+    // Undoes one of this material's ledger entries, for a voided purchase, waste entry, stock
+    // count or production order: the opposite quantity at the unit cost it had, entered now. A
+    // purchase or a batch taken back out also takes its price out of the average, as far as the
+    // stock left can carry it.
+    public StockMovement Reverse(StockMovement original, string reversedBy)
+    {
+        if (original.RawMaterialId != Id)
+            throw new DomainException("That entry belongs to another material.");
+        if (original.IsReversal)
+            throw new DomainException("A reversal is not reversed again.");
+
+        if (original.Reason is StockMovementReason.Purchase or StockMovementReason.ProductionOutput && original.Quantity > 0)
+            UnaverageWith(original.Quantity, original.UnitCost);
+        return Move(-original.Quantity, original.Reason, original.SourceId, original.UnitCost, "Voided", reversedBy, original.Id);
+    }
+
+    // The average as if `quantity` bought at `unitCost` had never come in: the value of the
+    // stock on the shelf less theirs, over what is left. With nothing left, or the delivery
+    // already used up past knowing what it cost, the average stays where it is.
+    private void UnaverageWith(decimal quantity, decimal? unitCost)
+    {
+        if (AverageCost is not { } average || unitCost is not { } cost)
+            return;
+        var left = QuantityOnHand - quantity;
+        if (left <= 0)
+            return;
+        var value = Math.Max(QuantityOnHand, 0) * average - quantity * cost;
+        if (value >= 0)
+            AverageCost = value / left;
+    }
+
+    // Taken off the lists: no new purchases, recipes or counts name it. Kept, with its ledger,
+    // for the invoices, counts and reports that already do. Only with no stock on hand, so its
+    // value never goes off the books unseen.
+    public bool IsArchived => ArchivedAtUtc is not null;
+    public DateTime? ArchivedAtUtc { get; private set; }
+    public string? ArchivedBy { get; private set; }
+
+    public void Archive(string archivedBy)
+    {
+        if (IsArchived)
+            return;
+        if (QuantityOnHand != 0)
+            throw new DomainException(
+                $"{Name} still has stock on hand. Count it to zero or record its waste first, so its value is not lost from the books.");
+        ArchivedAtUtc = DateTime.UtcNow;
+        ArchivedBy = archivedBy;
+    }
+
     private StockMovement Move(
-        decimal delta, StockMovementReason reason, Guid sourceId, decimal? unitCost, string? note = null, string? recordedBy = null)
+        decimal delta, StockMovementReason reason, Guid sourceId, decimal? unitCost, string? note = null, string? recordedBy = null,
+        Guid? reversalOf = null)
     {
         QuantityOnHand += delta;
-        return new StockMovement(Id, delta, reason, sourceId, unitCost, note, recordedBy);
+        return new StockMovement(Id, delta, reason, sourceId, unitCost, note, recordedBy, reversalOf);
     }
 
     private static decimal Positive(decimal quantity) =>

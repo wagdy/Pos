@@ -1,6 +1,6 @@
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { Component, input } from '@angular/core';
-import { PurchaseInvoice, PurchaseInvoiceLine, UnitOfMeasure } from '../../core/costing/costing.api';
+import { PurchaseInvoice, PurchaseInvoiceLine, UnitOfMeasure, paymentMethodLabels, paymentStatusLabels } from '../../core/costing/costing.api';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { PaperPreview } from './invoice-paper';
 
@@ -20,9 +20,26 @@ const baseLabels: Record<UnitOfMeasure, string> = { Gram: 'g', Millilitre: 'ml',
       <div><dt>Invoice no. · رقم الفاتورة</dt><dd>{{ inv.supplierInvoiceNumber ?? '—' }}</dd></div>
       <div><dt>Date · التاريخ</dt><dd>{{ date() | date: 'd MMM y' }}</dd></div>
       <div><dt>Total · الإجمالي</dt><dd class="total">{{ inv.total | money }}</dd></div>
+      <div>
+        <dt>Paid · طريقة الدفع</dt>
+        <dd>
+          @if (inv.paymentMethod; as m) {
+            {{ methods[m].en }}{{ m === 'DayRevenue' && inv.revenueDate ? ' of ' + (inv.revenueDate | date: 'd MMM') : '' }}
+            @if (inv.status === 'Posted' && (inv.paymentStatus === 'Pending' || inv.paymentStatus === 'Unpaid')) {
+              <span class="pay-status" [class]="inv.paymentStatus">{{ statuses[inv.paymentStatus].en }}</span>
+            }
+          } @else {
+            Not chosen yet
+          }
+        </dd>
+      </div>
     </dl>
     <p class="muted status">
-      @if (inv.status === 'Posted') {
+      @if (inv.status === 'Voided') {
+        <span class="voided-badge">Voided<span class="ar">ملغاة</span></span>
+        {{ inv.voidedAtUtc | date: 'EEE d MMM y, HH:mm' }} by {{ inv.voidedBy || 'a manager' }}: its goods were taken back out of stock and its
+        expenses left the reports. Posted {{ inv.postedAtUtc | date: 'd MMM y' }} by {{ inv.postedBy || 'someone' }}.
+      } @else if (inv.status === 'Posted') {
         Posted {{ inv.postedAtUtc | date: 'EEE d MMM y, HH:mm' }} by {{ inv.postedBy || 'someone' }}; entered by {{ inv.createdBy || 'someone' }}.
       } @else {
         A draft, not posted: nothing on it is in stock or in the expenses yet.
@@ -132,6 +149,8 @@ const baseLabels: Record<UnitOfMeasure, string> = { Gram: 'g', Millilitre: 'ml',
   `,
 })
 export class InvoiceView {
+  protected readonly methods = paymentMethodLabels;
+  protected readonly statuses = paymentStatusLabels;
   readonly invoice = input.required<PurchaseInvoice>();
 
   // The date on the supplier's paper; when none was written, the day it was posted or entered.

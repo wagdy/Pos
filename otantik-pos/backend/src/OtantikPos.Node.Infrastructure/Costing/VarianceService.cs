@@ -228,15 +228,23 @@ public sealed class VarianceService(NodeDbContext db, SalesLedger ledger)
             rows.Where(r => r.UnitCost is null).Select(r => r.Material).ToList());
     }
 
-    // Spoilage recorded in the period, newest first.
+    // Spoilage recorded in the period, newest first. An entry voided since (a manager approved
+    // its deletion, and its stock went back) is not listed; the approvals keep its history.
     public async Task<IReadOnlyList<SpoilageEntry>> GetSpoilageAsync(DateTime fromUtc, DateTime toUtc, CancellationToken cancellationToken)
     {
         var movements = await db.StockMovements.AsNoTracking()
-            .Where(m => m.Reason == StockMovementReason.Spoilage && m.OccurredAtUtc >= fromUtc && m.OccurredAtUtc < toUtc)
+            .Where(m => m.Reason == StockMovementReason.Spoilage && m.ReversalOf == null && m.OccurredAtUtc >= fromUtc && m.OccurredAtUtc < toUtc)
+            .ToListAsync(cancellationToken);
+        var entries = movements.Select(m => m.SourceId).Distinct().ToList();
+        var voided = await db.StockMovements.AsNoTracking()
+            .Where(m => m.Reason == StockMovementReason.Spoilage && m.ReversalOf != null && entries.Contains(m.SourceId))
+            .Select(m => m.SourceId)
+            .Distinct()
             .ToListAsync(cancellationToken);
         var materials = await db.RawMaterials.AsNoTracking().ToDictionaryAsync(m => m.Id, cancellationToken);
 
         return movements
+            .Where(m => !voided.Contains(m.SourceId))
             .GroupBy(m => m.SourceId)
             .Select(g =>
             {

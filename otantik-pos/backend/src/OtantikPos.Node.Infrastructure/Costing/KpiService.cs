@@ -59,6 +59,8 @@ public sealed record MonthStatement(
     decimal LoggedOccupationCost = 0,
     decimal LoggedOtherFixedCosts = 0,
     IReadOnlyList<LoggedExpense>? LoggedExpenses = null,
+    // Wages paid as expenses (vouchers, invoices under a Wages category), added to the wages entered.
+    decimal LoggedWages = 0,
     // Every overhead: wages, controllable, occupation, other fixed, interest and depreciation.
     decimal TotalExpenses = 0);
 
@@ -168,13 +170,14 @@ public sealed class KpiService(NodeDbContext db, RestaurantClock clock, CostingS
         var grossProfit = revenueTotal - costOfSales;
 
         var expenses = await db.MonthlyExpenses.AsNoTracking().SingleOrDefaultAsync(e => e.Year == year && e.Month == month, cancellationToken);
-        var wages = expenses?.WagesAndBenefits;
-        // The month's expense invoices, on top of what is entered: an electricity bill logged as a
-        // purchase is not typed in again.
+        // The month's expense invoices and vouchers, on top of what is entered: an electricity bill
+        // logged as a purchase, or salaries paid by voucher, are not typed in again.
         var logged = await spending.LoggedExpensesAsync(theoretical.From, theoretical.To, cancellationToken);
         decimal Logged(ExpenseLine line) => Money(logged.Where(e => e.ExpenseLine == line).Sum(e => e.Amount));
-        var (loggedControllable, loggedOccupation, loggedOtherFixed) =
-            (Logged(ExpenseLine.Controllable), Logged(ExpenseLine.Occupation), Logged(ExpenseLine.OtherFixed));
+        var (loggedControllable, loggedOccupation, loggedOtherFixed, loggedWages) =
+            (Logged(ExpenseLine.Controllable), Logged(ExpenseLine.Occupation), Logged(ExpenseLine.OtherFixed), Logged(ExpenseLine.Wages));
+        // Known once entered or paid: wages as entered plus wages paid as expenses.
+        decimal? wages = expenses?.WagesAndBenefits is null && loggedWages == 0 ? null : (expenses?.WagesAndBenefits ?? 0) + loggedWages;
         var totalExpenses = (wages ?? 0) + (expenses?.OtherControllableCosts ?? 0) + (expenses?.OccupationCost ?? 0)
             + (expenses?.Interest ?? 0) + (expenses?.Depreciation ?? 0) + loggedControllable + loggedOccupation + loggedOtherFixed;
         decimal? netProfit = wages is not null ? grossProfit - totalExpenses : null;
@@ -219,8 +222,8 @@ public sealed class KpiService(NodeDbContext db, RestaurantClock clock, CostingS
                 Money(food), Money(drinks), Money(deliveryFees), Money(revenueTotal), paidOrders,
                 Money(foodRecipe), Money(drinksRecipe), kitchenWaste, spoilage, countDifferences,
                 Money(costOfSales), Money(grossProfit),
-                wages, expenses?.OtherControllableCosts, expenses?.OccupationCost, expenses?.Interest, expenses?.Depreciation,
-                Money(netProfit), loggedControllable, loggedOccupation, loggedOtherFixed, logged, Money(totalExpenses)),
+                expenses?.WagesAndBenefits, expenses?.OtherControllableCosts, expenses?.OccupationCost, expenses?.Interest, expenses?.Depreciation,
+                Money(netProfit), loggedControllable, loggedOccupation, loggedOtherFixed, logged, loggedWages, Money(totalExpenses)),
             ToDto(expenses), kpis, items,
             withoutRecipe.Count, withoutRecipe.Sum(r => r.NetSales));
     }

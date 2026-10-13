@@ -28,6 +28,10 @@ public sealed class RestaurantClock(IOptions<RestaurantOptions> options) : IBusi
 
     public DateOnly BusinessDateOf(DateTime utc) => DateOnly.FromDateTime(ToLocal(utc).AddHours(-_dayStartsAtHour));
 
+    // The calendar date on the restaurant's wall: a day ahead of the business date between
+    // midnight and the hour the business day starts.
+    public DateOnly LocalDateOf(DateTime utc) => DateOnly.FromDateTime(ToLocal(utc));
+
     public (DateTime FromUtc, DateTime ToUtc) Bounds(DateOnly businessDate)
     {
         var start = businessDate.ToDateTime(new TimeOnly(_dayStartsAtHour, 0));

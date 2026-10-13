@@ -11,6 +11,7 @@ using Otantik.SharedKernel.Customers;
 using Otantik.SharedKernel.Identity;
 using Otantik.SharedKernel.Orders;
 using OtantikPos.Inventory.Application;
+using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.Expenses;
 using OtantikPos.Inventory.Domain.Production;
@@ -20,6 +21,7 @@ using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Inventory.Domain.Suppliers;
+using OtantikPos.Inventory.Domain.Treasury;
 using OtantikPos.Ordering.Application;
 using OtantikPos.Ordering.Application.Catalog;
 using OtantikPos.Ordering.Application.Ports;
@@ -42,6 +44,10 @@ public sealed class TestPos
     public FakeDeliverySystem Cloud { get; } = new();
     public RecordingSink Sink { get; } = new();
     public InventoryStore Inventory { get; } = new();
+
+    // Names and dates for the inventory's records: the business day can be set a day behind the
+    // calendar, as it is after midnight.
+    public NamesFromTheTestMenu Dates { get; } = new();
     public FixedPricing Pricing { get; } = new(14m);
 
     public TestPos()
@@ -76,6 +82,10 @@ public sealed class TestPos
         services.AddSingleton<ISupplierRepository>(Inventory.Suppliers);
         services.AddSingleton<IPurchaseCategoryRepository>(Inventory.PurchaseCategories);
         services.AddSingleton<IExpenseItemRepository>(Inventory.ExpenseItems);
+        services.AddSingleton<IApprovalRequestRepository>(Inventory.ApprovalRequests);
+        services.AddSingleton<ISafeTransactionRepository>(Inventory.Safe);
+        services.AddSingleton<ISupplierLedgerRepository>(Inventory.SupplierLedger);
+        services.AddSingleton<OtantikPos.Inventory.Application.Approvals.IRecordDescriptions>(Dates);
         services.AddSingleton<IPrepRecipeRepository>(Inventory.PrepRecipes);
         services.AddSingleton<IProductionOrderRepository>(Inventory.Production);
 
@@ -406,6 +416,9 @@ public sealed class InventoryStore : IRawMaterialRepository
     public InvoiceStore Invoices { get; } = new();
     public SupplierStore Suppliers { get; } = new();
     public ExpenseItemStore ExpenseItems { get; } = new();
+    public ApprovalRequestStore ApprovalRequests { get; } = new();
+    public SafeStore Safe { get; } = new();
+    public SupplierLedgerStore SupplierLedger { get; } = new();
     public PurchaseCategoryStore PurchaseCategories => _purchaseCategories ??= new(this, ExpenseItems);
     private PurchaseCategoryStore? _purchaseCategories;
     public PrepRecipeStore PrepRecipes { get; } = new();
@@ -432,6 +445,8 @@ public sealed class RecipeStore : IRecipeRepository
 
     public Task<Recipe?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(_recipes.SingleOrDefault(r => r.Id == id));
     public void Add(Recipe aggregate) => _recipes.Add(aggregate);
+    public Task<int> CountUsingAsync(Guid rawMaterialId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_recipes.Count(r => !r.IsDeleted && r.Ingredients.Any(i => i.RawMaterialId == rawMaterialId)));
     // The ones sales go by: not deleted, and linked to the menu.
     private IEnumerable<Recipe> Active => _recipes.Where(r => !r.IsDeleted && r.Target is not null);
     public Task<Recipe?> GetByTargetAsync(RecipeTarget target, CancellationToken cancellationToken = default) => Task.FromResult(Active.SingleOrDefault(r => r.Target == target));
@@ -448,6 +463,8 @@ public sealed class MovementStore : IStockMovementRepository
     public Task<StockMovement?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(All.SingleOrDefault(m => m.Id == id));
     public void Add(StockMovement aggregate) => All.Add(aggregate);
     public Task<bool> ExistsAsync(Guid sourceId, StockMovementReason reason, CancellationToken cancellationToken = default) => Task.FromResult(All.Any(m => m.SourceId == sourceId && m.Reason == reason));
+    public Task<IReadOnlyList<StockMovement>> GetBySourceAsync(Guid sourceId, StockMovementReason reason, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<StockMovement>>(All.Where(m => m.SourceId == sourceId && m.Reason == reason).ToList());
 }
 
 public sealed class CountStore : IStockCountRepository
@@ -570,4 +587,63 @@ public sealed class ExpenseItemStore : IExpenseItemRepository
         Task.FromResult<IReadOnlyList<ExpenseItem>>(_items.Where(e => e.CategoryId == categoryId).ToList());
     public Task<ExpenseItem?> GetByNormalizedNameAsync(string normalizedName, CancellationToken cancellationToken = default) =>
         Task.FromResult(_items.SingleOrDefault(e => e.NormalizedName == normalizedName));
+}
+
+public sealed class SafeStore : ISafeTransactionRepository
+{
+    private readonly List<SafeTransaction> _entries = new();
+
+    public Task<SafeTransaction?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(_entries.SingleOrDefault(t => t.Id == id));
+    public void Add(SafeTransaction aggregate) => _entries.Add(aggregate);
+    public Task<decimal> SafeBalanceAsync(DateOnly? through = null, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_entries.Where(t => t.Fund == CashFund.Safe && (through == null || t.BusinessDate <= through)).Sum(t => t.Amount));
+    public Task<SafeTransaction?> GetPaymentOfInvoiceAsync(Guid invoiceId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_entries.SingleOrDefault(t => t.PurchaseInvoiceId == invoiceId && t.Kind == SafeTransactionKind.InvoicePayment && !t.IsReversal && !t.IsVoided));
+    public Task<IReadOnlySet<Guid>> PaidInvoicesAsync(IReadOnlyCollection<Guid> invoiceIds, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlySet<Guid>>(_entries
+            .Where(t => t.Kind == SafeTransactionKind.InvoicePayment && !t.IsReversal && !t.IsVoided && t.PurchaseInvoiceId is { } id && invoiceIds.Contains(id))
+            .Select(t => t.PurchaseInvoiceId!.Value).ToHashSet());
+    public Task<bool> AnyOpeningBalanceAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(_entries.Any(t => t.Kind == SafeTransactionKind.OpeningBalance && !t.IsReversal && !t.IsVoided));
+}
+
+public sealed class SupplierLedgerStore : ISupplierLedgerRepository
+{
+    private readonly List<SupplierLedgerEntry> _lines = new();
+
+    public Task<SupplierLedgerEntry?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(_lines.SingleOrDefault(l => l.Id == id));
+    public void Add(SupplierLedgerEntry aggregate) => _lines.Add(aggregate);
+    public Task<decimal> BalanceAsync(Guid supplierId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_lines.Where(l => l.SupplierId == supplierId).Sum(l => l.Amount));
+    public Task<IReadOnlyList<SupplierLedgerEntry>> GetBySourceAsync(Guid sourceId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<SupplierLedgerEntry>>(_lines.Where(l => l.SourceId == sourceId).ToList());
+}
+
+public sealed class ApprovalRequestStore : IApprovalRequestRepository
+{
+    private readonly List<ApprovalRequest> _requests = new();
+
+    public Task<ApprovalRequest?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(_requests.SingleOrDefault(r => r.Id == id));
+    public void Add(ApprovalRequest aggregate) => _requests.Add(aggregate);
+    public Task<IReadOnlyList<ApprovalRequest>> GetPendingAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<ApprovalRequest>>(_requests.Where(r => r.IsPending).OrderBy(r => r.RequestedAtUtc).ToList());
+    public Task<IReadOnlyList<ApprovalRequest>> GetDecidedAsync(int take, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<ApprovalRequest>>(_requests.Where(r => !r.IsPending).OrderByDescending(r => r.DecidedAtUtc).Take(take).ToList());
+    public Task<ApprovalRequest?> GetPendingForAsync(Guid recordId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_requests.SingleOrDefault(r => r.IsPending && r.RecordId == recordId));
+}
+
+// The test menu's names for a recipe's summary, and dates as they fall in UTC.
+public sealed class NamesFromTheTestMenu : OtantikPos.Inventory.Application.Approvals.IRecordDescriptions
+{
+    public Task<string?> MenuItemNameAsync(RecipeTargetKind kind, int catalogItemId, int? variantId, CancellationToken cancellationToken) =>
+        Task.FromResult<string?>($"Menu item {catalogItemId}");
+
+    public DateOnly BusinessDateOf(DateTime utc) => DateOnly.FromDateTime(utc).AddDays(-BusinessDayBehind);
+
+    public DateOnly LocalDateOf(DateTime utc) => DateOnly.FromDateTime(utc);
+
+    // 1 for the hours after midnight, before the business day starts: the business date is a day
+    // behind the calendar.
+    public int BusinessDayBehind { get; set; }
 }

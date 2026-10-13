@@ -245,6 +245,8 @@ export interface MonthStatement {
   loggedOccupationCost: number;
   loggedOtherFixedCosts: number;
   loggedExpenses: LoggedExpense[] | null;
+  // Wages paid as expenses (vouchers, invoices under a Wages category), added to the wages entered.
+  loggedWages: number;
   totalExpenses: number;
 }
 
@@ -361,7 +363,8 @@ export interface KpiReport {
   salesWithoutRecipe: number;
 }
 
-export type StockCountStatus = 'Draft' | 'Posted';
+// Voided: posted, then deleted with a manager's approval, its adjustments reversed.
+export type StockCountStatus = 'Draft' | 'Posted' | 'Voided';
 
 export interface StockCountSummary {
   id: string;
@@ -371,6 +374,8 @@ export interface StockCountSummary {
   postedAtUtc: string | null;
   postedBy: string | null;
   materials: number;
+  voidedAtUtc?: string | null;
+  voidedBy?: string | null;
 }
 
 // Quantities in the material's unit (grams, millilitres, pieces). Book quantity and cost are
@@ -390,6 +395,8 @@ export interface StockCount {
   postedAtUtc: string | null;
   postedBy: string | null;
   lines: StockCountLine[];
+  voidedAtUtc?: string | null;
+  voidedBy?: string | null;
 }
 
 export interface SpoilageLine {
@@ -495,7 +502,8 @@ export interface RecipeLine {
   yieldPercent: number | null;
 }
 
-export type PurchaseInvoiceStatus = 'Draft' | 'Posted';
+// Voided: posted, then deleted with a manager's approval, its goods taken back out of stock.
+export type PurchaseInvoiceStatus = 'Draft' | 'Posted' | 'Voided';
 
 export type PurchaseItemType = 'Inventory' | 'Expense';
 
@@ -544,6 +552,11 @@ export interface PurchaseInvoice {
   // total, split: what went into stock, and what was expenses.
   inventoryTotal: number;
   expenseTotal: number;
+  voidedAtUtc?: string | null;
+  voidedBy?: string | null;
+  paymentMethod: PurchasePaymentMethod | null;
+  revenueDate: string | null;
+  paymentStatus: InvoicePaymentStatus;
 }
 
 export interface PurchaseInvoiceSummary {
@@ -564,6 +577,84 @@ export interface PurchaseInvoiceSummary {
   attachmentFileName: string | null;
   inventoryTotal: number;
   expenseTotal: number;
+  voidedAtUtc?: string | null;
+  voidedBy?: string | null;
+  paymentMethod: PurchasePaymentMethod | null;
+  revenueDate: string | null;
+  paymentStatus: InvoicePaymentStatus;
+}
+
+// Maker-checker: what a manager decides. Deletions in every costing module; new and changed prep
+// items and production orders too.
+export type ApprovalModule = 'Recipe' | 'PurchaseInvoice' | 'Waste' | 'StockCount' | 'RawMaterial' | 'PrepItem' | 'ProductionOrder' | 'Treasury';
+export type ApprovalAction = 'Create' | 'Update' | 'Delete';
+export type ApprovalStatus = 'Pending' | 'Approved' | 'Rejected';
+export type ApprovalOutcome = 'Requested' | 'Applied';
+
+export const moduleLabels: Record<ApprovalModule, { en: string; ar: string }> = {
+  Recipe: { en: 'Recipe', ar: 'الوصفات' },
+  PurchaseInvoice: { en: 'Purchases', ar: 'المشتريات' },
+  Waste: { en: 'Waste', ar: 'الهالك' },
+  StockCount: { en: 'Stock count', ar: 'الجرد' },
+  RawMaterial: { en: 'Raw material', ar: 'الخامات' },
+  PrepItem: { en: 'Prep item', ar: 'الأصناف نصف المصنعة' },
+  ProductionOrder: { en: 'Production', ar: 'أذونات التصنيع' },
+  Treasury: { en: 'Safe', ar: 'الخزنة' },
+};
+
+export const actionLabels: Record<ApprovalAction, { en: string; ar: string }> = {
+  Create: { en: 'New', ar: 'جديد' },
+  Update: { en: 'Change', ar: 'تعديل' },
+  Delete: { en: 'Delete', ar: 'حذف' },
+};
+
+// One line of what a request changes: "Quantity to produce: 10 kg → 12 kg". before is null for
+// something new, after for something taken away.
+export interface ApprovalChange {
+  label: string;
+  before: string | null;
+  after: string | null;
+}
+
+// summary: the record as it was when asked about (for a new one, what it would be). recordId:
+// the record's, or for a new one the id it is given when approved. decidedBy, decidedAtUtc and
+// decisionNote are set once a manager has decided.
+export interface ApprovalRequest {
+  id: string;
+  module: ApprovalModule;
+  action: ApprovalAction;
+  recordId: string;
+  summary: string;
+  changes: ApprovalChange[];
+  reason: string | null;
+  requestedBy: string;
+  requestedAtUtc: string;
+  status: ApprovalStatus;
+  decidedBy: string | null;
+  decidedAtUtc: string | null;
+  decisionNote: string | null;
+}
+
+export interface ApprovalRequests {
+  pending: ApprovalRequest[];
+  decided: ApprovalRequest[];
+}
+
+export interface ApprovalResult {
+  outcome: ApprovalOutcome;
+  request: ApprovalRequest;
+}
+
+// What approving a batch would do now: the batch made at today's averages, and for a correction
+// the batch it replaces, whose entries go back first.
+export interface ApprovalPreview {
+  batch: ProductionPreview;
+  replaces: ProductionOrder | null;
+}
+
+// A save answered with a request (someone who may not approve) rather than the record itself.
+export function isRequested<T extends object>(result: T | ApprovalResult): result is ApprovalResult {
+  return 'outcome' in result && 'request' in result;
 }
 
 // One ingredient of a prep item's batch, costed at its average now: what it adds to a batch, and
@@ -621,6 +712,9 @@ export interface SavePrepItem {
   displayUnit: string;
   displayUnitSize: number;
   reorderLevel: number;
+  // For a request: made here, so a retry is recorded once; and why, for the manager.
+  requestId?: string;
+  reason?: string | null;
 }
 
 // An ingredient of a batch. onHand and short on a preview only.
@@ -656,6 +750,15 @@ export interface ProductionOrder {
   producedBy: string;
   notes: string | null;
   lines: ProductionLine[];
+  // Voided: its entries reversed, deleted or corrected. A correction names the batch it replaced
+  // (revisionOf), and the replaced one names it (replacedBy).
+  status: 'Made' | 'Voided';
+  voidedAtUtc: string | null;
+  voidedBy: string | null;
+  revisionOf: string | null;
+  replacedBy: string | null;
+  // The manager who approved it, when it was asked of one.
+  approvedBy: string | null;
 }
 
 // A batch as it would be made now: the review before posting.
@@ -679,6 +782,18 @@ export interface MakeProductionOrder {
   plannedQuantity: number;
   producedQuantity: number;
   notes: string | null;
+  requestId?: string;
+  reason?: string | null;
+}
+
+// A batch corrected: made again as newOrderId with these quantities, the old one reversed.
+export interface ReviseProductionOrder {
+  requestId: string;
+  newOrderId: string;
+  plannedQuantity: number;
+  producedQuantity: number;
+  notes: string | null;
+  reason: string | null;
 }
 
 // Who the restaurant buys from. Invoices, drafts included, decide what deleting it does: on
@@ -711,6 +826,9 @@ export interface SavePurchaseInvoice {
   supplierInvoiceNumber: string | null;
   invoiceDate: string | null;
   lines: SavePurchaseLine[];
+  // Required to post: from the safe, from a day's takings (revenueDate), or on credit (a supplier).
+  paymentMethod: PurchasePaymentMethod | null;
+  revenueDate: string | null;
 }
 
 // A stock line names its material; an expense line its expense item, in units of 1, with its cost.
@@ -725,12 +843,13 @@ export interface SavePurchaseLine {
 }
 
 // Where an expense filed under a category counts in the profit and loss.
-export type ExpenseLine = 'Controllable' | 'Occupation' | 'OtherFixed';
+export type ExpenseLine = 'Controllable' | 'Occupation' | 'OtherFixed' | 'Wages';
 
 export const expenseLineLabels: Record<ExpenseLine, { en: string; ar: string; hint: string }> = {
   Controllable: { en: 'Controllable costs', ar: 'تكاليف قابلة للتحكم', hint: 'Utilities, cleaning, maintenance, marketing' },
   Occupation: { en: 'Occupation (rent)', ar: 'الإشغال (الإيجار)', hint: 'Rent and what comes with the premises' },
   OtherFixed: { en: 'Other fixed costs', ar: 'تكاليف ثابتة أخرى', hint: 'Insurance, licences, subscriptions' },
+  Wages: { en: 'Wages and benefits', ar: 'الأجور والمزايا', hint: 'Salaries paid by voucher: added to the month’s wages' },
 };
 
 // What the restaurant buys, grouped: raw materials and expense items are each in one. General is
@@ -850,6 +969,31 @@ export class CostingApi {
   // Marked deleted, kept for the record.
   deleteRecipe(recipeId: string): Observable<void> {
     return this.http.delete<void>(`/api/inventory/recipes/${recipeId}`);
+  }
+
+  // Deleted at once for someone who may approve; asked of a manager otherwise. The
+  // id is made here: a retry after a lost answer is recorded once.
+  requestDeletion(requestId: string, module: ApprovalModule, recordId: string, reason: string | null): Observable<ApprovalResult> {
+    return this.http.post<ApprovalResult>('/api/inventory/deletion-requests', { requestId, module, recordId, reason });
+  }
+
+  // What waits for a manager; with decided, the last decisions too (for whoever decides them).
+  approvalRequests(decided = 0): Observable<ApprovalRequests> {
+    return this.http.get<ApprovalRequests>('/api/inventory/approval-requests', { params: { decided } });
+  }
+
+  approveRequest(requestId: string): Observable<ApprovalRequest> {
+    return this.http.post<ApprovalRequest>(`/api/inventory/approval-requests/${requestId}/approve`, {});
+  }
+
+  rejectRequest(requestId: string, note: string | null): Observable<ApprovalRequest> {
+    return this.http.post<ApprovalRequest>(`/api/inventory/approval-requests/${requestId}/reject`, { note });
+  }
+
+  // What approving a batch waiting for it would move now, at today's averages; for a correction,
+  // with the batch it replaces.
+  approvalPreview(requestId: string): Observable<ApprovalPreview> {
+    return this.http.get<ApprovalPreview>(`/api/inventory/approval-requests/${requestId}/preview`);
   }
 
   // name: what to call it if it comes back off the menu, its menu item having another recipe now.
@@ -983,9 +1127,60 @@ export class CostingApi {
     return this.http.put<PurchaseInvoice>(`/api/inventory/purchase-invoices/${id}`, invoice);
   }
 
-  // Step two, after the review: the stock goes in.
+  // Step two, after the review: the stock goes in, and it is paid as chosen. paymentStatus says
+  // whether a cash payment waits for a manager.
   postPurchaseInvoice(id: string): Observable<PurchaseInvoice> {
     return this.http.post<PurchaseInvoice>(`/api/inventory/purchase-invoices/${id}/post`, {});
+  }
+
+  // Pays a posted cash invoice that is not paid (its payment rejected or voided), or puts it on credit.
+  payPurchaseInvoice(id: string, requestId: string, method: PurchasePaymentMethod, revenueDate: string | null): Observable<{ paymentStatus: InvoicePaymentStatus }> {
+    return this.http.post<{ paymentStatus: InvoicePaymentStatus }>(`/api/inventory/purchase-invoices/${id}/pay`, { requestId, method, revenueDate });
+  }
+
+  // ---- Financials (الماليات): the safe and what is owed to suppliers ----
+
+  // The till's business day (2026-10-12): after midnight, yesterday's until the day starts.
+  businessToday(): Observable<{ today: string }> {
+    return this.http.get<{ today: string }>('/api/financials/today');
+  }
+
+  safe(year: number, month: number): Observable<SafeMonth> {
+    return this.http.get<SafeMonth>('/api/financials/safe', { params: { year, month } });
+  }
+
+  funding(from: string, to: string): Observable<FundingReport> {
+    return this.http.get<FundingReport>('/api/financials/funding', { params: { from, to } });
+  }
+
+  dayRevenue(from: string, to: string): Observable<DayRevenueReport> {
+    return this.http.get<DayRevenueReport>('/api/financials/revenue', { params: { from, to } });
+  }
+
+  expenseVouchers(from: string, to: string): Observable<ExpenseVoucherReport> {
+    return this.http.get<ExpenseVoucherReport>('/api/financials/expense-vouchers', { params: { from, to } });
+  }
+
+  supplierBalances(): Observable<SupplierBalance[]> {
+    return this.http.get<SupplierBalance[]>('/api/financials/suppliers');
+  }
+
+  supplierStatement(supplierId: string): Observable<SupplierStatement> {
+    return this.http.get<SupplierStatement>(`/api/financials/suppliers/${supplierId}`);
+  }
+
+  supplierPayments(from: string, to: string): Observable<SupplierPaymentRow[]> {
+    return this.http.get<SupplierPaymentRow[]>('/api/financials/supplier-payments', { params: { from, to } });
+  }
+
+  // What a supplier was owed before the treasury: no cash moves, so it is entered at once.
+  supplierOpeningBalance(supplierId: string, entryId: string, owed: number, date: string | null): Observable<void> {
+    return this.http.post<void>(`/api/financials/suppliers/${supplierId}/opening-balance`, { entryId, owed, date });
+  }
+
+  // A safe entry: made at once for a manager; a request for anyone else.
+  recordVoucher(voucher: SafeVoucherInput): Observable<SafeTransaction | ApprovalResult> {
+    return this.http.post<SafeTransaction | ApprovalResult>('/api/financials/vouchers', voucher);
   }
 
   discardPurchaseInvoice(id: string): Observable<void> {
@@ -1014,11 +1209,11 @@ export class CostingApi {
     );
   }
 
-  // Adds it without an id; changes it with one.
-  savePrepItem(id: string | null, item: SavePrepItem): Observable<PrepItem> {
+  // Adds it without an id; changes it with one. A request, for someone who may not approve.
+  savePrepItem(id: string | null, item: SavePrepItem): Observable<PrepItem | ApprovalResult> {
     return id
-      ? this.http.put<PrepItem>(`/api/inventory/prep-items/${id}`, item)
-      : this.http.post<PrepItem>('/api/inventory/prep-items', item);
+      ? this.http.put<PrepItem | ApprovalResult>(`/api/inventory/prep-items/${id}`, item)
+      : this.http.post<PrepItem | ApprovalResult>('/api/inventory/prep-items', item);
   }
 
   previewProduction(prepItemId: string, planned: number, produced: number): Observable<ProductionPreview> {
@@ -1035,9 +1230,14 @@ export class CostingApi {
     );
   }
 
-  // Makes the batch under the id made here: a retry after a lost answer makes it once.
-  makeProductionOrder(id: string, order: MakeProductionOrder): Observable<ProductionOrder> {
-    return this.http.put<ProductionOrder>(`/api/inventory/production-orders/${id}`, order);
+  // Makes the batch under the id made here: a retry after a lost answer makes it once. A
+  // request, moving nothing yet, for someone who may not approve.
+  makeProductionOrder(id: string, order: MakeProductionOrder): Observable<ProductionOrder | ApprovalResult> {
+    return this.http.put<ProductionOrder | ApprovalResult>(`/api/inventory/production-orders/${id}`, order);
+  }
+
+  reviseProductionOrder(id: string, revision: ReviseProductionOrder): Observable<ApprovalResult> {
+    return this.http.post<ApprovalResult>(`/api/inventory/production-orders/${id}/revision`, revision);
   }
 
   suppliers(includeArchived = false): Observable<Supplier[]> {
@@ -1207,3 +1407,230 @@ export const kpiLabels: Record<KpiKey, { en: string; ar: string; formula: string
     money: false,
   },
 };
+
+// ---- Financials (الماليات) ----
+
+// How an invoice is paid: from the safe, from one day's cash takings, or on credit (owed to its
+// supplier). BeforeTreasury: posted before the treasury was kept.
+export type PurchasePaymentMethod = 'Safe' | 'DayRevenue' | 'Credit' | 'BeforeTreasury';
+export type InvoicePaymentStatus = 'NotPosted' | 'Paid' | 'Pending' | 'Unpaid' | 'OnCredit' | 'BeforeTreasury';
+
+export const paymentMethodLabels: Record<PurchasePaymentMethod, { en: string; ar: string }> = {
+  Safe: { en: 'Paid from the safe', ar: 'خصم من الخزنة' },
+  DayRevenue: { en: 'Paid from a day’s takings', ar: 'خصم من إيراد يوم' },
+  Credit: { en: 'On credit', ar: 'آجل' },
+  BeforeTreasury: { en: 'Before the treasury', ar: 'قبل الخزنة' },
+};
+
+export const paymentStatusLabels: Record<InvoicePaymentStatus, { en: string; ar: string }> = {
+  NotPosted: { en: 'Draft', ar: 'مسودة' },
+  Paid: { en: 'Paid', ar: 'مدفوعة' },
+  Pending: { en: 'Payment waiting for approval', ar: 'الدفع بانتظار الموافقة' },
+  Unpaid: { en: 'Unpaid', ar: 'غير مدفوعة' },
+  OnCredit: { en: 'On credit', ar: 'آجل' },
+  BeforeTreasury: { en: 'Before the treasury', ar: 'قبل الخزنة' },
+};
+
+export type SafeTransactionKind = 'OpeningBalance' | 'Funding' | 'RevenueTransfer' | 'ExpenseVoucher' | 'SupplierPayment' | 'InvoicePayment';
+export type CashFund = 'Safe' | 'DayRevenue';
+// Where money put into the safe came from (مصدر التمويل).
+export type FundingSource = 'CarriedOver' | 'OwnerFinancing' | 'Other';
+
+export const fundingSourceLabels: Record<FundingSource, { en: string; ar: string }> = {
+  CarriedOver: { en: 'Carried over', ar: 'رصيد مرحل' },
+  OwnerFinancing: { en: 'Owners’ financing', ar: 'تمويل جاري / جاري الشركاء' },
+  Other: { en: 'Other source', ar: 'مصدر آخر' },
+};
+
+export const safeKindLabels: Record<SafeTransactionKind, { en: string; ar: string }> = {
+  OpeningBalance: { en: 'Opening balance', ar: 'رصيد افتتاحي' },
+  Funding: { en: 'Funding', ar: 'تمويل' },
+  RevenueTransfer: { en: 'Takings in', ar: 'توريد إيراد' },
+  ExpenseVoucher: { en: 'Expense voucher', ar: 'إذن صرف مصروفات' },
+  SupplierPayment: { en: 'Supplier payment', ar: 'إذن صرف لمورد' },
+  InvoicePayment: { en: 'Invoice paid', ar: 'سداد فاتورة' },
+};
+
+// One line of the safe's ledger: in or out, and the balance after it (null where not running).
+// A reversal names what it undid (reversalOf); what it undid is marked voided.
+export interface SafeEntry {
+  id: string;
+  kind: SafeTransactionKind;
+  fund: CashFund;
+  date: string;
+  description: string;
+  in: number;
+  out: number;
+  balance: number | null;
+  source: FundingSource | null;
+  revenueDate: string | null;
+  supplierId: string | null;
+  purchaseInvoiceId: string | null;
+  expenseItemId: string | null;
+  notes: string | null;
+  recordedBy: string;
+  recordedAtUtc: string;
+  approvedBy: string | null;
+  reversalOf: string | null;
+  voidedAtUtc: string | null;
+  voidedBy: string | null;
+}
+
+// How a month's opening balance came about: carried over from the month before, the treasury's
+// own opening entry made this month, or none yet.
+export type SafeOpening = 'None' | 'CarriedOver' | 'OpeningEntry';
+
+export interface SafeMonth {
+  year: number;
+  month: number;
+  from: string;
+  to: string;
+  openingBalance: number;
+  openingKind: SafeOpening;
+  openingSource: FundingSource | null;
+  in: number;
+  out: number;
+  closingBalance: number;
+  balanceNow: number;
+  hasOpeningBalance: boolean;
+  entries: SafeEntry[];
+}
+
+export interface FundingReport {
+  from: string;
+  to: string;
+  carriedOver: number;
+  ownerFinancing: number;
+  other: number;
+  revenue: number;
+  total: number;
+  entries: SafeEntry[];
+}
+
+// One business day's cash: taken, paid straight out of it, moved into the safe, and what is left.
+export interface DayRevenue {
+  date: string;
+  cashSales: number;
+  paidOut: number;
+  transferred: number;
+  left: number;
+}
+
+export interface DayRevenueReport {
+  from: string;
+  to: string;
+  cashSales: number;
+  paidOut: number;
+  transferred: number;
+  left: number;
+  days: DayRevenue[];
+}
+
+export interface ExpenseVoucherRow {
+  id: string;
+  date: string;
+  expenseItemId: string;
+  expenseItem: string;
+  category: string | null;
+  amount: number;
+  notes: string | null;
+  recordedBy: string;
+  approvedBy: string | null;
+  voidedAtUtc: string | null;
+  voidedBy: string | null;
+}
+
+export interface ExpenseVoucherReport {
+  from: string;
+  to: string;
+  total: number;
+  vouchers: ExpenseVoucherRow[];
+}
+
+// What is owed to one supplier, and how it came about.
+export interface SupplierBalance {
+  supplierId: string;
+  supplier: string;
+  isArchived: boolean;
+  openingDebt: number;
+  creditPurchases: number;
+  payments: number;
+  balance: number;
+  lastPaidOn: string | null;
+  openInvoices: number;
+}
+
+export type SupplierLedgerKind = 'OpeningBalance' | 'CreditInvoice' | 'Payment';
+
+// A line of a supplier's statement (كشف حساب): owed adds to the debt, paid takes from it.
+export interface SupplierStatementLine {
+  id: string;
+  date: string;
+  kind: SupplierLedgerKind;
+  description: string;
+  owed: number;
+  paid: number;
+  balance: number;
+  sourceId: string;
+  isReversal: boolean;
+}
+
+// A credit invoice not fully paid: payments go to the opening debt first, then the oldest invoice.
+export interface OpenInvoice {
+  invoiceId: string;
+  supplierInvoiceNumber: string | null;
+  date: string;
+  total: number;
+  paid: number;
+  remaining: number;
+  status: 'Unpaid' | 'PartlyPaid';
+}
+
+export interface SupplierStatement {
+  supplierId: string;
+  supplier: string;
+  openingDebt: number;
+  creditPurchases: number;
+  payments: number;
+  balance: number;
+  lines: SupplierStatementLine[];
+  openInvoices: OpenInvoice[];
+}
+
+export interface SupplierPaymentRow {
+  id: string;
+  date: string;
+  supplierId: string;
+  supplier: string;
+  amount: number;
+  notes: string | null;
+  recordedBy: string;
+  approvedBy: string | null;
+  voidedAtUtc: string | null;
+  voidedBy: string | null;
+}
+
+// A safe entry as entered. requestId and transactionId are made here, once per entry.
+export interface SafeVoucherInput {
+  requestId: string;
+  transactionId: string;
+  kind: SafeTransactionKind;
+  amount: number;
+  date: string | null;
+  source: FundingSource | null;
+  revenueDate: string | null;
+  supplierId: string | null;
+  expenseItemId: string | null;
+  notes: string | null;
+  reason: string | null;
+}
+
+export interface SafeTransaction {
+  id: string;
+  kind: SafeTransactionKind;
+  fund: CashFund;
+  amount: number;
+  businessDate: string;
+  recordedBy: string;
+  approvedBy: string | null;
+}

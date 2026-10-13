@@ -26,6 +26,7 @@ import {
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
+import { Approvals } from './approvals';
 import { RecipeCategoryDialog, RecipeCategoryDialogData } from './recipe-category-dialog';
 
 interface Line {
@@ -91,9 +92,9 @@ const linkKey = (kind: RecipeTargetKind | null, catalogItemId: number | null, va
       <a mat-button routerLink="/costing/recipes"><mat-icon>arrow_back</mat-icon> All recipes</a>
       <span class="spacer"></span>
       @if (mode() === 'view' && card(); as c) {
-        @if (!c.isDeleted && canEdit()) {
+        @if (!c.isDeleted && canEdit() && !pending()) {
           <a mat-button [routerLink]="['/costing/recipes/recipe', c.recipeId, 'edit']"><mat-icon>edit</mat-icon> Edit</a>
-          <button mat-button class="danger-text" (click)="confirmingRemove.set(true)" [disabled]="confirmingRemove()"><mat-icon>delete</mat-icon> Delete</button>
+          <button mat-button class="danger-text" (click)="removeRecipe()" [disabled]="saving()"><mat-icon>delete</mat-icon> Delete</button>
         }
         <button mat-button (click)="print()"><mat-icon>print</mat-icon> Print</button>
       }
@@ -116,18 +117,13 @@ const linkKey = (kind: RecipeTargetKind | null, catalogItemId: number | null, va
             }
           </div>
         }
-        @if (confirmingRemove()) {
-          <div class="banner danger no-print">
+        @if (pending(); as p) {
+          <div class="banner pending no-print">
+            <mat-icon>lock_clock</mat-icon>
             <span>
-              Delete {{ title() }}?
-              @if (linkedName(); as menuItem) {
-                <strong>Sales of {{ menuItem }} stop taking stock</strong> until another recipe is linked to it.
-              }
-              It is kept, marked deleted, and can be restored; past reports are not changed.
+              {{ p.requestedBy }} asked to delete this recipe on {{ p.requestedAtUtc | date: 'd MMM y, HH:mm' }}. It stays as it is, and
+              cannot be changed, until a manager decides.
             </span>
-            <span class="spacer"></span>
-            <button mat-button (click)="confirmingRemove.set(false)">Cancel</button>
-            <button mat-flat-button class="danger-fill" (click)="removeRecipe()" [disabled]="saving()">Delete</button>
           </div>
         }
 
@@ -431,9 +427,13 @@ const linkKey = (kind: RecipeTargetKind | null, catalogItemId: number | null, va
       border-radius: 12px;
       background: var(--mat-sys-surface-container-high);
 
-      &.danger {
-        background: var(--mat-sys-error-container);
-        color: var(--mat-sys-on-error-container);
+      &.pending {
+        background: color-mix(in srgb, var(--till-warn) 16%, var(--mat-sys-surface));
+        color: var(--mat-sys-on-surface);
+
+        mat-icon {
+          color: var(--till-warn);
+        }
       }
     }
     .figures {
@@ -515,7 +515,7 @@ export class RecipeCardPage {
 
   protected readonly statusLabels = statusLabels;
   protected readonly canEdit = computed(() => this.auth.can(Permissions.InventoryManage));
-  protected readonly editing = computed(() => (this.mode() === 'edit' || this.mode() === 'new') && this.canEdit());
+  protected readonly editing = computed(() => (this.mode() === 'edit' || this.mode() === 'new') && this.canEdit() && !this.pending());
 
   protected readonly card = signal<RecipeCostCard | null>(null);
   // Every menu item, size and add-on, by the recipe it sells by: what can be linked.
@@ -525,7 +525,11 @@ export class RecipeCardPage {
   protected readonly saving = signal(false);
   protected readonly error = signal<string | null>(null);
   protected readonly problem = signal<string | null>(null);
-  protected readonly confirmingRemove = signal(false);
+  protected readonly approvals = inject(Approvals);
+  protected readonly pending = computed(() => {
+    const id = this.card()?.recipeId;
+    return id ? this.approvals.pendingFor(id) : undefined;
+  });
 
   protected readonly name = signal('');
   // The kitchen's own categories, and the one this recipe is in.
@@ -761,6 +765,7 @@ export class RecipeCardPage {
     }
   }
 
+  // Deleted for a manager, back to the list; asked of one for anyone else, and it stays here, locked.
   protected async removeRecipe(): Promise<void> {
     const card = this.card();
     if (!card?.recipeId) {
@@ -768,14 +773,12 @@ export class RecipeCardPage {
     }
     this.saving.set(true);
     try {
-      await firstValueFrom(this.api.deleteRecipe(card.recipeId));
-      this.notify.info(card.isStandalone ? `${card.recipe} deleted.` : `${card.recipe} deleted: ${card.linkedTo} no longer takes stock.`);
-      await this.router.navigate(['/costing/recipes']);
-    } catch (error) {
-      this.notify.error(error, 'The recipe could not be deleted.');
+      const detail = card.isStandalone ? undefined : `Sales of ${card.linkedTo} stop taking stock until another recipe is linked to it.`;
+      if ((await this.approvals.delete('Recipe', card.recipeId, card.recipe, detail)) === 'Applied') {
+        await this.router.navigate(['/costing/recipes']);
+      }
     } finally {
       this.saving.set(false);
-      this.confirmingRemove.set(false);
     }
   }
 
@@ -819,7 +822,7 @@ export class RecipeCardPage {
   ): Promise<void> {
     this.loading.set(true);
     this.error.set(null);
-    this.confirmingRemove.set(false);
+    void this.approvals.refresh();
     try {
       if (mode === 'menu') {
         await this.forward(legacy.kind!, Number(legacy.id), start.variant ? Number(start.variant) : null);

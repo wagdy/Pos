@@ -10,10 +10,11 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
-import { CostStatus, CostingApi, RecipeCategory, RecipeCostCard, statusLabels } from '../../core/costing/costing.api';
+import { CostStatus, CostingApi, ApprovalRequest, RecipeCategory, RecipeCostCard, statusLabels } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
+import { Approvals, pendingLabel } from './approvals';
 
 // What the table shows: the recipes (all, on the menu, off it), the menu items still without
 // one, or the deleted ones.
@@ -50,7 +51,7 @@ export type RecipeSort = 'recipe' | 'category' | 'cost' | 'foodCost';
       </mat-form-field>
       <mat-form-field subscriptSizing="dynamic">
         <mat-label>Show · عرض</mat-label>
-        <mat-select [ngModel]="view()" (ngModelChange)="view.set($event); confirming.set(null)" aria-label="Show">
+        <mat-select [ngModel]="view()" (ngModelChange)="view.set($event)" aria-label="Show">
           <mat-option value="active">All recipes · كل الوصفات</mat-option>
           <mat-option value="linked">Linked to the menu · مرتبطة بالمنيو</mat-option>
           <mat-option value="standalone">Standalone / off-menu · مستقلة</mat-option>
@@ -152,7 +153,7 @@ export type RecipeSort = 'recipe' | 'category' | 'cost' | 'foodCost';
           </thead>
           <tbody>
             @for (c of shown(); track c.recipeId) {
-              <tr class="clickable" [class.deleted]="c.isDeleted" (click)="viewRecipe(c)">
+              <tr class="clickable" [class.deleted]="c.isDeleted" [class.pending-deletion]="!!pendingOf(c)" (click)="viewRecipe(c)">
                 <td>{{ c.recipe }}</td>
                 <td>
                   @if (c.recipeCategory) {
@@ -183,6 +184,9 @@ export type RecipeSort = 'recipe' | 'category' | 'cost' | 'foodCost';
                 <td>
                   @if (c.isDeleted) {
                     <span class="muted">Deleted {{ c.deletedAtUtc | date: 'd MMM y' }}{{ c.deletedBy ? ' by ' + c.deletedBy : '' }}</span>
+                  } @else if (pendingOf(c); as p) {
+                    <span class="pending-badge">{{ pendingLabel(p).en }}<span class="ar">{{ pendingLabel(p).ar }}</span></span>
+                    <div class="muted small">by {{ p.requestedBy }}, {{ p.requestedAtUtc | date: 'd MMM' }}</div>
                   } @else {
                     <span class="status" [class]="c.status">
                       {{ statusLabels[c.status].en }}<span class="ar">{{ statusLabels[c.status].ar }}</span>
@@ -193,33 +197,17 @@ export type RecipeSort = 'recipe' | 'category' | 'cost' | 'foodCost';
                   <button mat-icon-button (click)="viewRecipe(c)" matTooltip="View" [attr.aria-label]="'View ' + c.recipe"><mat-icon>visibility</mat-icon></button>
                   @if (c.isDeleted) {
                     <button mat-button (click)="restore(c)" [disabled]="saving()"><mat-icon>restore_from_trash</mat-icon> Restore</button>
+                  } @else if (pendingOf(c)) {
+                    <mat-icon class="locked" matTooltip="Waiting for a manager's approval: locked until decided" aria-label="Locked: deletion requested">lock_clock</mat-icon>
                   } @else {
                     <button mat-icon-button (click)="edit(c)" matTooltip="Edit" [attr.aria-label]="'Edit ' + c.recipe"><mat-icon>edit</mat-icon></button>
-                    <button mat-icon-button class="danger" (click)="confirming.set(c.recipeId)" [disabled]="confirming() === c.recipeId"
+                    <button mat-icon-button class="danger" (click)="remove(c)" [disabled]="saving()"
                       matTooltip="Delete" [attr.aria-label]="'Delete ' + c.recipe">
                       <mat-icon>delete</mat-icon>
                     </button>
                   }
                 </td>
               </tr>
-              @if (confirming() === c.recipeId) {
-                <tr class="confirm-row">
-                  <td colspan="9">
-                    <div class="confirm">
-                      <span>
-                        Delete {{ c.recipe }}?
-                        @if (!c.isStandalone) {
-                          <strong>Sales of {{ c.linkedTo }} stop taking stock</strong> until another recipe is linked to it.
-                        }
-                        It is kept, marked deleted, and can be restored; past reports are not changed.
-                      </span>
-                      <span class="spacer"></span>
-                      <button mat-button (click)="confirming.set(null)" [disabled]="saving()">Cancel</button>
-                      <button mat-flat-button class="danger-fill" (click)="remove(c)" [disabled]="saving()">Delete</button>
-                    </div>
-                  </td>
-                </tr>
-              }
             } @empty {
               <tr>
                 <td colspan="9" class="muted">
@@ -289,20 +277,6 @@ export type RecipeSort = 'recipe' | 'category' | 'cost' | 'foodCost';
     .danger {
       color: var(--mat-sys-error);
     }
-    .danger-fill:not(:disabled) {
-      background: var(--mat-sys-error);
-      color: var(--mat-sys-on-error);
-    }
-    tr.confirm-row td {
-      background: var(--mat-sys-error-container);
-      color: var(--mat-sys-on-error-container);
-    }
-    .confirm {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 8px;
-    }
     .spacer {
       flex: 1;
     }
@@ -316,9 +290,11 @@ export type RecipeSort = 'recipe' | 'category' | 'cost' | 'foodCost';
   `,
 })
 export class RecipesPage {
+  protected readonly pendingLabel = pendingLabel;
   private readonly api = inject(CostingApi);
   private readonly router = inject(Router);
   private readonly notify = inject(NotifyService);
+  protected readonly approvals = inject(Approvals);
 
   protected readonly statusLabels = statusLabels;
   protected readonly statuses = Object.keys(statusLabels).filter((s) => s !== 'NoRecipe') as CostStatus[];
@@ -337,8 +313,6 @@ export class RecipesPage {
   protected readonly category = signal<string | null>(null);
   protected readonly uncategorized = 'none';
   protected readonly sort = signal<{ by: RecipeSort; direction: 1 | -1 }>({ by: 'recipe', direction: 1 });
-  // The recipe whose delete is being asked about.
-  protected readonly confirming = signal<string | null>(null);
 
   // From the query: a category to show, from the categories' counts.
   readonly categoryParam = input<string | undefined>(undefined, { alias: 'category' });
@@ -432,22 +406,21 @@ export class RecipesPage {
     });
   }
 
+  // Deleted for a manager (it can be restored from Deleted); asked of one for anyone else.
   protected async remove(card: RecipeCostCard): Promise<void> {
     this.saving.set(true);
     try {
-      await firstValueFrom(this.api.deleteRecipe(card.recipeId!));
-      this.notify.info(
-        card.isStandalone
-          ? `${card.recipe} deleted. It can be restored from Deleted.`
-          : `${card.recipe} deleted: ${card.linkedTo} no longer takes stock. It can be restored from Deleted.`,
-      );
-      this.confirming.set(null);
-      await this.load();
-    } catch (error) {
-      this.notify.error(error, 'The recipe could not be deleted.');
+      const detail = card.isStandalone ? undefined : `Sales of ${card.linkedTo} stop taking stock until another recipe is linked to it.`;
+      if ((await this.approvals.delete('Recipe', card.recipeId!, card.recipe, detail)) === 'Applied') {
+        await this.load();
+      }
     } finally {
       this.saving.set(false);
     }
+  }
+
+  protected pendingOf(card: RecipeCostCard): ApprovalRequest | undefined {
+    return card.recipeId ? this.approvals.pendingFor(card.recipeId) : undefined;
   }
 
   // Back, linked again if its menu item has no other recipe since; off the menu if it has.
@@ -469,6 +442,7 @@ export class RecipesPage {
   }
 
   private async load(): Promise<void> {
+    void this.approvals.refresh();
     try {
       const [recipes, menu, categories] = await Promise.all([
         firstValueFrom(this.api.recipes(true)),

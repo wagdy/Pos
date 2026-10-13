@@ -11,9 +11,11 @@ using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
+using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.Expenses;
 using OtantikPos.Inventory.Domain.Suppliers;
+using OtantikPos.Inventory.Domain.Treasury;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Costing;
 using OtantikPos.Node.Infrastructure.DeliverySystem;
@@ -67,6 +69,7 @@ public static class DependencyInjection
         services.AddScoped<KpiService>();
         services.AddScoped<BreakEvenService>();
         services.AddScoped<PurchaseSpendingService>();
+        services.AddScoped<TreasuryService>();
 
         // Inventory.
         services.AddScoped<IRawMaterialRepository, RawMaterialRepository>();
@@ -78,6 +81,10 @@ public static class DependencyInjection
         services.AddScoped<IPurchaseAttachmentStore, PurchaseAttachmentStore>();
         services.AddScoped<ISupplierRepository, SupplierRepository>();
         services.AddScoped<IPurchaseCategoryRepository, PurchaseCategoryRepository>();
+        services.AddScoped<IApprovalRequestRepository, ApprovalRequestRepository>();
+        services.AddScoped<ISafeTransactionRepository, SafeTransactionRepository>();
+        services.AddScoped<ISupplierLedgerRepository, SupplierLedgerRepository>();
+        services.AddScoped<OtantikPos.Inventory.Application.Approvals.IRecordDescriptions, RecordDescriptions>();
         services.AddScoped<IExpenseItemRepository, ExpenseItemRepository>();
         services.AddScoped<IPrepRecipeRepository, PrepRecipeRepository>();
         services.AddScoped<IProductionOrderRepository, ProductionOrderRepository>();

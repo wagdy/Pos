@@ -41,6 +41,11 @@ public static class Permissions
     // What dishes and ingredients cost, and the food cost reports: a manager's, not a cashier's.
     public const string CostingView = "costing.view";
 
+    // Deciding what others ask for: deletes in the costing modules, and new or changed prep
+    // items and production orders. With it, those are done outright; without it, each is a
+    // request a manager approves or rejects.
+    public const string ApprovalDecide = "approvals.decide";
+
     public static string ForVoid(VoidType type) => type switch
     {
         VoidType.BeforeKitchen => VoidBeforeKitchen,

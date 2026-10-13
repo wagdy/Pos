@@ -2,6 +2,7 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Otantik.SharedKernel.Authorization;
+using OtantikPos.Inventory.Application.Approvals;
 using OtantikPos.Inventory.Application.Categories;
 using OtantikPos.Inventory.Application.Expenses;
 using OtantikPos.Inventory.Application.RawMaterials;
@@ -10,6 +11,8 @@ using OtantikPos.Inventory.Application.Purchases;
 using OtantikPos.Inventory.Application.Recipes;
 using OtantikPos.Inventory.Application.StockCounts;
 using OtantikPos.Inventory.Application.Suppliers;
+using OtantikPos.Inventory.Application.Treasury;
+using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.Purchases;
 using OtantikPos.Inventory.Domain.RawMaterials;
@@ -48,13 +51,14 @@ public sealed class InventoryController(ISender sender) : ControllerBase
             rawMaterialId, request.Name, request.ReorderLevel, request.Code, request.CategoryId,
             request.PurchaseUnit, request.PurchaseUnitSize, request.DefaultYieldPercent, request.CostPerPurchaseUnit), cancellationToken);
 
-    // Goods received in one request, filed as a posted invoice. PurchaseId is made by the till,
+    // Goods received in one request, filed as a posted invoice paid from the safe (waiting for a
+    // manager's approval when someone else sends it). PurchaseId is made by the till,
     // so a retry after a lost response books the delivery once, not twice. The screens enter an
     // invoice in two steps instead, below.
     [HttpPost("purchases")]
     [Authorize(Policy = Permissions.InventoryManage)]
     public Task<IReadOnlyList<RawMaterialDto>> ReceivePurchase(ReceivePurchaseCommand command, CancellationToken cancellationToken) =>
-        sender.Send(command with { RecordedBy = StaffName }, cancellationToken);
+        sender.Send(command with { RecordedBy = StaffName, StaffId = StaffId, CanApprove = CanApprove }, cancellationToken);
 
     // Supplier invoices: posted ones for the history, newest first, or the drafts being entered.
     [HttpGet("purchase-invoices")]
@@ -73,13 +77,27 @@ public sealed class InventoryController(ISender sender) : ControllerBase
     [Authorize(Policy = Permissions.InventoryManage)]
     public Task<PurchaseInvoiceDto> SavePurchaseInvoice(Guid invoiceId, SavePurchaseInvoiceRequest request, CancellationToken cancellationToken) =>
         sender.Send(new SavePurchaseInvoiceCommand(
-            invoiceId, request.SupplierId, request.SupplierInvoiceNumber, request.InvoiceDate, request.Lines, StaffName), cancellationToken);
+            invoiceId, request.SupplierId, request.SupplierInvoiceNumber, request.InvoiceDate, request.Lines, StaffName,
+            request.PaymentMethod, request.RevenueDate), cancellationToken);
 
-    // Step two, after the review: the stock goes in. Posting again returns the posted invoice.
+    // Step two, after the review: the stock goes in, and it is paid as chosen: on credit, owed to
+    // the supplier; in cash, paid for a manager and waiting for one's approval for anyone else
+    // (PaymentStatus says which). Posting again returns the posted invoice.
     [HttpPost("purchase-invoices/{invoiceId:guid}/post")]
     [Authorize(Policy = Permissions.InventoryManage)]
     public Task<PurchaseInvoiceDto> PostPurchaseInvoice(Guid invoiceId, CancellationToken cancellationToken) =>
-        sender.Send(new PostPurchaseInvoiceCommand(invoiceId, StaffName), cancellationToken);
+        sender.Send(new PostPurchaseInvoiceCommand(invoiceId, StaffName, StaffId, CanApprove), cancellationToken);
+
+    // Pays a posted cash invoice that is not paid (its payment was rejected or voided), or puts it
+    // on credit. RequestId is made by the till.
+    [HttpPost("purchase-invoices/{invoiceId:guid}/pay")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public async Task<object> PayPurchaseInvoice(Guid invoiceId, PayPurchaseInvoiceRequest request, CancellationToken cancellationToken) =>
+        new
+        {
+            PaymentStatus = await sender.Send(new PayPurchaseInvoiceCommand(
+                request.RequestId, invoiceId, request.Method, request.RevenueDate, StaffId, StaffName, CanApprove), cancellationToken),
+        };
 
     [HttpDelete("purchase-invoices/{invoiceId:guid}")]
     [Authorize(Policy = Permissions.InventoryManage)]
@@ -179,8 +197,9 @@ public sealed class InventoryController(ISender sender) : ControllerBase
     public Task<ExpenseItemDto> RestoreExpenseItem(Guid expenseItemId, CancellationToken cancellationToken) =>
         sender.Send(new RestoreExpenseItemCommand(expenseItemId), cancellationToken);
 
-    // Prep items: made in the kitchen, kept in stock, costed from their batches. A manager's, as
-    // their costs are on them.
+    // Prep items: made in the kitchen, kept in stock, costed from their batches. Seen by whoever
+    // keeps the books; added and changed by a manager at once (200, the prep item), and by anyone
+    // else as a request a manager approves (202, the request), nothing changed until then.
     [HttpGet("prep-items")]
     [Authorize(Policy = Permissions.InventoryManage)]
     public Task<IReadOnlyList<PrepItemDto>> GetPrepItems(CancellationToken cancellationToken) =>
@@ -193,13 +212,22 @@ public sealed class InventoryController(ISender sender) : ControllerBase
 
     [HttpPost("prep-items")]
     [Authorize(Policy = Permissions.InventoryManage)]
-    public Task<PrepItemDto> CreatePrepItem(SavePrepItemRequest request, CancellationToken cancellationToken) =>
-        sender.Send(request.ToCommand(null), cancellationToken);
+    public Task<IActionResult> CreatePrepItem(SavePrepItemRequest request, CancellationToken cancellationToken) =>
+        SavePrepItem(null, request, cancellationToken);
 
     [HttpPut("prep-items/{prepItemId:guid}")]
     [Authorize(Policy = Permissions.InventoryManage)]
-    public Task<PrepItemDto> UpdatePrepItem(Guid prepItemId, SavePrepItemRequest request, CancellationToken cancellationToken) =>
-        sender.Send(request.ToCommand(prepItemId), cancellationToken);
+    public Task<IActionResult> UpdatePrepItem(Guid prepItemId, SavePrepItemRequest request, CancellationToken cancellationToken) =>
+        SavePrepItem(prepItemId, request, cancellationToken);
+
+    private async Task<IActionResult> SavePrepItem(Guid? prepItemId, SavePrepItemRequest request, CancellationToken cancellationToken)
+    {
+        var command = request.ToCommand(prepItemId);
+        if (CanApprove)
+            return Ok(await sender.Send(command, cancellationToken));
+        return Accepted(await sender.Send(new RequestPrepItemChangeCommand(
+            request.RequestId ?? Guid.NewGuid(), prepItemId, command.Change, request.Reason, StaffId, StaffName), cancellationToken));
+    }
 
     // What a batch would take and cost made now: the review before posting.
     [HttpGet("production-orders/preview")]
@@ -218,13 +246,33 @@ public sealed class InventoryController(ISender sender) : ControllerBase
     public async Task<ActionResult<ProductionOrderDto>> GetProductionOrder(Guid orderId, CancellationToken cancellationToken) =>
         await sender.Send(new GetProductionOrderQuery(orderId), cancellationToken) is { } order ? order : NotFound();
 
-    // Makes the batch under the id the till made: the ingredients out, the prep item in. A retry
-    // returns the batch already made.
+    // Makes the batch under the id the till made: the ingredients out, the prep item in, for a
+    // manager (200, the batch). Anyone else's is a request (202), and nothing moves until a
+    // manager approves it, at the averages then. A retry returns the batch, or request, already made.
     [HttpPut("production-orders/{orderId:guid}")]
     [Authorize(Policy = Permissions.InventoryManage)]
-    public Task<ProductionOrderDto> MakeProductionOrder(Guid orderId, MakeProductionOrderRequest request, CancellationToken cancellationToken) =>
-        sender.Send(new MakeProductionOrderCommand(
-            orderId, request.PrepItemId, request.PlannedQuantity, request.ProducedQuantity, request.Notes, StaffName), cancellationToken);
+    public async Task<IActionResult> MakeProductionOrder(Guid orderId, MakeProductionOrderRequest request, CancellationToken cancellationToken)
+    {
+        if (CanApprove)
+            return Ok(await sender.Send(new MakeProductionOrderCommand(
+                orderId, request.PrepItemId, request.PlannedQuantity, request.ProducedQuantity, request.Notes, StaffName), cancellationToken));
+        return Accepted(await sender.Send(new RequestProductionOrderCommand(
+            request.RequestId ?? Guid.NewGuid(), orderId, request.PrepItemId, request.PlannedQuantity, request.ProducedQuantity, request.Notes,
+            request.Reason, StaffId, StaffName), cancellationToken));
+    }
+
+    // Corrects a batch: reversed and made again with these quantities, at the averages now, as
+    // the batch NewOrderId. At once for a manager (200), recorded with the approvals; a request
+    // for anyone else (202).
+    [HttpPost("production-orders/{orderId:guid}/revision")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public async Task<IActionResult> ReviseProductionOrder(Guid orderId, ReviseProductionOrderRequest request, CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new ReviseProductionOrderCommand(
+            request.RequestId, orderId, request.NewOrderId, request.PlannedQuantity, request.ProducedQuantity, request.Notes, request.Reason,
+            StaffId, StaffName, CanApprove), cancellationToken);
+        return result.Outcome == ApprovalOutcome.Requested ? Accepted(result) : Ok(result);
+    }
 
     // Thrown-away raw stock: expired, spoiled, dropped. SpoilageId makes a retry harmless.
     [HttpPost("spoilage")]
@@ -290,7 +338,7 @@ public sealed class InventoryController(ISender sender) : ControllerBase
     [Authorize(Policy = Permissions.InventoryManage)]
     public async Task<ActionResult<RecipeDto>> SetRecipe(SetRecipeCommand command, CancellationToken cancellationToken)
     {
-        var recipe = await sender.Send(command with { StaffName = StaffName }, cancellationToken);
+        var recipe = await sender.Send(command with { StaffName = StaffName, CanDelete = CanApprove }, cancellationToken);
         return recipe is null ? NoContent() : recipe;
     }
 
@@ -326,13 +374,49 @@ public sealed class InventoryController(ISender sender) : ControllerBase
     }
 
     // Marks it deleted: kept for the record, gone from the screens and the sales.
+    // Deleted (204) by someone who may approve deletions; asked of a manager otherwise (202).
     [HttpDelete("recipes/{recipeId:guid}")]
     [Authorize(Policy = Permissions.InventoryManage)]
     public async Task<IActionResult> DeleteRecipe(Guid recipeId, CancellationToken cancellationToken)
     {
-        await sender.Send(new DeleteRecipeCommand(recipeId, StaffName), cancellationToken);
-        return NoContent();
+        var result = await sender.Send(DeletionOf(Guid.NewGuid(), ApprovalModule.Recipe, recipeId, null), cancellationToken);
+        return result.Outcome == ApprovalOutcome.Applied ? NoContent() : Accepted(result);
     }
+
+    // Deletes a recipe, raw material, posted invoice, waste entry, posted stock count, prep item
+    // or production order: at once (200, Applied) for someone who may approve, otherwise asked of
+    // a manager (202, Requested), the record left as it is until then. RequestId is made by the till.
+    [HttpPost("deletion-requests")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public async Task<ActionResult<ApprovalResultDto>> RequestDeletion(RequestDeletionBody request, CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(DeletionOf(request.RequestId, request.Module, request.RecordId, request.Reason), cancellationToken);
+        return result.Outcome == ApprovalOutcome.Requested ? Accepted(result) : Ok(result);
+    }
+
+    // What waits for a manager (deletions, new and changed prep items and batches), for the
+    // screens to mark and lock; with ?decided=, the last decisions too, for whoever decides them.
+    [HttpGet("approval-requests")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public Task<ApprovalRequestsDto> GetApprovalRequests([FromQuery] int decided, CancellationToken cancellationToken) =>
+        sender.Send(new GetApprovalRequestsQuery(CanApprove ? Math.Clamp(decided, 0, 200) : 0), cancellationToken);
+
+    // What approving a batch would move now, at today's averages, and for a correction the batch
+    // it replaces: what the manager signs off on.
+    [HttpGet("approval-requests/{requestId:guid}/preview")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public async Task<ActionResult<ApprovalPreviewDto>> GetApprovalPreview(Guid requestId, CancellationToken cancellationToken) =>
+        await sender.Send(new GetApprovalPreviewQuery(requestId), cancellationToken) is { } preview ? preview : NotFound();
+
+    [HttpPost("approval-requests/{requestId:guid}/approve")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<ApprovalRequestDto> ApproveRequest(Guid requestId, CancellationToken cancellationToken) =>
+        sender.Send(new ApproveRequestCommand(requestId, StaffName), cancellationToken);
+
+    [HttpPost("approval-requests/{requestId:guid}/reject")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<ApprovalRequestDto> RejectRequest(Guid requestId, RejectRequestBody request, CancellationToken cancellationToken) =>
+        sender.Send(new RejectRequestCommand(requestId, request.Note, StaffName), cancellationToken);
 
     // Name: what to call it if its menu item has another recipe now and it comes back off the menu.
     [HttpPost("recipes/{recipeId:guid}/restore")]
@@ -342,12 +426,26 @@ public sealed class InventoryController(ISender sender) : ControllerBase
 
     // Who is signed in, as their name: kept on counts and spoilage, which have no order to audit them.
     private string StaffName => User.FindFirst(StaffClaims.Name)?.Value ?? string.Empty;
+
+    private bool CanApprove => StaffClaims.RoleOf(User) is { } role && RolePermissions.Has(role, Permissions.ApprovalDecide);
+
+    private string StaffId => StaffClaims.IdOf(User) ?? string.Empty;
+
+    private RequestDeletionCommand DeletionOf(Guid requestId, ApprovalModule module, Guid recordId, string? reason) =>
+        new(requestId, module, recordId, reason, StaffId, StaffName, CanApprove);
 }
 
 public sealed record SaveStockCountRequest(IReadOnlyList<StockCountLine> Lines);
 
 public sealed record SavePurchaseInvoiceRequest(
-    Guid? SupplierId, string? SupplierInvoiceNumber, DateOnly? InvoiceDate, IReadOnlyList<PurchaseInvoiceLineEntry> Lines);
+    Guid? SupplierId,
+    string? SupplierInvoiceNumber,
+    DateOnly? InvoiceDate,
+    IReadOnlyList<PurchaseInvoiceLineEntry> Lines,
+    PurchasePaymentMethod? PaymentMethod = null,
+    DateOnly? RevenueDate = null);
+
+public sealed record PayPurchaseInvoiceRequest(Guid RequestId, PurchasePaymentMethod Method, DateOnly? RevenueDate = null);
 
 public sealed record SavePrepItemRequest(
     string Name,
@@ -358,7 +456,10 @@ public sealed record SavePrepItemRequest(
     Guid? CategoryId = null,
     string? DisplayUnit = null,
     decimal? DisplayUnitSize = null,
-    decimal ReorderLevel = 0)
+    decimal ReorderLevel = 0,
+    // For a request: made by the till, so a retry is recorded once; and why, for the manager.
+    Guid? RequestId = null,
+    string? Reason = null)
 {
     public SavePrepItemCommand ToCommand(Guid? id) =>
         new(id, Name, Unit, BatchQuantity, Ingredients ?? [], Code, CategoryId, DisplayUnit, DisplayUnitSize, ReorderLevel);
@@ -382,7 +483,15 @@ public sealed record SaveRecipeCategoryRequest(string Name, string? NameAr = nul
 
 public sealed record RestoreRecipeRequest(string? Name);
 
-public sealed record MakeProductionOrderRequest(Guid PrepItemId, decimal PlannedQuantity, decimal ProducedQuantity, string? Notes = null);
+public sealed record MakeProductionOrderRequest(
+    Guid PrepItemId, decimal PlannedQuantity, decimal ProducedQuantity, string? Notes = null, Guid? RequestId = null, string? Reason = null);
+
+public sealed record ReviseProductionOrderRequest(
+    Guid RequestId, Guid NewOrderId, decimal PlannedQuantity, decimal ProducedQuantity, string? Notes = null, string? Reason = null);
+
+public sealed record RequestDeletionBody(Guid RequestId, ApprovalModule Module, Guid RecordId, string? Reason = null);
+
+public sealed record RejectRequestBody(string? Note = null);
 
 public sealed record SaveSupplierRequest(string Name, string? ContactPerson = null, string? Phone = null, string? Email = null, string? Notes = null);
 

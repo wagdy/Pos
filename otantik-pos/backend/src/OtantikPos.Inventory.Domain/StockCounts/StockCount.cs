@@ -11,6 +11,10 @@ public enum StockCountStatus
 
     // Stock was set to what was counted. Fixed from then on.
     Posted = 2,
+
+    // Posted, then deleted with a manager's approval: its adjustments reversed, and no longer
+    // a point the variance report measures from. Kept, as the record of both.
+    Voided = 3,
 }
 
 // A physical count of the stores, material by material. Filled in as a draft, then posted: each
@@ -40,14 +44,16 @@ public sealed class StockCount : AggregateRoot
     public string StartedBy { get; private set; } = string.Empty;
     public DateTime? PostedAtUtc { get; private set; }
     public string? PostedBy { get; private set; }
+    public DateTime? VoidedAtUtc { get; private set; }
+    public string? VoidedBy { get; private set; }
 
     public IReadOnlyList<StockCountLine> Lines => _lines.AsReadOnly();
 
     // Replaces the draft's figures with these, in each material's unit (grams, millilitres, pieces).
     public void Record(IReadOnlyCollection<(Guid RawMaterialId, decimal Counted)> counted)
     {
-        if (Status == StockCountStatus.Posted)
-            throw new DomainException("This count has been posted. Start a new count to count again.");
+        if (Status != StockCountStatus.Draft)
+            throw new DomainException($"This count has been {Status.ToString().ToLowerInvariant()}. Start a new count to count again.");
         if (counted.Any(c => c.Counted < 0))
             throw new DomainException("A counted quantity cannot be negative.");
         if (counted.Select(c => c.RawMaterialId).Distinct().Count() != counted.Count)
@@ -70,8 +76,8 @@ public sealed class StockCount : AggregateRoot
     // then overwrites.
     public IReadOnlyList<StockMovement> Post(IReadOnlyDictionary<Guid, RawMaterial> materials, string postedBy)
     {
-        if (Status == StockCountStatus.Posted)
-            throw new DomainException("This count has already been posted.");
+        if (Status != StockCountStatus.Draft)
+            throw new DomainException($"This count has already been {Status.ToString().ToLowerInvariant()}.");
         if (_lines.Count == 0)
             throw new DomainException("Count at least one material before posting.");
 
@@ -88,6 +94,18 @@ public sealed class StockCount : AggregateRoot
         PostedAtUtc = DateTime.UtcNow;
         PostedBy = postedBy;
         return movements;
+    }
+
+    // Marks a posted count void. The caller reverses its adjustments in the same unit of work.
+    public void Void(string voidedBy)
+    {
+        if (Status == StockCountStatus.Voided)
+            return;
+        if (Status != StockCountStatus.Posted)
+            throw new DomainException("Only a posted count is voided; discard a draft instead.");
+        Status = StockCountStatus.Voided;
+        VoidedAtUtc = DateTime.UtcNow;
+        VoidedBy = voidedBy;
     }
 }
 

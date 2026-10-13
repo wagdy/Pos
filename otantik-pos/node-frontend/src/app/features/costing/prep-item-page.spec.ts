@@ -2,7 +2,9 @@ import { TestBed } from '@angular/core/testing';
 import { MatDialog } from '@angular/material/dialog';
 import { Router, provideRouter } from '@angular/router';
 import { of } from 'rxjs';
-import { CostingApi, MaterialCost, PrepItem, ProductionOrder } from '../../core/costing/costing.api';
+import { AuthService } from '../../core/auth/auth.service';
+import { Permissions } from '../../core/auth/permissions';
+import { ApprovalRequest, CostingApi, MaterialCost, PrepItem, ProductionOrder } from '../../core/costing/costing.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { PrepItemPage } from './prep-item-page';
 import { ProductionOrderDialog } from './production-order-dialog';
@@ -53,6 +55,12 @@ const batch: ProductionOrder = {
   producedBy: 'Omar',
   notes: null,
   lines: [],
+  status: 'Made',
+  voidedAtUtc: null,
+  voidedBy: null,
+  revisionOf: null,
+  replacedBy: null,
+  approvedBy: null,
 };
 
 const dough: PrepItem = {
@@ -88,16 +96,18 @@ describe('a prep item', () => {
   const materials = vi.fn();
   const prepItem = vi.fn();
   const savePrepItem = vi.fn();
+  const approvalRequests = vi.fn();
   const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
 
-  async function render(id: string) {
+  async function render(id: string, manager = true) {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: CostingApi, useValue: { materials, prepItem, savePrepItem } },
+        { provide: CostingApi, useValue: { materials, prepItem, savePrepItem, approvalRequests } },
         { provide: MatDialog, useValue: { open } },
         { provide: NotifyService, useValue: notify },
+        { provide: AuthService, useValue: { can: (p: string) => p !== Permissions.ApprovalDecide || manager } },
       ],
     });
     const fixture = TestBed.createComponent(PrepItemPage);
@@ -111,6 +121,7 @@ describe('a prep item', () => {
     materials.mockReset().mockReturnValue(of([flour, yeast, oil, salt, doughMaterial]));
     prepItem.mockReset().mockReturnValue(of(dough));
     savePrepItem.mockReset().mockImplementation((id: string | null) => of({ ...dough, id: id ?? 'new-dough' }));
+    approvalRequests.mockReset().mockReturnValue(of({ pending: [], decided: [] }));
     open.mockReset();
     notify.info.mockReset();
     notify.error.mockReset();
@@ -198,8 +209,49 @@ describe('a prep item', () => {
       displayUnit: 'kg',
       displayUnitSize: 1000,
       reorderLevel: 2_500,
+      requestId: expect.any(String),
     });
     expect(navigate).toHaveBeenCalledWith(['/costing/recipes/prep', 'new-dough'], { replaceUrl: true });
+  });
+
+  it("sends an accountant's new prep item for approval: nothing is added, and the list shows it waiting", async () => {
+    const asked: ApprovalRequest = {
+      id: 'q1', module: 'PrepItem', action: 'Create', recordId: 'd2', summary: 'New prep item Pizza dough · 10 kg batch · 1 ingredient',
+      changes: [], reason: null, requestedBy: 'Mona', requestedAtUtc: '2026-10-12T09:00:00Z', status: 'Pending', decidedBy: null,
+      decidedAtUtc: null, decisionNote: null,
+    };
+    savePrepItem.mockReturnValue(of({ outcome: 'Requested', request: asked }));
+    const { el, page } = await render('new', false);
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    expect(text(el)).toContain('A manager approves new prep items: it is not added until then.');
+    expect([...el.querySelectorAll('button')].map(text)).toContain('send Send for approval · إرسال للموافقة');
+
+    page['name'] = 'Pizza dough';
+    page['lines'].set([{ rawMaterialId: 'flour', quantity: 6_000, yieldPercent: 100 }]);
+    page['touch']();
+    await page['save']();
+
+    expect(notify.info).toHaveBeenCalledWith('Submitted to the manager for approval. Nothing is made until it is approved.');
+    expect(navigate).toHaveBeenCalledWith(['/costing/recipes/prep']);
+  });
+
+  it('waiting for a manager to decide a change, shows what was asked and cannot be saved', async () => {
+    approvalRequests.mockReturnValue(of({
+      pending: [{
+        id: 'q2', module: 'PrepItem', action: 'Update', recordId: dough.id, summary: 'Prep item Pizza dough',
+        changes: [{ label: 'Yeast', before: '100 g', after: '150 g' }], reason: null, requestedBy: 'Mona',
+        requestedAtUtc: '2026-10-12T09:00:00Z', status: 'Pending', decidedBy: null, decidedAtUtc: null, decisionNote: null,
+      }],
+      decided: [],
+    }));
+    const { fixture, el } = await render(dough.id, false);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const banner = text(el.querySelector('.pending-banner')!);
+    expect(banner).toContain('Mona asked to change this prep item');
+    expect(banner).toContain('Yeast: 100 g → 150 g');
+    expect([...el.querySelectorAll('button')].map(text).filter((b) => b.includes('Save') || b.includes('Send') || b.includes('Delete'))).toEqual([]);
   });
 
   it('is kept in litres when made by volume', async () => {

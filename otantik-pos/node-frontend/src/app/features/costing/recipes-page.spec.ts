@@ -1,9 +1,21 @@
 import { TestBed } from '@angular/core/testing';
+import { MatDialog } from '@angular/material/dialog';
 import { Router, provideRouter } from '@angular/router';
 import { of } from 'rxjs';
-import { CostingApi, RecipeCategory, RecipeCostCard } from '../../core/costing/costing.api';
+import { AuthService } from '../../core/auth/auth.service';
+import { Permissions } from '../../core/auth/permissions';
+import { CostingApi, ApprovalRequest, RecipeCategory, RecipeCostCard } from '../../core/costing/costing.api';
 import { NotifyService } from '../../core/ui/notify.service';
+import { DeleteRequestDialog } from './approvals';
 import { RecipesPage } from './recipes-page';
+
+// Mona's request to delete a recipe, waiting for a manager.
+function request(recipeId: string): ApprovalRequest {
+  return {
+    id: 'q1', module: 'Recipe', action: 'Delete', recordId: recipeId, summary: 'Recipe Classic Cheeseburger', changes: [], reason: 'Duplicate', requestedBy: 'Mona',
+    requestedAtUtc: '2026-10-08T09:00:00Z', status: 'Pending', decidedBy: null, decidedAtUtc: null, decisionNote: null,
+  };
+}
 
 function card(overrides: Partial<RecipeCostCard>): RecipeCostCard {
   return {
@@ -71,14 +83,27 @@ describe('the recipes', () => {
   const recipes = vi.fn();
   const deleteRecipe = vi.fn();
   const restoreRecipe = vi.fn();
+  const requestDeletion = vi.fn();
+  const approvalRequests = vi.fn();
+  // The delete dialog, answered with a reason.
+  const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
 
-  async function render() {
+  // A manager approves deletions; anyone else (an accountant) asks for them.
+  async function render({ manager = true } = {}) {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: CostingApi, useValue: { recipes, menu: () => of(menu), deleteRecipe, restoreRecipe, recipeCategories: () => of([mains, sauces]) } },
+        {
+          provide: CostingApi,
+          useValue: {
+            recipes, menu: () => of(menu), deleteRecipe, restoreRecipe, requestDeletion, approvalRequests,
+            recipeCategories: () => of([mains, sauces]),
+          },
+        },
         { provide: NotifyService, useValue: notify },
+        { provide: MatDialog, useValue: { open } },
+        { provide: AuthService, useValue: { can: (p: string) => p !== Permissions.ApprovalDecide || manager } },
       ],
     });
     const fixture = TestBed.createComponent(RecipesPage);
@@ -98,6 +123,9 @@ describe('the recipes', () => {
     recipes.mockReset().mockReturnValue(of([burger, trial, old]));
     deleteRecipe.mockReset().mockReturnValue(of(undefined));
     restoreRecipe.mockReset().mockReturnValue(of({ id: 'r3', catalogItemId: null }));
+    requestDeletion.mockReset();
+    approvalRequests.mockReset().mockReturnValue(of({ pending: [], decided: [] }));
+    open.mockReset().mockReturnValue({ afterClosed: () => of({ reason: 'Duplicate' }) });
     notify.info.mockReset();
     notify.error.mockReset();
   });
@@ -138,30 +166,55 @@ describe('the recipes', () => {
     expect(navigate).toHaveBeenLastCalledWith(['/costing/recipes/recipe', 'r2', 'edit']);
   });
 
-  it('asks before deleting, warning that a linked menu item stops taking stock, and keeps it', async () => {
+  it('deletes through the approvals, warning that a linked menu item stops taking stock', async () => {
     const { rows, button } = await render();
+    requestDeletion.mockReturnValue(of({ outcome: 'Applied', request: { ...request('r1'), status: 'Approved' } }));
 
     button(rows()[0], 'Delete').click();
-    const ask = rows()[1];
-    expect(ask.classList).toContain('confirm-row');
-    expect(text(ask)).toContain('Sales of Classic Cheeseburger stop taking stock');
-    expect(text(ask)).toContain('It is kept, marked deleted, and can be restored');
-    expect(deleteRecipe).not.toHaveBeenCalled();
 
-    button(ask, 'Delete').click();
-    await vi.waitFor(() => expect(deleteRecipe).toHaveBeenCalledWith('r1'));
-    expect(notify.info).toHaveBeenCalledWith('Classic Cheeseburger deleted: Classic Cheeseburger no longer takes stock. It can be restored from Deleted.');
+    await vi.waitFor(() => expect(requestDeletion).toHaveBeenCalledWith(expect.any(String), 'Recipe', 'r1', 'Duplicate'));
+    expect(open).toHaveBeenCalledWith(
+      DeleteRequestDialog,
+      expect.objectContaining({
+        data: {
+          module: 'Recipe',
+          what: 'Classic Cheeseburger',
+          canApprove: true,
+          detail: 'Sales of Classic Cheeseburger stop taking stock until another recipe is linked to it.',
+        },
+      }),
+    );
+    expect(notify.info).toHaveBeenCalledWith('Classic Cheeseburger deleted.');
+    await vi.waitFor(() => expect(recipes).toHaveBeenCalledTimes(2));
+  });
+
+  it('asks a manager, for an accountant, and marks the recipe waiting and locked', async () => {
+    const { rows, button } = await render({ manager: false });
+    const asked = request('r1');
+    requestDeletion.mockReturnValue(of({ outcome: 'Requested', request: asked }));
+    approvalRequests.mockReturnValue(of({ pending: [asked], decided: [] }));
+
+    button(rows()[0], 'Delete').click();
+
+    await vi.waitFor(() => expect(notify.info).toHaveBeenCalledWith('Deletion request submitted to the manager for approval.'));
+    expect(open.mock.lastCall![1].data.canApprove).toBe(false);
+    await vi.waitFor(() => expect(rows()[0].classList).toContain('pending-deletion'));
+    expect(text(rows()[0])).toContain('Deletion requested');
+    expect(text(rows()[0])).toContain('by Mona');
+    // Locked until a manager decides: no Edit, no second Delete. Nothing was deleted.
+    expect(button(rows()[0], 'Edit')).toBeUndefined();
+    expect(button(rows()[0], 'Delete')).toBeUndefined();
+    expect(recipes).toHaveBeenCalledTimes(1);
   });
 
   it('can be talked out of deleting', async () => {
     const { rows, button } = await render();
+    open.mockReturnValue({ afterClosed: () => of(undefined) });
 
     button(rows()[1], 'Delete').click();
-    expect(text(rows()[2])).not.toContain('stop taking stock');
-    button(rows()[2], 'Cancel').click();
 
-    expect(rows().some((r) => r.classList.contains('confirm-row'))).toBe(false);
-    expect(deleteRecipe).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(open).toHaveBeenCalled());
+    expect(requestDeletion).not.toHaveBeenCalled();
   });
 
   it('shows the deleted ones apart, with who deleted them, to restore', async () => {

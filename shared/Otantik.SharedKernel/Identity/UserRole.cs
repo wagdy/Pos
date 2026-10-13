@@ -21,5 +21,9 @@ public enum UserRole
 
     // A delivery driver: sees orders and moves them through the delivery leg (OutForDelivery,
     // Delivered).
-    DeliveryCaptain
+    DeliveryCaptain,
+
+    // Works the till's back office: costing and inventory data entry. Deletes there go to a
+    // manager for approval rather than happening.
+    Accountant
 }

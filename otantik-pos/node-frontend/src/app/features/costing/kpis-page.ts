@@ -136,7 +136,16 @@ const expenseFields: { key: keyof MonthlyExpenses; en: string; ar: string; hours
                 <tr><td>Count differences · فروق الجرد</td><td class="num">{{ r.statement.countDifferences | money }}</td><td class="num muted">{{ pct(r.statement.countDifferences, r) }}</td></tr>
                 <tr class="total"><td>Cost of sales · تكلفة المبيعات</td><td class="num">{{ r.statement.costOfSales | money }}</td><td class="num">{{ pct(r.statement.costOfSales, r) }}</td></tr>
                 <tr class="total"><td>Gross profit · الربح الإجمالي</td><td class="num">{{ r.statement.grossProfit | money }}</td><td class="num">{{ pct(r.statement.grossProfit, r) }}</td></tr>
-                <tr><td>Wages and benefits · الرواتب</td><td class="num">{{ entered(r.statement.wagesAndBenefits) }}</td><td class="num muted">{{ pct(r.statement.wagesAndBenefits, r) }}</td></tr>
+                <tr>
+                  <td>
+                    Wages and benefits · الرواتب
+                    @if (r.statement.loggedWages) {
+                      <small class="muted part">{{ parts(r.statement.wagesAndBenefits, r.statement.loggedWages) }}</small>
+                    }
+                  </td>
+                  <td class="num">{{ combined(r.statement.wagesAndBenefits, r.statement.loggedWages) }}</td>
+                  <td class="num muted">{{ pct(sum(r.statement.wagesAndBenefits, r.statement.loggedWages), r) }}</td>
+                </tr>
                 <tr>
                   <td>
                     Rent and occupation · الإيجار

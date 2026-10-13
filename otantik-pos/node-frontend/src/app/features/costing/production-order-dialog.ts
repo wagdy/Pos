@@ -19,11 +19,25 @@ const baseLabels: Record<UnitOfMeasure, string> = { Gram: 'g', Millilitre: 'ml',
       <dl class="details">
         <div><dt>Date · التاريخ</dt><dd>{{ o.producedAtUtc | date: 'EEE d MMM y, HH:mm' }}</dd></div>
         <div><dt>By · بواسطة</dt><dd>{{ o.producedBy || '—' }}</dd></div>
+        @if (o.approvedBy) {
+          <div><dt>Approved by · اعتمده</dt><dd>{{ o.approvedBy }}</dd></div>
+        }
         <div><dt>Planned · المخطط</dt><dd>{{ o.plannedQuantity / o.displayUnitSize | number: '1.0-3' }} {{ o.displayUnit }}</dd></div>
         <div><dt>Came out · المنتج فعليًا</dt><dd>{{ o.producedQuantity / o.displayUnitSize | number: '1.0-3' }} {{ o.displayUnit }} ({{ o.yieldPercent | number: '1.0-1' }}%)</dd></div>
         <div><dt>Batch cost · تكلفة الدفعة</dt><dd>{{ o.totalCost | money }}</dd></div>
         <div><dt>Unit cost · تكلفة الوحدة</dt><dd class="strong">{{ o.unitCostPerDisplayUnit | money }} / {{ o.displayUnit }}</dd></div>
       </dl>
+      @if (o.status === 'Voided') {
+        <p>
+          <span class="voided-badge">{{ o.replacedBy ? 'Corrected' : 'Voided' }}<span class="ar">{{ o.replacedBy ? 'مُصحح' : 'ملغى' }}</span></span>
+          by {{ o.voidedBy }}, {{ o.voidedAtUtc | date: 'd MMM y, HH:mm' }}:
+          {{ o.replacedBy
+            ? 'reversed and made again with the right quantities, as another batch.'
+            : 'reversed, its ingredients back in stock and the prep item back out.' }}
+        </p>
+      } @else if (o.revisionOf) {
+        <p class="muted">A correction: the batch it replaced was reversed.</p>
+      }
       @if (o.notes) {
         <p class="muted">{{ o.notes }}</p>
       }

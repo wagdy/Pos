@@ -5,7 +5,7 @@
   </button>
 
   <nav>
-    <a mat-button routerLink="/orders" routerLinkActive="active" aria-label="Open orders" matTooltip="Open orders" [matTooltipDisabled]="!compactNav()" [routerLinkActiveOptions]="{ exact: true }">
+    <a *appCan="Permissions.OrderViewOwn" mat-button routerLink="/orders" routerLinkActive="active" aria-label="Open orders" matTooltip="Open orders" [matTooltipDisabled]="!compactNav()" [routerLinkActiveOptions]="{ exact: true }">
       <mat-icon>receipt_long</mat-icon>
       <span class="nav-text">Open orders</span>
     </a>

@@ -7,6 +7,7 @@ import { Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { SignInOption } from '../../core/api/models';
 import { AuthService } from '../../core/auth/auth.service';
+import { homePath } from '../../core/auth/guards';
 import { errorMessage } from '../../core/http/error-message';
 
 // Tap your name, then your PIN. Works with the internet down: the accounts are the delivery
@@ -80,7 +81,7 @@ export class SignInPage implements OnInit {
     this.error.set(null);
     try {
       await this.auth.signIn(person.id, this.pin());
-      await this.router.navigate(['/orders']);
+      await this.router.navigate([homePath(this.auth)]);
     } catch (error) {
       this.error.set(errorMessage(error, 'Sign-in failed.'));
       this.pin.set('');

@@ -21,10 +21,14 @@ import {
   SavePurchaseLine,
   Supplier,
   purchaseUnits,
+  PurchasePaymentMethod,
+  paymentMethodLabels,
 } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
+import { Approvals } from './approvals';
+import { BusinessDay } from './financials';
 import { ExpenseItemDialog, ExpenseItemDialogData } from './expense-item-dialog';
 import { paperIcon, viewInvoicePaper } from './invoice-paper';
 import { InvoiceView } from './invoice-view';
@@ -144,6 +148,27 @@ const baseLabels = { Gram: 'g', Millilitre: 'ml', Piece: 'pc' } as const;
           <mat-label>Invoice date · تاريخ الفاتورة</mat-label>
           <input matInput type="date" [(ngModel)]="invoiceDate" />
         </mat-form-field>
+        <mat-form-field subscriptSizing="dynamic" class="payment">
+          <mat-label>Paid · طريقة الدفع</mat-label>
+          <mat-select [(ngModel)]="paymentMethod" (ngModelChange)="touch()" aria-label="How it is paid" required>
+            @for (m of paymentMethods; track m) {
+              <mat-option [value]="m">{{ paymentLabels[m].en }} · {{ paymentLabels[m].ar }}</mat-option>
+            }
+          </mat-select>
+          @if (paymentMethod === 'Credit' && !supplierId) {
+            <mat-hint class="warn-text">On credit, it is owed to a supplier: choose one.</mat-hint>
+          } @else if (paymentMethod === 'Credit') {
+            <mat-hint>Owed to the supplier until paid by a payment voucher.</mat-hint>
+          } @else if (!paymentMethod) {
+            <mat-hint>Required to post it.</mat-hint>
+          }
+        </mat-form-field>
+        @if (paymentMethod === 'DayRevenue') {
+          <mat-form-field subscriptSizing="dynamic">
+            <mat-label>Takings of · إيراد يوم</mat-label>
+            <input matInput type="date" [(ngModel)]="revenueDate" (ngModelChange)="touch()" [max]="today" aria-label="Takings of" />
+          </mat-form-field>
+        }
         <div class="paper">
           <input #file type="file" accept="image/jpeg,image/png,image/webp,application/pdf" hidden (change)="attach(file)" />
           @if (paper(); as p) {
@@ -325,6 +350,9 @@ const baseLabels = { Gram: 'g', Millilitre: 'ml', Piece: 'pc' } as const;
     .supplier {
       min-width: 240px;
     }
+    .payment {
+      min-width: 230px;
+    }
     .paper {
       display: flex;
       align-items: center;
@@ -375,6 +403,8 @@ export class PurchasesPage {
   private readonly api = inject(CostingApi);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
+  private readonly approvals = inject(Approvals);
+  private readonly businessDay = inject(BusinessDay);
 
   protected readonly materials = signal<MaterialCost[]>([]);
   // The expense items new lines can name: the archived ones are not offered.
@@ -397,6 +427,13 @@ export class PurchasesPage {
   protected supplierId: string | null = null;
   protected supplierInvoiceNumber = '';
   protected invoiceDate: string = PurchasesPage.today();
+  // How it is paid: required to post. From a day's takings names the day: the till's business
+  // day to begin with (after midnight, still the night before), and none later.
+  protected paymentMethod: PurchasePaymentMethod | null = null;
+  protected revenueDate: string = PurchasesPage.today();
+  protected today = PurchasesPage.today();
+  protected readonly paymentMethods: PurchasePaymentMethod[] = ['Safe', 'DayRevenue', 'Credit'];
+  protected readonly paymentLabels = paymentMethodLabels;
 
   // One invoice, one id, made here: the draft's, and the stock movements' when it is posted, so a
   // retry after a lost answer posts it once. A new one for each new invoice.
@@ -441,7 +478,8 @@ export class PurchasesPage {
           (l.cost === null ? l.itemType !== 'Expense' : l.cost >= 0),
       ) &&
       new Set(ids).size === ids.length &&
-      !this.supplierUnresolved()
+      !this.supplierUnresolved() &&
+      this.paymentReady()
     );
   });
 
@@ -655,6 +693,15 @@ export class PurchasesPage {
     this.lines.update((lines) => lines.filter((_, i) => i !== index));
   }
 
+  // Chosen, and what it needs: on credit, a supplier; from a day's takings, the day.
+  protected paymentReady(): boolean {
+    return (
+      this.paymentMethod !== null &&
+      (this.paymentMethod !== 'Credit' || this.supplierId !== null) &&
+      (this.paymentMethod !== 'DayRevenue' || !!this.revenueDate)
+    );
+  }
+
   // A new, empty invoice. The one on screen stays a draft if it was saved.
   protected reset(): void {
     this.lines.set([this.blank()]);
@@ -662,6 +709,8 @@ export class PurchasesPage {
     this.supplierId = null;
     this.supplierInvoiceNumber = '';
     this.invoiceDate = PurchasesPage.today();
+    this.paymentMethod = null;
+    this.revenueDate = this.today;
     this.paper.set(null);
     this.review.set(null);
     this.invoiceId = crypto.randomUUID();
@@ -697,8 +746,19 @@ export class PurchasesPage {
         stock ? `${stock} ${stock === 1 ? 'line' : 'lines'} into stock` : null,
         expenses ? `${expenses} ${expenses === 1 ? 'expense' : 'expenses'} recorded` : null,
       ].filter(Boolean);
-      this.notify.info(`Posted: ${parts.join(', ')}, ${posted.total.toFixed(2)} L.E.`);
+      const paid =
+        posted.paymentStatus === 'Pending'
+          ? ' Its payment waits for a manager’s approval: no cash moves until then.'
+          : posted.paymentStatus === 'OnCredit'
+            ? ` On credit: owed to ${posted.supplierName ?? 'the supplier'}.`
+            : posted.paymentStatus === 'Paid' && posted.paymentMethod === 'DayRevenue'
+              ? ' Paid from the day’s takings.'
+              : posted.paymentStatus === 'Paid'
+                ? ' Paid from the safe.'
+                : '';
+      this.notify.info(`Posted: ${parts.join(', ')}, ${posted.total.toFixed(2)} L.E.${paid}`);
       this.reset();
+      void this.approvals.refresh();
       await this.load();
     } catch (error) {
       this.notify.error(error, 'The invoice could not be posted.');
@@ -753,6 +813,8 @@ export class PurchasesPage {
         ({ id: invoice.supplierId, name: invoice.supplierName ?? 'A supplier' } as Supplier));
     this.supplierInvoiceNumber = invoice.supplierInvoiceNumber ?? '';
     this.invoiceDate = invoice.invoiceDate ?? PurchasesPage.today();
+    this.paymentMethod = invoice.paymentMethod === 'BeforeTreasury' ? null : invoice.paymentMethod;
+    this.revenueDate = invoice.revenueDate ?? this.today;
     this.paper.set(invoice.attachment?.fileName ?? null);
     this.review.set(null);
     this.lines.set(
@@ -798,6 +860,8 @@ export class PurchasesPage {
       supplierId: this.supplierId,
       supplierInvoiceNumber: this.supplierInvoiceNumber.trim() || null,
       invoiceDate: this.invoiceDate || null,
+      paymentMethod: this.paymentMethod,
+      revenueDate: this.paymentMethod === 'DayRevenue' ? this.revenueDate || null : null,
       lines: this.lines()
         .filter((l) => !partial || ((l.rawMaterialId || (l.expenseItemId && l.cost !== null)) && (l.quantity ?? 0) > 0))
         .map((l): SavePurchaseLine => {
@@ -837,6 +901,13 @@ export class PurchasesPage {
 
   private async load(): Promise<void> {
     this.error.set(null);
+    void this.businessDay.today().then((today) => {
+      // Not yet chosen: the business day.
+      if (this.revenueDate === this.today) {
+        this.revenueDate = today;
+      }
+      this.today = today;
+    });
     try {
       const [materials, drafts, suppliers, expenses] = await Promise.all([
         firstValueFrom(this.api.materials()),

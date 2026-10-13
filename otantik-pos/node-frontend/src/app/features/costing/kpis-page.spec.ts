@@ -45,6 +45,7 @@ const report: KpiReport = {
     loggedOccupationCost: 0,
     loggedOtherFixedCosts: 0,
     loggedExpenses: [],
+    loggedWages: 0,
     totalExpenses: 0,
   },
   expenses: { wagesAndBenefits: null, labourHours: null, otherControllableCosts: null, occupationCost: null, interest: null, depreciation: null },

@@ -153,6 +153,7 @@ public sealed class FakeDeliverySystem : IAsyncDisposable
                 new StaffAccount("staff-cashier", "Sara", UserRole.Cashier, true),
                 new StaffAccount("staff-manager", "Omar", UserRole.Manager, true),
                 new StaffAccount("staff-captain", "Hany", UserRole.CaptainOrder, true),
+                new StaffAccount("staff-accountant", "Mona", UserRole.Accountant, true),
             ]);
     }
 

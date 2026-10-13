@@ -17,4 +17,7 @@ public interface IRecipeRepository : IRepository<Recipe>
 
     // How many active recipes each category holds.
     Task<IReadOnlyDictionary<Guid, int>> CountByCategoryAsync(CancellationToken cancellationToken = default);
+
+    // How many recipes not deleted, on the menu or off it, have the material as an ingredient.
+    Task<int> CountUsingAsync(Guid rawMaterialId, CancellationToken cancellationToken = default);
 }

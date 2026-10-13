@@ -24,18 +24,22 @@ public sealed record StockCountDto(
     string StartedBy,
     DateTime? PostedAtUtc,
     string? PostedBy,
-    IReadOnlyList<StockCountLineDto> Lines)
+    IReadOnlyList<StockCountLineDto> Lines,
+    DateTime? VoidedAtUtc = null,
+    string? VoidedBy = null)
 {
     public static StockCountDto From(StockCount count) => new(
         count.Id, count.Status, count.StartedAtUtc, count.StartedBy, count.PostedAtUtc, count.PostedBy,
-        count.Lines.Select(l => new StockCountLineDto(l.RawMaterialId, l.CountedQuantity, l.BookQuantity, l.UnitCost)).ToList());
+        count.Lines.Select(l => new StockCountLineDto(l.RawMaterialId, l.CountedQuantity, l.BookQuantity, l.UnitCost)).ToList(),
+        count.VoidedAtUtc, count.VoidedBy);
 }
 
 // In the material's unit: grams, millilitres, pieces.
 public sealed record StockCountLine(Guid RawMaterialId, decimal CountedQuantity);
 
 public sealed record StockCountSummaryDto(
-    Guid Id, StockCountStatus Status, DateTime StartedAtUtc, string StartedBy, DateTime? PostedAtUtc, string? PostedBy, int Materials);
+    Guid Id, StockCountStatus Status, DateTime StartedAtUtc, string StartedBy, DateTime? PostedAtUtc, string? PostedBy, int Materials,
+    DateTime? VoidedAtUtc = null, string? VoidedBy = null);
 
 // The draft first, if there is one, then the posted counts, newest first.
 public sealed record GetStockCountsQuery : IRequest<IReadOnlyList<StockCountSummaryDto>>;
@@ -47,7 +51,7 @@ internal sealed class GetStockCountsQueryHandler(IStockCountRepository counts)
         (await counts.GetAllAsync(cancellationToken))
             .OrderBy(c => c.Status)
             .ThenByDescending(c => c.PostedAtUtc ?? c.StartedAtUtc)
-            .Select(c => new StockCountSummaryDto(c.Id, c.Status, c.StartedAtUtc, c.StartedBy, c.PostedAtUtc, c.PostedBy, c.Lines.Count))
+            .Select(c => new StockCountSummaryDto(c.Id, c.Status, c.StartedAtUtc, c.StartedBy, c.PostedAtUtc, c.PostedBy, c.Lines.Count, c.VoidedAtUtc, c.VoidedBy))
             .ToList();
 }
 

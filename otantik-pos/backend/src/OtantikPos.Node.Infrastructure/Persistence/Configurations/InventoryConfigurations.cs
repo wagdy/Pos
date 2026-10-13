@@ -1,5 +1,8 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.Expenses;
 using OtantikPos.Inventory.Domain.Production;
@@ -9,6 +12,7 @@ using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Inventory.Domain.Suppliers;
+using OtantikPos.Inventory.Domain.Treasury;
 
 namespace OtantikPos.Node.Infrastructure.Persistence.Configurations;
 
@@ -31,6 +35,8 @@ internal sealed class RawMaterialConfiguration : IEntityTypeConfiguration<RawMat
         builder.Property(m => m.AverageCost).IsUnitCost();
         builder.Property(m => m.DefaultYieldPercent).HasPrecision(5, 2).HasDefaultValue(100m);
         builder.Ignore(m => m.CostPerPurchaseUnit);
+        builder.Ignore(m => m.IsArchived);
+        builder.Property(m => m.ArchivedBy).HasMaxLength(200);
     }
 }
 
@@ -111,6 +117,7 @@ internal sealed class StockMovementConfiguration : IEntityTypeConfiguration<Stoc
         builder.Property(m => m.UnitCost).IsUnitCost();
         builder.Property(m => m.Note).HasMaxLength(200);
         builder.Property(m => m.RecordedBy).HasMaxLength(200);
+        builder.Ignore(m => m.IsReversal);
 
         builder.HasOne<RawMaterial>()
             .WithMany()
@@ -119,8 +126,9 @@ internal sealed class StockMovementConfiguration : IEntityTypeConfiguration<Stoc
 
         // The idempotency guarantee behind IStockMovementRepository.ExistsAsync: a redelivered
         // event that slipped past that check fails here instead of posting twice. SourceId is
-        // the order item's PublicId.
-        builder.HasIndex(m => new { m.SourceId, m.Reason, m.RawMaterialId }).IsUnique();
+        // the order item's PublicId. ReversalOf lets one reversing entry sit beside each; NULLS
+        // NOT DISTINCT, or every original (no ReversalOf) would count as different from the next.
+        builder.HasIndex(m => new { m.SourceId, m.Reason, m.RawMaterialId, m.ReversalOf }).IsUnique().AreNullsDistinct(false);
         builder.HasIndex(m => new { m.RawMaterialId, m.OccurredAtUtc });
     }
 }
@@ -133,6 +141,7 @@ internal sealed class StockCountConfiguration : IEntityTypeConfiguration<StockCo
         builder.Property(c => c.Status).IsEnumName();
         builder.Property(c => c.StartedBy).HasMaxLength(200);
         builder.Property(c => c.PostedBy).HasMaxLength(200);
+        builder.Property(c => c.VoidedBy).HasMaxLength(200);
         builder.HasMany(c => c.Lines).WithOne().HasForeignKey(l => l.StockCountId).OnDelete(DeleteBehavior.Cascade);
         builder.Navigation(c => c.Lines).HasField("_lines").UsePropertyAccessMode(PropertyAccessMode.Field);
         builder.HasIndex(c => c.Status);
@@ -161,15 +170,62 @@ internal sealed class PurchaseInvoiceConfiguration : IEntityTypeConfiguration<Pu
         builder.Property(i => i.SupplierInvoiceNumber).HasMaxLength(64);
         builder.Property(i => i.CreatedBy).HasMaxLength(200);
         builder.Property(i => i.PostedBy).HasMaxLength(200);
+        builder.Property(i => i.VoidedBy).HasMaxLength(200);
         builder.Property(i => i.AttachmentFileName).HasMaxLength(200);
         builder.Property(i => i.AttachmentContentType).HasMaxLength(64);
         builder.Property(i => i.AttachedBy).HasMaxLength(200);
+        builder.Property(i => i.PaymentMethod).IsEnumName();
         builder.Ignore(i => i.HasAttachment);
         builder.Ignore(i => i.Total);
         builder.HasMany(i => i.Lines).WithOne().HasForeignKey(l => l.InvoiceId).OnDelete(DeleteBehavior.Cascade);
         builder.Navigation(i => i.Lines).HasField("_lines").UsePropertyAccessMode(PropertyAccessMode.Field);
         builder.HasIndex(i => new { i.Status, i.PostedAtUtc });
         builder.HasOne<Supplier>().WithMany().HasForeignKey(i => i.SupplierId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+// The safe's ledger: one row per cash movement, in or out, reversals beside what they undo.
+internal sealed class SafeTransactionConfiguration : IEntityTypeConfiguration<SafeTransaction>
+{
+    public void Configure(EntityTypeBuilder<SafeTransaction> builder)
+    {
+        builder.ToTable("SafeTransactions", NodeDbContext.InventorySchema);
+        builder.Property(t => t.Kind).IsEnumName();
+        builder.Property(t => t.Fund).IsEnumName();
+        builder.Property(t => t.Source).IsEnumName();
+        builder.Property(t => t.Amount).HasPrecision(18, 2);
+        builder.Property(t => t.Notes).HasMaxLength(300);
+        builder.Property(t => t.RecordedBy).HasMaxLength(200);
+        builder.Property(t => t.ApprovedBy).HasMaxLength(200);
+        builder.Property(t => t.VoidedBy).HasMaxLength(200);
+        builder.Ignore(t => t.IsReversal);
+        builder.Ignore(t => t.IsVoided);
+        builder.HasOne<Supplier>().WithMany().HasForeignKey(t => t.SupplierId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<PurchaseInvoice>().WithMany().HasForeignKey(t => t.PurchaseInvoiceId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<ExpenseItem>().WithMany().HasForeignKey(t => t.ExpenseItemId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<SafeTransaction>().WithMany().HasForeignKey(t => t.ReversalOf).OnDelete(DeleteBehavior.Restrict);
+        // One reversal for each entry.
+        builder.HasIndex(t => t.ReversalOf).IsUnique().HasFilter("\"ReversalOf\" IS NOT NULL");
+        builder.HasIndex(t => new { t.Fund, t.BusinessDate });
+        builder.HasIndex(t => t.RevenueDate);
+        builder.HasIndex(t => t.PurchaseInvoiceId);
+    }
+}
+
+// What is owed to each supplier, line by line.
+internal sealed class SupplierLedgerEntryConfiguration : IEntityTypeConfiguration<SupplierLedgerEntry>
+{
+    public void Configure(EntityTypeBuilder<SupplierLedgerEntry> builder)
+    {
+        builder.ToTable("SupplierLedgerEntries", NodeDbContext.InventorySchema);
+        builder.Property(e => e.Kind).IsEnumName();
+        builder.Property(e => e.Amount).HasPrecision(18, 2);
+        builder.Property(e => e.RecordedBy).HasMaxLength(200);
+        builder.Ignore(e => e.IsReversal);
+        builder.HasOne<Supplier>().WithMany().HasForeignKey(e => e.SupplierId).OnDelete(DeleteBehavior.Restrict);
+        // A record is on a supplier's account once, and undone once.
+        builder.HasIndex(e => new { e.SourceId, e.ReversalOf }).IsUnique().AreNullsDistinct(false);
+        builder.HasIndex(e => new { e.SupplierId, e.BusinessDate });
     }
 }
 
@@ -207,6 +263,42 @@ internal sealed class PurchaseInvoiceLineConfiguration : IEntityTypeConfiguratio
         builder.HasOne<ExpenseItem>().WithMany().HasForeignKey(l => l.ExpenseItemId).OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(l => new { l.InvoiceId, l.RawMaterialId }).IsUnique();
         builder.HasIndex(l => new { l.InvoiceId, l.ExpenseItemId }).IsUnique();
+    }
+}
+
+internal sealed class ApprovalRequestConfiguration : IEntityTypeConfiguration<ApprovalRequest>
+{
+    public void Configure(EntityTypeBuilder<ApprovalRequest> builder)
+    {
+        builder.ToTable("ApprovalRequests", NodeDbContext.InventorySchema);
+        builder.Property(r => r.Module).IsEnumName();
+        builder.Property(r => r.Action).IsEnumName();
+        builder.Property(r => r.Status).IsEnumName();
+        builder.Property(r => r.Summary).HasMaxLength(500);
+        // What the manager reads, line by line, and what a new or changed record holds until
+        // approved: both JSON, read and written whole.
+        builder.Ignore(r => r.Changes);
+        builder.Property<List<ApprovalChange>>("_changes")
+            .HasColumnName("Changes")
+            .HasColumnType("jsonb")
+            .HasConversion(
+                changes => JsonSerializer.Serialize(changes, (JsonSerializerOptions?)null),
+                json => JsonSerializer.Deserialize<List<ApprovalChange>>(json, (JsonSerializerOptions?)null) ?? new List<ApprovalChange>(),
+                new ValueComparer<List<ApprovalChange>>(
+                    (a, b) => a!.SequenceEqual(b!),
+                    changes => changes.Aggregate(0, (hash, change) => HashCode.Combine(hash, change.GetHashCode())),
+                    changes => changes.ToList()));
+        builder.Property(r => r.Payload).HasColumnType("jsonb");
+        builder.Property(r => r.Reason).HasMaxLength(500);
+        builder.Property(r => r.RequestedById).HasMaxLength(200);
+        builder.Property(r => r.RequestedBy).HasMaxLength(200);
+        builder.Property(r => r.DecidedBy).HasMaxLength(200);
+        builder.Property(r => r.DecisionNote).HasMaxLength(500);
+        builder.Ignore(r => r.IsPending);
+        // At most one request waits for a record, whatever it asks: two would race to change it
+        // twice. Record ids are Guids, unique across the modules.
+        builder.HasIndex(r => r.RecordId).IsUnique().HasFilter("\"Status\" = 'Pending'");
+        builder.HasIndex(r => new { r.Status, r.RequestedAtUtc });
     }
 }
 
@@ -281,6 +373,10 @@ internal sealed class ProductionOrderConfiguration : IEntityTypeConfiguration<Pr
     public void Configure(EntityTypeBuilder<ProductionOrder> builder)
     {
         builder.ToTable("ProductionOrders", NodeDbContext.InventorySchema);
+        builder.Property(o => o.Status).IsEnumName();
+        builder.Property(o => o.VoidedBy).HasMaxLength(200);
+        builder.Property(o => o.ApprovedBy).HasMaxLength(200);
+        builder.Ignore(o => o.IsVoided);
         builder.Property(o => o.PlannedQuantity).IsQuantity();
         builder.Property(o => o.ProducedQuantity).IsQuantity();
         builder.Property(o => o.TotalCost).HasPrecision(18, 2);

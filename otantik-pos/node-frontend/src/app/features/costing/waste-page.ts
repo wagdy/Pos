@@ -7,11 +7,13 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { firstValueFrom } from 'rxjs';
-import { CostingApi, MaterialCost, SpoilageEntry, countUnit } from '../../core/costing/costing.api';
+import { CostingApi, ApprovalRequest, MaterialCost, SpoilageEntry, countUnit } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
+import { Approvals } from './approvals';
 
 interface Line {
   rawMaterialId: string | null;
@@ -25,7 +27,19 @@ interface Line {
 // one without. Dishes voided after the kitchen made them are recorded by the void itself.
 @Component({
   selector: 'app-waste-page',
-  imports: [DatePipe, DecimalPipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatInputModule, MatProgressBarModule, MatSelectModule, MoneyPipe],
+  imports: [
+    DatePipe,
+    DecimalPipe,
+    FormsModule,
+    MatButtonModule,
+    MatFormFieldModule,
+    MatIconModule,
+    MatInputModule,
+    MatProgressBarModule,
+    MatSelectModule,
+    MatTooltipModule,
+    MoneyPipe,
+  ],
   template: `
     <p class="note">
       Record raw stock thrown away, with why. A dish voided after the kitchen made it is recorded by the void.
@@ -112,22 +126,42 @@ interface Line {
               <th>Why<span class="ar">السبب</span></th>
               <th>By<span class="ar">بواسطة</span></th>
               <th class="num">Worth<span class="ar">القيمة</span></th>
+              <th class="num"><span class="visually-hidden">Actions</span></th>
             </tr>
           </thead>
           <tbody>
             @for (entry of recent(); track entry.spoilageId) {
               @for (l of entry.lines; track l.rawMaterialId; let first = $first) {
-                <tr>
-                  <td>{{ first ? (entry.recordedAtUtc | date: 'd MMM, HH:mm') : '' }}</td>
+                <tr [class.pending-deletion]="!!pendingOf(entry)">
+                  <td>
+                    @if (first) {
+                      {{ entry.recordedAtUtc | date: 'd MMM, HH:mm' }}
+                      @if (pendingOf(entry); as p) {
+                        <div><span class="pending-badge">Deletion requested<span class="ar">طلب حذف</span></span></div>
+                        <div class="muted note-small">by {{ p.requestedBy }}</div>
+                      }
+                    }
+                  </td>
                   <td>{{ l.material }}</td>
                   <td class="num">{{ l.quantity / unitFor(l).size | number: '1.0-3' }} {{ unitFor(l).label }}</td>
                   <td>{{ l.reason }}</td>
                   <td>{{ first ? entry.recordedBy : '' }}</td>
                   <td class="num">{{ l.value === null ? 'No price' : (l.value | money) }}</td>
+                  <td class="num">
+                    @if (first) {
+                      @if (pendingOf(entry)) {
+                        <mat-icon class="locked" matTooltip="Waiting for a manager's approval" aria-label="Locked: deletion requested">lock_clock</mat-icon>
+                      } @else {
+                        <button mat-icon-button class="danger" (click)="voidEntry(entry)" matTooltip="Delete (void)" aria-label="Delete this waste entry">
+                          <mat-icon>delete</mat-icon>
+                        </button>
+                      }
+                    }
+                  </td>
                 </tr>
               }
             } @empty {
-              <tr><td colspan="6" class="muted">Nothing recorded.</td></tr>
+              <tr><td colspan="7" class="muted">Nothing recorded.</td></tr>
             }
           </tbody>
           @if (recent().length) {
@@ -135,6 +169,7 @@ interface Line {
               <tr>
                 <td colspan="5">Total · الإجمالي</td>
                 <td class="num">{{ recentTotal() | money }}</td>
+                <td></td>
               </tr>
             </tfoot>
           }
@@ -161,11 +196,25 @@ interface Line {
       margin: 24px 0 8px;
       font: var(--mat-sys-title-medium);
     }
+    .danger {
+      color: var(--mat-sys-error);
+    }
+    .note-small {
+      font-size: 0.85em;
+    }
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+    }
   `,
 })
 export class WastePage {
   private readonly api = inject(CostingApi);
   private readonly notify = inject(NotifyService);
+  private readonly approvals = inject(Approvals);
 
   protected readonly reasons = [
     { en: 'Expired', ar: 'منتهي الصلاحية' },
@@ -265,8 +314,21 @@ export class WastePage {
     return { rawMaterialId: null, quantity: null, reason: 'Expired', other: '' };
   }
 
+  protected pendingOf(entry: SpoilageEntry): ApprovalRequest | undefined {
+    return this.approvals.pendingFor(entry.spoilageId);
+  }
+
+  // Voided for a manager (its stock goes back); asked of one for anyone else.
+  protected async voidEntry(entry: SpoilageEntry): Promise<void> {
+    const what = `the waste of ${new Date(entry.recordedAtUtc).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`;
+    if ((await this.approvals.delete('Waste', entry.spoilageId, what)) === 'Applied') {
+      await this.load();
+    }
+  }
+
   private async load(): Promise<void> {
     this.error.set(null);
+    void this.approvals.refresh();
     try {
       const [materials, recent] = await Promise.all([firstValueFrom(this.api.materials()), firstValueFrom(this.api.spoilage(30))]);
       this.materials.set(materials);

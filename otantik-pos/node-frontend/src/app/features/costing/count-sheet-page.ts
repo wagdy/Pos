@@ -47,6 +47,13 @@ const autosaveAfterMs = 1500;
         <span class="inline-ar">جرد مُرحّل</span>
       </h2>
       <p class="muted">Started by {{ count.startedBy }}, posted by {{ count.postedBy }}.</p>
+      @if (count.status === 'Voided') {
+        <p class="note">
+          <span class="voided-badge">Voided<span class="ar">ملغى</span></span>
+          {{ count.voidedAtUtc | date: 'd MMM y, HH:mm' }} by {{ count.voidedBy }}: its adjustments were undone, and the variance report no
+          longer measures from it.
+        </p>
+      }
       <div class="table-wrap">
         <table class="grid">
           <thead>
@@ -219,7 +226,8 @@ export class CountSheetPage {
   protected readonly saved = signal(false);
   protected readonly saveState = signal('Nothing entered yet');
 
-  protected readonly posted = computed(() => (this.count()?.status === 'Posted' ? this.count() : null));
+  // Posted, or voided since: either way read-only.
+  protected readonly posted = computed(() => (this.count() && this.count()!.status !== 'Draft' ? this.count() : null));
 
   protected readonly countedCount = computed(() => Object.values(this.counted()).filter((v) => this.valid(v)).length);
 

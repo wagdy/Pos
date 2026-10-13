@@ -13,7 +13,7 @@ public sealed class StockMovement : AggregateRoot
     // they explain.
     internal StockMovement(
         Guid rawMaterialId, decimal quantity, StockMovementReason reason, Guid sourceId, decimal? unitCost,
-        string? note = null, string? recordedBy = null)
+        string? note = null, string? recordedBy = null, Guid? reversalOf = null)
     {
         RawMaterialId = rawMaterialId;
         Quantity = quantity;
@@ -22,6 +22,7 @@ public sealed class StockMovement : AggregateRoot
         UnitCost = unitCost;
         Note = note;
         RecordedBy = recordedBy;
+        ReversalOf = reversalOf;
         OccurredAtUtc = DateTime.UtcNow;
     }
 
@@ -33,9 +34,16 @@ public sealed class StockMovement : AggregateRoot
     public StockMovementReason Reason { get; private set; }
 
     // What caused it: the order item for a sale, waste or void return; the purchase or stock
-    // count otherwise. (SourceId, RawMaterialId, Reason) is unique, which is what makes
-    // handling the same event twice harmless.
+    // count otherwise. (SourceId, RawMaterialId, Reason, ReversalOf) is unique, which is what
+    // makes handling the same event twice harmless.
     public Guid SourceId { get; private set; }
+
+    // For an entry that undoes another, its Id: a voided purchase, waste entry or stock count.
+    // Same source and reason, the opposite quantity at the same unit cost, so every report that
+    // adds a reason up nets the two from the day of the void on. The original stays as it was.
+    public Guid? ReversalOf { get; private set; }
+
+    public bool IsReversal => ReversalOf is not null;
 
     public DateTime OccurredAtUtc { get; private set; }
 

@@ -11,6 +11,26 @@ public enum PurchaseInvoiceStatus
 
     // Confirmed: its stock is in, its prices are in the average costs. Fixed from then on.
     Posted = 2,
+
+    // Posted, then deleted with a manager's approval: its stock taken back out by reversing
+    // entries, its expenses out of the reports. Kept, as the record of both.
+    Voided = 3,
+}
+
+// How an invoice is paid. Chosen before it is posted.
+public enum PurchasePaymentMethod
+{
+    // In cash from the safe (خصم من الخزنة).
+    Safe = 1,
+
+    // In cash from one day's takings (خصم من إيراد يوم), before they went into the safe.
+    DayRevenue = 2,
+
+    // Bought on credit (آجل): owed to the supplier until paid with a payment voucher.
+    Credit = 3,
+
+    // Posted before the treasury was kept: it touches neither the safe nor the supplier's account.
+    BeforeTreasury = 4,
 }
 
 // What a line of an invoice is.
@@ -57,10 +77,16 @@ public sealed class PurchaseInvoice : AggregateRoot
     public Guid? SupplierId { get; private set; }
     public string? SupplierInvoiceNumber { get; private set; }
     public DateOnly? InvoiceDate { get; private set; }
+
+    // How it is paid; required to post it. For a day's takings, which day's (RevenueDate).
+    public PurchasePaymentMethod? PaymentMethod { get; private set; }
+    public DateOnly? RevenueDate { get; private set; }
     public DateTime CreatedAtUtc { get; private set; }
     public string CreatedBy { get; private set; } = string.Empty;
     public DateTime? PostedAtUtc { get; private set; }
     public string? PostedBy { get; private set; }
+    public DateTime? VoidedAtUtc { get; private set; }
+    public string? VoidedBy { get; private set; }
 
     // The attached photo or scan, described; its bytes are kept apart.
     public string? AttachmentFileName { get; private set; }
@@ -79,10 +105,18 @@ public sealed class PurchaseInvoice : AggregateRoot
 
     // Replaces the draft's details and lines. Each line is as written on the invoice: a quantity
     // in a unit that holds UnitSize of the material's own (5 in kg of 1000 g), or of an expense.
-    public void Record(Guid? supplierId, string? supplierInvoiceNumber, DateOnly? invoiceDate, IReadOnlyCollection<PurchaseInvoiceLineEntry> lines)
+    public void Record(
+        Guid? supplierId,
+        string? supplierInvoiceNumber,
+        DateOnly? invoiceDate,
+        IReadOnlyCollection<PurchaseInvoiceLineEntry> lines,
+        PurchasePaymentMethod? paymentMethod = null,
+        DateOnly? revenueDate = null)
     {
-        if (Status == PurchaseInvoiceStatus.Posted)
-            throw new DomainException("This invoice has been posted. Its stock is in; enter a new invoice for another delivery.");
+        if (Status != PurchaseInvoiceStatus.Draft)
+            throw new DomainException(Status == PurchaseInvoiceStatus.Voided
+                ? "This invoice has been voided. Enter a new invoice for the delivery."
+                : "This invoice has been posted. Its stock is in; enter a new invoice for another delivery.");
         var materials = lines.Where(l => l.ItemType == PurchaseItemType.Inventory).Select(l => l.RawMaterialId).ToList();
         if (materials.Distinct().Count() != materials.Count)
             throw new DomainException("Each material goes on the invoice once: add its quantities together.");
@@ -92,9 +126,14 @@ public sealed class PurchaseInvoice : AggregateRoot
         if (supplierInvoiceNumber?.Trim().Length > 64)
             throw new DomainException("Keep the supplier's invoice number under 64 characters.");
 
+        if (paymentMethod is { } method && (!Enum.IsDefined(method) || method == PurchasePaymentMethod.BeforeTreasury))
+            throw new DomainException("Choose how the invoice is paid: from the safe, from a day's takings, or on credit.");
+
         SupplierId = supplierId;
         SupplierInvoiceNumber = Clean(supplierInvoiceNumber);
         InvoiceDate = invoiceDate;
+        PaymentMethod = paymentMethod;
+        RevenueDate = paymentMethod == PurchasePaymentMethod.DayRevenue ? revenueDate : null;
         _lines.Clear();
         _lines.AddRange(lines.Select(l => new PurchaseInvoiceLine(Id, l)));
     }
@@ -104,10 +143,11 @@ public sealed class PurchaseInvoice : AggregateRoot
     // average. Expense lines take nothing in: posted, what they cost is the record.
     public IReadOnlyList<StockMovement> Post(IReadOnlyDictionary<Guid, RawMaterial> materials, string postedBy)
     {
-        if (Status == PurchaseInvoiceStatus.Posted)
-            throw new DomainException("This invoice has already been posted.");
+        if (Status != PurchaseInvoiceStatus.Draft)
+            throw new DomainException($"This invoice has already been {Status.ToString().ToLowerInvariant()}.");
         if (_lines.Count == 0)
             throw new DomainException("Put at least one line on the invoice before posting it.");
+        EnsurePayable(PaymentMethod, RevenueDate);
 
         var movements = _lines
             .Where(l => l.ItemType == PurchaseItemType.Inventory)
@@ -118,6 +158,45 @@ public sealed class PurchaseInvoice : AggregateRoot
         PostedAtUtc = DateTime.UtcNow;
         PostedBy = postedBy;
         return movements;
+    }
+
+    // How a posted invoice is paid now: after a cash payment was rejected or voided, it is paid
+    // again, another way. The caller makes sure it is unpaid.
+    public void PayBy(PurchasePaymentMethod method, DateOnly? revenueDate)
+    {
+        if (Status != PurchaseInvoiceStatus.Posted)
+            throw new DomainException("Only a posted invoice is paid.");
+        if (PaymentMethod == PurchasePaymentMethod.Credit)
+            throw new DomainException("This invoice is on credit: pay the supplier with a payment voucher.");
+        EnsurePayable(method, revenueDate);
+        PaymentMethod = method;
+        RevenueDate = method == PurchasePaymentMethod.DayRevenue ? revenueDate : null;
+    }
+
+    private void EnsurePayable(PurchasePaymentMethod? method, DateOnly? revenueDate)
+    {
+        switch (method)
+        {
+            case null:
+            case PurchasePaymentMethod.BeforeTreasury:
+                throw new DomainException("Choose how the invoice is paid: from the safe, from a day's takings, or on credit.");
+            case PurchasePaymentMethod.Credit when SupplierId is null:
+                throw new DomainException("An invoice on credit is owed to a supplier: choose the supplier.");
+            case PurchasePaymentMethod.DayRevenue when revenueDate is null:
+                throw new DomainException("Choose the day whose takings paid the invoice.");
+        }
+    }
+
+    // Marks a posted invoice void. The caller reverses its stock entries in the same unit of work.
+    public void Void(string voidedBy)
+    {
+        if (Status == PurchaseInvoiceStatus.Voided)
+            return;
+        if (Status != PurchaseInvoiceStatus.Posted)
+            throw new DomainException("Only a posted invoice is voided; discard a draft instead.");
+        Status = PurchaseInvoiceStatus.Voided;
+        VoidedAtUtc = DateTime.UtcNow;
+        VoidedBy = voidedBy;
     }
 
     // The paper, photographed or scanned. On a draft it can be replaced; once the invoice is

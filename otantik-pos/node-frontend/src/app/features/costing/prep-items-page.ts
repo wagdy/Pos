@@ -11,10 +11,12 @@ import { firstValueFrom } from 'rxjs';
 import { CostingApi, PrepItem } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
+import { Approvals, pendingLabel } from './approvals';
 
 // The prep items: made in the kitchen from their own recipes, kept in stock, used by dishes.
 // Each with what it costs by its recipe at today's prices, what the batches on the shelf cost,
-// and how much is on the shelf. A row opens its profile.
+// and how much is on the shelf. A row opens its profile. New ones asked for by an accountant are
+// listed first, waiting for a manager: they are not prep items until approved.
 @Component({
   selector: 'app-prep-items-page',
   imports: [DatePipe, DecimalPipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatInputModule, MatProgressBarModule, MoneyPipe, RouterLink],
@@ -53,13 +55,31 @@ import { MoneyPipe } from '../../core/ui/money.pipe';
             </tr>
           </thead>
           <tbody>
+            @for (r of waiting(); track r.id) {
+              <tr class="pending-deletion">
+                <td colspan="7">
+                  {{ r.summary }}
+                  <div>
+                    <span class="pending-badge">{{ pendingLabel(r).en }}<span class="ar">{{ pendingLabel(r).ar }}</span></span>
+                    <span class="muted small"> asked by {{ r.requestedBy }}, {{ r.requestedAtUtc | date: 'd MMM, HH:mm' }}</span>
+                  </div>
+                </td>
+              </tr>
+            }
             @for (p of shown(); track p.id) {
-              <tr class="clickable" (click)="open(p)">
+              @let asked = approvals.pendingFor(p.id);
+              <tr class="clickable" [class.pending-deletion]="!!asked" (click)="open(p)">
                 <td>
                   @if (p.code) {
                     <span class="muted">{{ p.code }} · </span>
                   }
                   {{ p.name }}
+                  @if (asked) {
+                    <div>
+                      <span class="pending-badge">{{ pendingLabel(asked).en }}<span class="ar">{{ pendingLabel(asked).ar }}</span></span>
+                      <span class="muted small"> by {{ asked.requestedBy }}</span>
+                    </div>
+                  }
                   @if (p.ingredients.length === 0) {
                     <div class="warn small">No recipe yet</div>
                   } @else if (p.missingPrices.length) {
@@ -74,11 +94,13 @@ import { MoneyPipe } from '../../core/ui/money.pipe';
                 <td class="nowrap">{{ p.lastProducedAtUtc ? (p.lastProducedAtUtc | date: 'd MMM, HH:mm') : 'Never' }}</td>
               </tr>
             } @empty {
-              <tr>
-                <td colspan="7" class="muted">
-                  {{ items().length ? 'No prep item matches.' : 'No prep items yet. Add one, such as pizza dough, with its recipe for a batch.' }}
-                </td>
-              </tr>
+              @if (!waiting().length) {
+                <tr>
+                  <td colspan="7" class="muted">
+                    {{ items().length ? 'No prep item matches.' : 'No prep items yet. Add one, such as pizza dough, with its recipe for a batch.' }}
+                  </td>
+                </tr>
+              }
             }
           </tbody>
         </table>
@@ -101,6 +123,8 @@ import { MoneyPipe } from '../../core/ui/money.pipe';
 export class PrepItemsPage {
   private readonly api = inject(CostingApi);
   private readonly router = inject(Router);
+  protected readonly approvals = inject(Approvals);
+  protected readonly pendingLabel = pendingLabel;
 
   protected readonly items = signal<PrepItem[]>([]);
   protected readonly loading = signal(true);
@@ -112,8 +136,12 @@ export class PrepItemsPage {
     return this.items().filter((p) => !text || p.name.toLowerCase().includes(text) || (p.code ?? '').toLowerCase().includes(text));
   });
 
+  // New prep items asked for, waiting for a manager: not made yet, so not openable.
+  protected readonly waiting = computed(() => this.approvals.waitingToBeMade('PrepItem'));
+
   constructor() {
     void this.load();
+    void this.approvals.refresh();
   }
 
   protected open(item: PrepItem): void {

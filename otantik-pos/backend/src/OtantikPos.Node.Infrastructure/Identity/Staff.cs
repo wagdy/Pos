@@ -51,9 +51,10 @@ public sealed record SignInOutcome(StaffMember? Staff, DateTime? LockedUntilUtc)
 // the PINs and the lockout.
 public sealed class StaffDirectory(NodeDbContext db, ILogger<StaffDirectory> logger)
 {
-    // Who may sign in to a till. Captains take orders in the delivery app, not here.
+    // Who may sign in to a till. Captains take orders in the delivery app, not here; an
+    // accountant works the till's back office.
     // An array, not a set: EF translates Contains on an array into SQL, and not on IReadOnlySet.
-    private static readonly UserRole[] TillRoles = [UserRole.Cashier, UserRole.Manager, UserRole.Admin];
+    private static readonly UserRole[] TillRoles = [UserRole.Cashier, UserRole.Manager, UserRole.Admin, UserRole.Accountant];
 
     // A 4-digit PIN has only 10,000 possibilities, so guessing has to be slow: five misses lock
     // the account for five minutes.

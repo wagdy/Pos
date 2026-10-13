@@ -1,6 +1,8 @@
 using MediatR;
 using Otantik.BuildingBlocks;
 using OtantikPos.Inventory.Application.Categories;
+using OtantikPos.Inventory.Application.Treasury;
+using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.Purchases;
 using OtantikPos.Inventory.Domain.RawMaterials;
@@ -13,7 +15,9 @@ namespace OtantikPos.Inventory.Application.RawMaterials;
 // same id again. The second request finds the movements already posted and changes nothing,
 // so a delivery is never booked twice.
 
-public sealed record ReceivePurchaseCommand(Guid PurchaseId, IReadOnlyList<PurchaseLine> Lines, string RecordedBy = "")
+// Paid from the safe: for a manager at once, and asked of one for anyone else, as an invoice is.
+public sealed record ReceivePurchaseCommand(
+    Guid PurchaseId, IReadOnlyList<PurchaseLine> Lines, string RecordedBy = "", string StaffId = "", bool CanApprove = true)
     : IRequest<IReadOnlyList<RawMaterialDto>>, IRetryOnConflict;
 
 // Quantity in the material's own unit (grams, millilitres, pieces). Cost: what the line cost in
@@ -25,6 +29,8 @@ internal sealed class ReceivePurchaseCommandHandler(
     IPurchaseInvoiceRepository invoices,
     IStockMovementRepository movements,
     IPurchaseCategoryRepository categories,
+    IApprovalRequestRepository requests,
+    TreasuryWriter treasury,
     IUnitOfWork unitOfWork) : IRequestHandler<ReceivePurchaseCommand, IReadOnlyList<RawMaterialDto>>
 {
     private static readonly IReadOnlyDictionary<UnitOfMeasure, string> UnitLabels =
@@ -44,10 +50,11 @@ internal sealed class ReceivePurchaseCommandHandler(
             var invoice = new PurchaseInvoice(request.PurchaseId, request.RecordedBy);
             invoice.Record(null, null, null, request.Lines
                 .Select(l => new PurchaseInvoiceLineEntry(l.RawMaterialId, l.Quantity, UnitLabels[byId[l.RawMaterialId].Unit], 1, l.Cost))
-                .ToList());
+                .ToList(), PurchasePaymentMethod.Safe);
             invoices.Add(invoice);
             foreach (var movement in invoice.Post(byId, request.RecordedBy))
                 movements.Add(movement);
+            await treasury.SettleAsync(invoice, Guid.NewGuid(), request.StaffId, request.RecordedBy, request.CanApprove, requests, cancellationToken);
 
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }

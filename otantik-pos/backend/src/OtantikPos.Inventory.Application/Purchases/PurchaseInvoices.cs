@@ -1,13 +1,17 @@
 using MediatR;
 using Otantik.BuildingBlocks;
+using OtantikPos.Inventory.Application.Approvals;
 using OtantikPos.Inventory.Application.Common;
 using OtantikPos.Inventory.Application.RawMaterials;
+using OtantikPos.Inventory.Application.Treasury;
+using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.Expenses;
 using OtantikPos.Inventory.Domain.Purchases;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Inventory.Domain.Suppliers;
+using OtantikPos.Inventory.Domain.Treasury;
 
 namespace OtantikPos.Inventory.Application.Purchases;
 
@@ -50,11 +54,21 @@ public sealed record PurchaseInvoiceDto(
     IReadOnlyList<PurchaseInvoiceLineDto> Lines,
     // What went into stock, and what was expenses: Total split.
     decimal InventoryTotal,
-    decimal ExpenseTotal);
+    decimal ExpenseTotal,
+    DateTime? VoidedAtUtc = null,
+    string? VoidedBy = null,
+    PurchasePaymentMethod? PaymentMethod = null,
+    DateOnly? RevenueDate = null,
+    InvoicePaymentStatus PaymentStatus = InvoicePaymentStatus.NotPosted);
 
 // What an invoice's lines are named and filed under, read together for a DTO.
 internal sealed record InvoiceReading(
-    IRawMaterialRepository Materials, IExpenseItemRepository Expenses, IPurchaseCategoryRepository Categories, ISupplierRepository Suppliers)
+    IRawMaterialRepository Materials,
+    IExpenseItemRepository Expenses,
+    IPurchaseCategoryRepository Categories,
+    ISupplierRepository Suppliers,
+    ISafeTransactionRepository Safe,
+    IApprovalRequestRepository Requests)
 {
     public async Task<PurchaseInvoiceDto> DtoAsync(PurchaseInvoice invoice, CancellationToken cancellationToken)
     {
@@ -70,7 +84,10 @@ internal sealed record InvoiceReading(
             ? new Dictionary<Guid, PurchaseCategory>()
             : (await Categories.GetAllAsync(cancellationToken)).ToDictionary(c => c.Id);
         var supplier = invoice.SupplierId is { } id ? await Suppliers.GetByIdAsync(id, cancellationToken) : null;
-        return Dto(invoice, materials, expenses, categories, supplier);
+        return Dto(invoice, materials, expenses, categories, supplier) with
+        {
+            PaymentStatus = await InvoicePayments.StatusAsync(invoice, Safe, Requests, cancellationToken),
+        };
     }
 
     public static PurchaseInvoiceDto Dto(
@@ -86,7 +103,11 @@ internal sealed record InvoiceReading(
             : null,
         invoice.Lines.Select(l => Line(l, materials, expenses, categories)).ToList(),
         invoice.InventoryTotal,
-        invoice.ExpenseTotal);
+        invoice.ExpenseTotal,
+        invoice.VoidedAtUtc,
+        invoice.VoidedBy,
+        invoice.PaymentMethod,
+        invoice.RevenueDate);
 
     private static PurchaseInvoiceLineDto Line(
         PurchaseInvoiceLine l,
@@ -127,24 +148,34 @@ public sealed record PurchaseInvoiceSummaryDto(
     // Null while no paper is attached.
     string? AttachmentFileName,
     decimal InventoryTotal,
-    decimal ExpenseTotal);
+    decimal ExpenseTotal,
+    DateTime? VoidedAtUtc = null,
+    string? VoidedBy = null,
+    PurchasePaymentMethod? PaymentMethod = null,
+    DateOnly? RevenueDate = null,
+    InvoicePaymentStatus PaymentStatus = InvoicePaymentStatus.NotPosted);
 
 // Posted invoices newest first, or the drafts.
 public sealed record GetPurchaseInvoicesQuery(PurchaseInvoiceStatus Status) : IRequest<IReadOnlyList<PurchaseInvoiceSummaryDto>>;
 
-internal sealed class GetPurchaseInvoicesQueryHandler(IPurchaseInvoiceRepository invoices, ISupplierRepository suppliers)
+internal sealed class GetPurchaseInvoicesQueryHandler(
+    IPurchaseInvoiceRepository invoices, ISupplierRepository suppliers, ISafeTransactionRepository safe, IApprovalRequestRepository requests)
     : IRequestHandler<GetPurchaseInvoicesQuery, IReadOnlyList<PurchaseInvoiceSummaryDto>>
 {
     public async Task<IReadOnlyList<PurchaseInvoiceSummaryDto>> Handle(GetPurchaseInvoicesQuery request, CancellationToken cancellationToken)
     {
         // Archived ones too: an invoice keeps showing who it was from.
         var names = (await suppliers.GetAllAsync(cancellationToken)).ToDictionary(s => s.Id, s => s.Name);
-        return (await invoices.GetByStatusAsync(request.Status, cancellationToken))
+        var listed = await invoices.GetByStatusAsync(request.Status, cancellationToken);
+        var paid = await safe.PaidInvoicesAsync(listed.Select(i => i.Id).ToList(), cancellationToken);
+        var pending = (await requests.GetPendingAsync(cancellationToken)).Where(r => r.Module == ApprovalModule.Treasury).Select(r => r.RecordId).ToHashSet();
+        return listed
             .OrderByDescending(i => i.PostedAtUtc ?? i.CreatedAtUtc)
             .Select(i => new PurchaseInvoiceSummaryDto(
                 i.Id, i.Status, i.SupplierId, i.SupplierId is { } id ? names.GetValueOrDefault(id) : null,
                 i.SupplierInvoiceNumber, i.InvoiceDate, i.CreatedAtUtc, i.CreatedBy,
-                i.PostedAtUtc, i.PostedBy, i.Total, i.Lines.Count, i.AttachmentFileName, i.InventoryTotal, i.ExpenseTotal))
+                i.PostedAtUtc, i.PostedBy, i.Total, i.Lines.Count, i.AttachmentFileName, i.InventoryTotal, i.ExpenseTotal, i.VoidedAtUtc, i.VoidedBy,
+                i.PaymentMethod, i.RevenueDate, InvoicePayments.StatusOf(i, paid.Contains(i.Id), pending.Contains(i.Id))))
             .ToList();
     }
 }
@@ -156,11 +187,13 @@ internal sealed class GetPurchaseInvoiceQueryHandler(
     IRawMaterialRepository materials,
     IExpenseItemRepository expenses,
     IPurchaseCategoryRepository categories,
-    ISupplierRepository suppliers) : IRequestHandler<GetPurchaseInvoiceQuery, PurchaseInvoiceDto?>
+    ISupplierRepository suppliers,
+    ISafeTransactionRepository safe,
+    IApprovalRequestRepository requests) : IRequestHandler<GetPurchaseInvoiceQuery, PurchaseInvoiceDto?>
 {
     public async Task<PurchaseInvoiceDto?> Handle(GetPurchaseInvoiceQuery request, CancellationToken cancellationToken) =>
         await invoices.GetByIdAsync(request.InvoiceId, cancellationToken) is { } invoice
-            ? await new InvoiceReading(materials, expenses, categories, suppliers).DtoAsync(invoice, cancellationToken)
+            ? await new InvoiceReading(materials, expenses, categories, suppliers, safe, requests).DtoAsync(invoice, cancellationToken)
             : null;
 }
 
@@ -171,7 +204,9 @@ public sealed record SavePurchaseInvoiceCommand(
     string? SupplierInvoiceNumber,
     DateOnly? InvoiceDate,
     IReadOnlyList<PurchaseInvoiceLineEntry> Lines,
-    string StaffName = "") : IRequest<PurchaseInvoiceDto>;
+    string StaffName = "",
+    PurchasePaymentMethod? PaymentMethod = null,
+    DateOnly? RevenueDate = null) : IRequest<PurchaseInvoiceDto>;
 
 internal sealed class SavePurchaseInvoiceCommandHandler(
     IPurchaseInvoiceRepository invoices,
@@ -179,6 +214,8 @@ internal sealed class SavePurchaseInvoiceCommandHandler(
     IExpenseItemRepository expenses,
     IPurchaseCategoryRepository categories,
     ISupplierRepository suppliers,
+    ISafeTransactionRepository safe,
+    IApprovalRequestRepository requests,
     IUnitOfWork unitOfWork) : IRequestHandler<SavePurchaseInvoiceCommand, PurchaseInvoiceDto>
 {
     public async Task<PurchaseInvoiceDto> Handle(SavePurchaseInvoiceCommand request, CancellationToken cancellationToken)
@@ -188,13 +225,20 @@ internal sealed class SavePurchaseInvoiceCommandHandler(
             .Where(l => l.ItemType == PurchaseItemType.Inventory && l.RawMaterialId is not null)
             .Select(l => l.RawMaterialId!.Value)
             .ToList();
-        if (materialIds.Count > 0
-            && (await materials.GetRequiredByIdsAsync(materialIds, cancellationToken)).Values.FirstOrDefault(m => m.IsPrepItem) is { } made)
+        var onInvoice = materialIds.Count == 0
+            ? new Dictionary<Guid, RawMaterial>()
+            : await materials.GetRequiredByIdsAsync(materialIds, cancellationToken);
+        if (onInvoice.Values.FirstOrDefault(m => m.IsPrepItem) is { } made)
             throw new DomainException($"{made.Name} is made in the kitchen, not bought: make it with a production order.");
 
         var invoice = await invoices.GetByIdAsync(request.InvoiceId, cancellationToken);
         if (invoice is null)
             invoices.Add(invoice = new PurchaseInvoice(request.InvoiceId, request.StaffName));
+
+        // A material deleted since stays on a draft that already had it, but goes on no other.
+        var drafted = invoice.Lines.Select(l => l.RawMaterialId).ToHashSet();
+        if (onInvoice.Values.FirstOrDefault(m => m.IsArchived && !drafted.Contains(m.Id)) is { } archivedMaterial)
+            throw new DomainException($"{archivedMaterial.Name} has been deleted from the raw materials.");
 
         // An archived expense stays on a draft that already had it, but is not put on another.
         var expenseIds = request.Lines.Where(l => l.ItemType == PurchaseItemType.Expense && l.ExpenseItemId is not null)
@@ -218,16 +262,18 @@ internal sealed class SavePurchaseInvoiceCommandHandler(
                 throw new DomainException($"{supplier.Name} is archived. Restore it on the Suppliers tab to invoice it again.");
         }
 
-        invoice.Record(request.SupplierId, request.SupplierInvoiceNumber, request.InvoiceDate, request.Lines);
+        invoice.Record(request.SupplierId, request.SupplierInvoiceNumber, request.InvoiceDate, request.Lines, request.PaymentMethod, request.RevenueDate);
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        return await new InvoiceReading(materials, expenses, categories, suppliers).DtoAsync(invoice, cancellationToken);
+        return await new InvoiceReading(materials, expenses, categories, suppliers, safe, requests).DtoAsync(invoice, cancellationToken);
     }
 }
 
 // Step two: confirmed, the stock goes in and the average costs move; expense lines are recorded
-// as they are, touching no stock. Posting again, after an answer was lost, returns the posted
-// invoice and changes nothing.
-public sealed record PostPurchaseInvoiceCommand(Guid InvoiceId, string StaffName = "") : IRequest<PurchaseInvoiceDto>, IRetryOnConflict;
+// as they are, touching no stock. Its payment is settled as chosen: on credit, owed to the
+// supplier; in cash, paid for a manager and asked of one for anyone else (the stock is in either
+// way). Posting again, after an answer was lost, returns the posted invoice and changes nothing.
+public sealed record PostPurchaseInvoiceCommand(Guid InvoiceId, string StaffName = "", string StaffId = "", bool CanApprove = true)
+    : IRequest<PurchaseInvoiceDto>, IRetryOnConflict;
 
 internal sealed class PostPurchaseInvoiceCommandHandler(
     IPurchaseInvoiceRepository invoices,
@@ -236,11 +282,14 @@ internal sealed class PostPurchaseInvoiceCommandHandler(
     IPurchaseCategoryRepository categories,
     ISupplierRepository suppliers,
     IStockMovementRepository movements,
+    ISafeTransactionRepository safe,
+    IApprovalRequestRepository requests,
+    TreasuryWriter treasury,
     IUnitOfWork unitOfWork) : IRequestHandler<PostPurchaseInvoiceCommand, PurchaseInvoiceDto>
 {
     public async Task<PurchaseInvoiceDto> Handle(PostPurchaseInvoiceCommand request, CancellationToken cancellationToken)
     {
-        var reading = new InvoiceReading(materials, expenses, categories, suppliers);
+        var reading = new InvoiceReading(materials, expenses, categories, suppliers, safe, requests);
         var invoice = await invoices.GetRequiredAsync(request.InvoiceId, cancellationToken);
         if (invoice.Status == PurchaseInvoiceStatus.Posted)
             return await reading.DtoAsync(invoice, cancellationToken);
@@ -251,6 +300,7 @@ internal sealed class PostPurchaseInvoiceCommandHandler(
             : await materials.GetRequiredByIdsAsync(materialIds, cancellationToken);
         foreach (var movement in invoice.Post(byId, request.StaffName))
             movements.Add(movement);
+        await treasury.SettleAsync(invoice, Guid.NewGuid(), request.StaffId, request.StaffName, request.CanApprove, requests, cancellationToken);
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return await reading.DtoAsync(invoice, cancellationToken);
@@ -286,6 +336,8 @@ internal sealed class AttachPurchaseInvoiceFileCommandHandler(
     IExpenseItemRepository expenses,
     IPurchaseCategoryRepository categories,
     ISupplierRepository suppliers,
+    ISafeTransactionRepository safe,
+    IApprovalRequestRepository requests,
     IUnitOfWork unitOfWork) : IRequestHandler<AttachPurchaseInvoiceFileCommand, PurchaseInvoiceDto>
 {
     public async Task<PurchaseInvoiceDto> Handle(AttachPurchaseInvoiceFileCommand request, CancellationToken cancellationToken)
@@ -299,7 +351,7 @@ internal sealed class AttachPurchaseInvoiceFileCommandHandler(
         invoice.Attach(request.FileName, request.ContentType, request.Content.Length, request.StaffName);
         attachments.Put(invoice.Id, request.Content);
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        return await new InvoiceReading(materials, expenses, categories, suppliers).DtoAsync(invoice, cancellationToken);
+        return await new InvoiceReading(materials, expenses, categories, suppliers, safe, requests).DtoAsync(invoice, cancellationToken);
     }
 
     // Checked, not taken on trust: the file is shown in the browser later, so it must be the

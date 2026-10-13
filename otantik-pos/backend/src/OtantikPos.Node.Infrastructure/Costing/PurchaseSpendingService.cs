@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Otantik.BuildingBlocks;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.Purchases;
+using OtantikPos.Inventory.Domain.Treasury;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Persistence;
 using static OtantikPos.Node.Infrastructure.Costing.CostingService;
@@ -25,7 +26,8 @@ public sealed record CategorySpending(
     IReadOnlyList<ItemSpending> Items);
 
 // Purchases by category over a period, from the posted invoices: each invoice on its own date, or
-// on the day it was posted when it has none. Lines with no price are counted, not valued.
+// on the day it was posted when it has none; and the expense vouchers paid from the safe, each on
+// its date. Lines with no price are counted, not valued.
 public sealed record SpendingReport(
     DateOnly From,
     DateOnly To,
@@ -34,7 +36,8 @@ public sealed record SpendingReport(
     decimal Expenses,
     int Invoices,
     int UnpricedLines,
-    IReadOnlyList<CategorySpending> Categories);
+    IReadOnlyList<CategorySpending> Categories,
+    int Vouchers = 0);
 
 // What a period's expense lines came to in one category, for the profit and loss.
 public sealed record LoggedExpense(Guid CategoryId, string Category, string? CategoryAr, ExpenseLine ExpenseLine, decimal Amount);
@@ -44,8 +47,10 @@ public sealed record LoggedExpense(Guid CategoryId, string Category, string? Cat
 // category as it is now, so moving an item to the right category puts its history right too.
 public sealed class PurchaseSpendingService(NodeDbContext db, RestaurantClock clock)
 {
+    // InvoiceId: the invoice's, or an expense voucher's (IsVoucher).
     private sealed record PostedLine(
-        Guid InvoiceId, PurchaseItemType ItemType, Guid ItemId, string Name, PurchaseCategory? Category, decimal Quantity, string Unit, decimal? Cost);
+        Guid InvoiceId, PurchaseItemType ItemType, Guid ItemId, string Name, PurchaseCategory? Category, decimal Quantity, string Unit, decimal? Cost,
+        bool IsVoucher = false);
 
     public async Task<SpendingReport> GetAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken)
     {
@@ -84,9 +89,10 @@ public sealed class PurchaseSpendingService(NodeDbContext db, RestaurantClock cl
             from, to, Money(total),
             Money(priced.Where(l => l.ItemType == PurchaseItemType.Inventory).Sum(l => l.Cost!.Value)),
             Money(priced.Where(l => l.ItemType == PurchaseItemType.Expense).Sum(l => l.Cost!.Value)),
-            lines.Select(l => l.InvoiceId).Distinct().Count(),
+            lines.Where(l => !l.IsVoucher).Select(l => l.InvoiceId).Distinct().Count(),
             lines.Count - priced.Count,
-            categories);
+            categories,
+            lines.Count(l => l.IsVoucher));
     }
 
     // The period's expense lines by category: overheads for the profit and loss. Stock lines are
@@ -110,7 +116,13 @@ public sealed class PurchaseSpendingService(NodeDbContext db, RestaurantClock cl
                 && ((i.InvoiceDate != null && i.InvoiceDate >= from && i.InvoiceDate <= to)
                     || (i.InvoiceDate == null && i.PostedAtUtc >= fromUtc && i.PostedAtUtc < toUtc)))
             .ToListAsync(cancellationToken);
-        if (invoices.Count == 0)
+        // Expense vouchers that stand: a voided one leaves the reports of its own date.
+        var vouchers = await db.SafeTransactions.AsNoTracking()
+            .Where(t => t.Kind == SafeTransactionKind.ExpenseVoucher && t.ReversalOf == null && t.VoidedAtUtc == null
+                && t.BusinessDate >= from && t.BusinessDate <= to)
+            .Select(t => new { t.Id, t.ExpenseItemId, t.Amount })
+            .ToListAsync(cancellationToken);
+        if (invoices.Count == 0 && vouchers.Count == 0)
             return [];
 
         var categories = await db.PurchaseCategories.AsNoTracking().ToDictionaryAsync(c => c.Id, cancellationToken);
@@ -120,6 +132,14 @@ public sealed class PurchaseSpendingService(NodeDbContext db, RestaurantClock cl
         var expenses = await db.ExpenseItems.AsNoTracking()
             .Select(e => new { e.Id, e.Name, e.CategoryId, e.Unit })
             .ToDictionaryAsync(e => e.Id, cancellationToken);
+
+        var paidOut = vouchers.Select(v =>
+        {
+            var expense = expenses.GetValueOrDefault(v.ExpenseItemId!.Value);
+            return new PostedLine(
+                v.Id, PurchaseItemType.Expense, v.ExpenseItemId.Value, expense?.Name ?? "A removed expense",
+                expense is null ? null : categories.GetValueOrDefault(expense.CategoryId), 1, expense?.Unit ?? "voucher", -v.Amount, IsVoucher: true);
+        });
 
         return invoices
             .SelectMany(i => i.Lines.Select(l =>
@@ -139,6 +159,7 @@ public sealed class PurchaseSpendingService(NodeDbContext db, RestaurantClock cl
                     material is null ? null : categories.GetValueOrDefault(material.CategoryId),
                     material is null ? l.Quantity : l.Quantity / material.PurchaseUnitSize, material?.PurchaseUnit ?? l.UnitLabel, l.Cost);
             }))
+            .Concat(paidOut)
             .ToList();
     }
 }

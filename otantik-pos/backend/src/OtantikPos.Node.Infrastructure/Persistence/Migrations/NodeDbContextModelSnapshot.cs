@@ -530,6 +530,87 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.ToTable("OrderItemAddOns", "pos");
                 });
 
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Approvals.ApprovalRequest", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTime?>("DecidedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DecidedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("DecisionNote")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("Module")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Payload")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("RecordId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("RequestedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RequestedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("RequestedById")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Summary")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.Property<string>("_changes")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("Changes");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RecordId")
+                        .IsUnique()
+                        .HasFilter("\"Status\" = 'Pending'");
+
+                    b.HasIndex("Status", "RequestedAtUtc");
+
+                    b.ToTable("ApprovalRequests", "inventory");
+                });
+
             modelBuilder.Entity("OtantikPos.Inventory.Domain.Categories.PurchaseCategory", b =>
                 {
                     b.Property<Guid>("Id")
@@ -676,6 +757,10 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("ApprovedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
                     b.Property<string>("Notes")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
@@ -699,6 +784,17 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasPrecision(18, 3)
                         .HasColumnType("numeric(18,3)");
 
+                    b.Property<Guid?>("ReplacedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("RevisionOf")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
                     b.Property<decimal>("TotalCost")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
@@ -712,6 +808,13 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("xid")
                         .HasColumnName("xmin");
+
+                    b.Property<DateTime?>("VoidedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("VoidedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.HasKey("Id");
 
@@ -789,12 +892,19 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.Property<DateOnly?>("InvoiceDate")
                         .HasColumnType("date");
 
+                    b.Property<string>("PaymentMethod")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
                     b.Property<DateTime?>("PostedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("PostedBy")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
+
+                    b.Property<DateOnly?>("RevenueDate")
+                        .HasColumnType("date");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -813,6 +923,13 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("xid")
                         .HasColumnName("xmin");
+
+                    b.Property<DateTime?>("VoidedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("VoidedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.HasKey("Id");
 
@@ -885,6 +1002,13 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                 {
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ArchivedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ArchivedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<decimal?>("AverageCost")
                         .HasPrecision(18, 6)
@@ -1106,6 +1230,13 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasColumnType("xid")
                         .HasColumnName("xmin");
 
+                    b.Property<DateTime?>("VoidedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("VoidedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Status");
@@ -1174,6 +1305,9 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<Guid?>("ReversalOf")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid>("SourceId")
                         .HasColumnType("uuid");
 
@@ -1191,8 +1325,10 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("RawMaterialId", "OccurredAtUtc");
 
-                    b.HasIndex("SourceId", "Reason", "RawMaterialId")
+                    b.HasIndex("SourceId", "Reason", "RawMaterialId", "ReversalOf")
                         .IsUnique();
+
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("SourceId", "Reason", "RawMaterialId", "ReversalOf"), false);
 
                     b.ToTable("StockMovements", "inventory");
                 });
@@ -1249,6 +1385,147 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("Suppliers", "inventory");
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Treasury.SafeTransaction", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("ApprovedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateOnly>("BusinessDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid?>("ExpenseItemId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Fund")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<Guid?>("PurchaseInvoiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("RecordedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RecordedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateOnly?>("RevenueDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid?>("ReversalOf")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Source")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<Guid?>("SupplierId")
+                        .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.Property<DateTime?>("VoidedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("VoidedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpenseItemId");
+
+                    b.HasIndex("PurchaseInvoiceId");
+
+                    b.HasIndex("RevenueDate");
+
+                    b.HasIndex("ReversalOf")
+                        .IsUnique()
+                        .HasFilter("\"ReversalOf\" IS NOT NULL");
+
+                    b.HasIndex("SupplierId");
+
+                    b.HasIndex("Fund", "BusinessDate");
+
+                    b.ToTable("SafeTransactions", "inventory");
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Treasury.SupplierLedgerEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateOnly>("BusinessDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTime>("RecordedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RecordedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("ReversalOf")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("SourceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("SupplierId")
+                        .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SourceId", "ReversalOf")
+                        .IsUnique();
+
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("SourceId", "ReversalOf"), false);
+
+                    b.HasIndex("SupplierId", "BusinessDate");
+
+                    b.ToTable("SupplierLedgerEntries", "inventory");
                 });
 
             modelBuilder.Entity("OtantikPos.Node.Infrastructure.Costing.CostingSettings", b =>
@@ -1880,6 +2157,38 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.HasOne("OtantikPos.Inventory.Domain.RawMaterials.RawMaterial", null)
                         .WithMany()
                         .HasForeignKey("RawMaterialId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Treasury.SafeTransaction", b =>
+                {
+                    b.HasOne("OtantikPos.Inventory.Domain.Expenses.ExpenseItem", null)
+                        .WithMany()
+                        .HasForeignKey("ExpenseItemId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("OtantikPos.Inventory.Domain.Purchases.PurchaseInvoice", null)
+                        .WithMany()
+                        .HasForeignKey("PurchaseInvoiceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("OtantikPos.Inventory.Domain.Treasury.SafeTransaction", null)
+                        .WithMany()
+                        .HasForeignKey("ReversalOf")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("OtantikPos.Inventory.Domain.Suppliers.Supplier", null)
+                        .WithMany()
+                        .HasForeignKey("SupplierId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("OtantikPos.Inventory.Domain.Treasury.SupplierLedgerEntry", b =>
+                {
+                    b.HasOne("OtantikPos.Inventory.Domain.Suppliers.Supplier", null)
+                        .WithMany()
+                        .HasForeignKey("SupplierId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

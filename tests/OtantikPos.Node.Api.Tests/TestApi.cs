@@ -28,6 +28,7 @@ public sealed class TestApi : IAsyncDisposable
 {
     public const string BossPin = "9999";
     public const string CashierId = "staff-cashier", CashierPin = "2468";
+    public const string AccountantId = "staff-accountant", AccountantPin = "1593";
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
 
@@ -101,6 +102,14 @@ public sealed class TestApi : IAsyncDisposable
         var response = await manager.PutAsJsonAsync($"/api/staff/{CashierId}/pin", new SetPinRequest(CashierPin));
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
         return await SignInAsync(CashierId, CashierPin);
+    }
+
+    // Mona, the accountant, given a PIN by the manager.
+    public async Task<HttpClient> AccountantAsync(HttpClient manager)
+    {
+        var response = await manager.PutAsJsonAsync($"/api/staff/{AccountantId}/pin", new SetPinRequest(AccountantPin));
+        Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+        return await SignInAsync(AccountantId, AccountantPin);
     }
 
     // A till's live connection, as the Angular app opens it: a WebSocket with the token in the

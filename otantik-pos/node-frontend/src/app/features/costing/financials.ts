@@ -1,0 +1,505 @@
+import { Component, Injectable, computed, inject, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
+import { MatButtonModule } from '@angular/material/button';
+import { MAT_DIALOG_DATA, MatDialog, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatInputModule } from '@angular/material/input';
+import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatSelectModule } from '@angular/material/select';
+import { firstValueFrom } from 'rxjs';
+import {
+  CostingApi,
+  ExpenseItem,
+  FundingSource,
+  InvoicePaymentStatus,
+  PurchasePaymentMethod,
+  SafeTransactionKind,
+  SafeVoucherInput,
+  SupplierBalance,
+  fundingSourceLabels,
+  isRequested,
+  paymentMethodLabels,
+  safeKindLabels,
+} from '../../core/costing/costing.api';
+import { errorMessage } from '../../core/http/error-message';
+import { MoneyPipe } from '../../core/ui/money.pipe';
+import { NotifyService } from '../../core/ui/notify.service';
+import { Approvals } from './approvals';
+
+// The treasury's screens share these: dates as the till sends them, the dialog every safe entry is
+// entered in, and the service that sends it, which is a request for anyone who may not approve.
+
+// A day as the API takes it: 2026-10-12, in the till's own time.
+export function isoDay(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+export function todayIso(): string {
+  return isoDay(new Date());
+}
+
+export function monthBounds(year: number, month: number): { from: string; to: string } {
+  return { from: isoDay(new Date(year, month - 1, 1)), to: isoDay(new Date(year, month, 0)) };
+}
+
+// The till's business day, as the server keeps it: between midnight and the hour the day starts
+// it is still yesterday, the night the cash belongs to. Asked once, and kept; the browser's own
+// date until it answers.
+@Injectable({ providedIn: 'root' })
+export class BusinessDay {
+  private readonly api = inject(CostingApi);
+  private asked: Promise<string> | null = null;
+
+  today(): Promise<string> {
+    this.asked ??= (async () => {
+      try {
+        return (await firstValueFrom(this.api.businessToday())).today;
+      } catch {
+        // Asked again next time.
+        this.asked = null;
+        return todayIso();
+      }
+    })();
+    return this.asked;
+  }
+}
+
+// What a safe entry starts with: its kind, and for some a supplier, an amount or a day's takings.
+export interface SafeVoucherDialogData {
+  kind: SafeTransactionKind;
+  canApprove: boolean;
+  // The till's business day: the entry's date unless another is chosen, and the latest.
+  today?: string;
+  supplierId?: string;
+  amount?: number;
+  revenueDate?: string;
+}
+
+const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
+  OpeningBalance: ['CarriedOver', 'OwnerFinancing'],
+  Funding: ['OwnerFinancing', 'Other'],
+};
+
+// One safe entry, as it is entered: its date and amount, and what it needs: where the money came
+// from (opening balance, funding), which day's takings (moving them in), what the expense is (an
+// expense voucher), or which supplier is paid and how much they are owed. Closes with the entry to
+// send, or nothing when cancelled.
+@Component({
+  selector: 'app-safe-voucher-dialog',
+  imports: [FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, MatSelectModule, MoneyPipe],
+  template: `
+    <h2 mat-dialog-title>{{ label.en }} <span class="ar">{{ label.ar }}</span></h2>
+    <mat-dialog-content>
+      @if (loading()) {
+        <mat-progress-bar mode="indeterminate" />
+      }
+      <p class="muted">{{ explanation }}</p>
+      <div class="form">
+        @if (data.kind === 'SupplierPayment') {
+          <mat-form-field class="wide">
+            <mat-label>Supplier · المورد</mat-label>
+            <mat-select [(ngModel)]="supplierId" (ngModelChange)="supplierChosen()" aria-label="Supplier">
+              @for (s of owedSuppliers(); track s.supplierId) {
+                <mat-option [value]="s.supplierId">{{ s.supplier }} · owed {{ s.balance | money }}</mat-option>
+              } @empty {
+                <mat-option disabled>No supplier is owed anything</mat-option>
+              }
+            </mat-select>
+            @if (owed(); as o) {
+              <mat-hint>Owed {{ o | money }}</mat-hint>
+            }
+          </mat-form-field>
+        }
+        @if (data.kind === 'ExpenseVoucher') {
+          <mat-form-field class="wide">
+            <mat-label>Expense · المصروف</mat-label>
+            <mat-select [(ngModel)]="expenseItemId" aria-label="Expense">
+              @for (e of expenseItems(); track e.id) {
+                <mat-option [value]="e.id">{{ e.name }} <span class="muted">· {{ e.category }}</span></mat-option>
+              } @empty {
+                <mat-option disabled>No expense items yet: add them under Purchases · Expense items</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+        }
+        @if (sources.length) {
+          <mat-form-field class="wide">
+            <mat-label>Source · المصدر</mat-label>
+            <mat-select [(ngModel)]="source" aria-label="Source">
+              @for (s of sources; track s) {
+                <mat-option [value]="s">{{ sourceLabels[s].en }} · {{ sourceLabels[s].ar }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+        }
+        @if (data.kind === 'RevenueTransfer') {
+          <mat-form-field>
+            <mat-label>Takings of · إيراد يوم</mat-label>
+            <input matInput type="date" [(ngModel)]="revenueDate" [max]="date" aria-label="Takings of" />
+          </mat-form-field>
+        }
+        <mat-form-field>
+          <mat-label>{{ data.kind === 'RevenueTransfer' ? 'Counted · المبلغ المورد' : 'Amount · المبلغ' }}</mat-label>
+          <input matInput type="number" min="0" step="any" [(ngModel)]="amount" aria-label="Amount" />
+          <span matTextSuffix>&nbsp;L.E</span>
+        </mat-form-field>
+        <mat-form-field>
+          <mat-label>Date · التاريخ</mat-label>
+          <input matInput type="date" [(ngModel)]="date" [max]="today" aria-label="Date" />
+        </mat-form-field>
+        <mat-form-field class="wide" subscriptSizing="dynamic">
+          <mat-label>Notes · ملاحظات</mat-label>
+          <input matInput [(ngModel)]="notes" maxlength="300" aria-label="Notes" />
+        </mat-form-field>
+      </div>
+      @if (!data.canApprove) {
+        <p class="ask">
+          A manager approves safe entries: no cash moves until then. <span class="ar">يُرسل للمدير للموافقة.</span>
+        </p>
+      }
+      @if (problem(); as p) {
+        <p class="error">{{ p }}</p>
+      }
+    </mat-dialog-content>
+    <mat-dialog-actions align="end">
+      <button mat-button mat-dialog-close>Cancel</button>
+      <button mat-flat-button (click)="done()" [disabled]="!!problem()">{{ data.canApprove ? 'Save' : 'Send for approval' }}</button>
+    </mat-dialog-actions>
+  `,
+  styleUrl: './costing.scss',
+  styles: `
+    .form {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px 12px;
+    }
+    .wide {
+      grid-column: span 2;
+    }
+    .ar {
+      direction: rtl;
+      unicode-bidi: isolate;
+      margin-left: 6px;
+      opacity: 0.75;
+      font-size: 0.8em;
+      white-space: nowrap;
+    }
+    .ask {
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--till-warn) 14%, transparent);
+    }
+    .error {
+      color: var(--mat-sys-error);
+    }
+  `,
+})
+export class SafeVoucherDialog {
+  private readonly api = inject(CostingApi);
+  private readonly ref = inject<MatDialogRef<SafeVoucherDialog, SafeVoucherInput>>(MatDialogRef);
+  protected readonly data = inject<SafeVoucherDialogData>(MAT_DIALOG_DATA);
+
+  protected readonly label = safeKindLabels[this.data.kind];
+  protected readonly sources = sourcesFor[this.data.kind] ?? [];
+  protected readonly sourceLabels = fundingSourceLabels;
+  protected readonly today = this.data.today ?? todayIso();
+  protected readonly loading = signal(false);
+  protected readonly expenseItems = signal<ExpenseItem[]>([]);
+  private readonly balances = signal<SupplierBalance[]>([]);
+  protected readonly owedSuppliers = computed(() => this.balances().filter((b) => b.balance > 0));
+
+  protected amount: number | null = this.data.amount ?? null;
+  protected date = this.today;
+  protected revenueDate = this.data.revenueDate ?? this.today;
+  protected source: FundingSource | null = this.sources[0] ?? null;
+  protected supplierId: string | null = this.data.supplierId ?? null;
+  protected expenseItemId: string | null = null;
+  protected notes = '';
+
+  protected readonly explanation = {
+    OpeningBalance: 'The cash in the safe as the treasury starts: carried over from before, or put in by the owners.',
+    Funding: 'Money put into the safe from outside the sales: the owners’ financing, or another source.',
+    RevenueTransfer: 'A day’s cash takings counted into the safe. Enter what was counted: a shortfall shows on that day.',
+    ExpenseVoucher: 'Cash paid out of the safe for an expense: a bill, wages, petty cash. It counts on the profit and loss under its category.',
+    SupplierPayment: 'Cash paid to a supplier from the safe, against what the restaurant owes them.',
+    InvoicePayment: '',
+  }[this.data.kind];
+
+  constructor() {
+    void this.load();
+  }
+
+  protected owed(): number | null {
+    return this.balances().find((b) => b.supplierId === this.supplierId)?.balance ?? null;
+  }
+
+  // A supplier chosen: what they are owed, to pay in full unless less is typed.
+  protected supplierChosen(): void {
+    this.amount = this.owed();
+  }
+
+  // What stops it being sent, said plainly.
+  protected problem(): string | null {
+    const opening = this.data.kind === 'OpeningBalance';
+    if (this.amount === null || this.amount < 0 || (!opening && this.amount === 0)) {
+      return opening ? null : 'Enter an amount more than nothing.';
+    }
+    if (!this.date) {
+      return 'Enter the date.';
+    }
+    if (this.sources.length && !this.source) {
+      return 'Choose where the money came from.';
+    }
+    if (this.data.kind === 'ExpenseVoucher' && !this.expenseItemId) {
+      return 'Choose what the expense is.';
+    }
+    if (this.data.kind === 'SupplierPayment') {
+      const owed = this.owed();
+      if (!this.supplierId) {
+        return 'Choose the supplier.';
+      }
+      if (owed !== null && this.amount > owed) {
+        return 'That is more than they are owed.';
+      }
+    }
+    if (this.data.kind === 'RevenueTransfer' && (!this.revenueDate || this.revenueDate > this.date)) {
+      return 'Choose the day whose takings these are: that day or one before the entry.';
+    }
+    return null;
+  }
+
+  protected done(): void {
+    if (this.problem() || this.amount === null) {
+      return;
+    }
+    const voucher: SafeVoucherInput = {
+      requestId: crypto.randomUUID(),
+      transactionId: crypto.randomUUID(),
+      kind: this.data.kind,
+      amount: this.amount,
+      date: this.date,
+      source: this.sources.length ? this.source : null,
+      revenueDate: this.data.kind === 'RevenueTransfer' ? this.revenueDate : null,
+      supplierId: this.data.kind === 'SupplierPayment' ? this.supplierId : null,
+      expenseItemId: this.data.kind === 'ExpenseVoucher' ? this.expenseItemId : null,
+      notes: this.notes.trim() || null,
+      reason: null,
+    };
+    this.ref.close(voucher);
+  }
+
+  private async load(): Promise<void> {
+    if (this.data.kind !== 'ExpenseVoucher' && this.data.kind !== 'SupplierPayment') {
+      return;
+    }
+    this.loading.set(true);
+    try {
+      if (this.data.kind === 'ExpenseVoucher') {
+        this.expenseItems.set(await firstValueFrom(this.api.expenseItems()));
+      } else {
+        this.balances.set(await firstValueFrom(this.api.supplierBalances()));
+        if (this.supplierId && this.amount === null) {
+          this.amount = this.owed();
+        }
+      }
+    } finally {
+      this.loading.set(false);
+    }
+  }
+}
+
+export interface PayInvoiceDialogData {
+  what: string;
+  total: number;
+  hasSupplier: boolean;
+  canApprove: boolean;
+  today?: string;
+}
+
+// How an unpaid cash invoice is paid now: from the safe, from a day's takings, or put on credit.
+@Component({
+  selector: 'app-pay-invoice-dialog',
+  imports: [FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule, MatSelectModule, MoneyPipe],
+  template: `
+    <h2 mat-dialog-title>Pay {{ data.what }} <span class="ar">سداد الفاتورة</span></h2>
+    <mat-dialog-content>
+      <p>{{ data.total | money }}, not paid yet: its cash payment was rejected or voided.</p>
+      <mat-form-field class="wide">
+        <mat-label>Paid · طريقة الدفع</mat-label>
+        <mat-select [(ngModel)]="method" aria-label="How it is paid">
+          @for (m of methods; track m) {
+            <mat-option [value]="m" [disabled]="m === 'Credit' && !data.hasSupplier">{{ labels[m].en }} · {{ labels[m].ar }}</mat-option>
+          }
+        </mat-select>
+        @if (!data.hasSupplier) {
+          <mat-hint>On credit needs a supplier on the invoice.</mat-hint>
+        }
+      </mat-form-field>
+      @if (method === 'DayRevenue') {
+        <mat-form-field>
+          <mat-label>Takings of · إيراد يوم</mat-label>
+          <input matInput type="date" [(ngModel)]="revenueDate" [max]="today" aria-label="Takings of" />
+        </mat-form-field>
+      }
+      @if (!data.canApprove && method !== 'Credit') {
+        <p class="muted">A manager approves the payment: no cash moves until then.</p>
+      }
+    </mat-dialog-content>
+    <mat-dialog-actions align="end">
+      <button mat-button mat-dialog-close>Cancel</button>
+      <button mat-flat-button [disabled]="!method || (method === 'DayRevenue' && !revenueDate)"
+        [mat-dialog-close]="{ method, revenueDate: method === 'DayRevenue' ? revenueDate : null }">
+        {{ data.canApprove || method === 'Credit' ? 'Pay' : 'Send for approval' }}
+      </button>
+    </mat-dialog-actions>
+  `,
+  styles: `
+    .wide {
+      width: 100%;
+    }
+    .ar {
+      direction: rtl;
+      unicode-bidi: isolate;
+      margin-left: 6px;
+      opacity: 0.75;
+      font-size: 0.8em;
+    }
+  `,
+})
+export class PayInvoiceDialog {
+  protected readonly data = inject<PayInvoiceDialogData>(MAT_DIALOG_DATA);
+  protected readonly methods: PurchasePaymentMethod[] = ['Safe', 'DayRevenue', 'Credit'];
+  protected readonly labels = paymentMethodLabels;
+  protected readonly today = this.data.today ?? todayIso();
+  protected method: PurchasePaymentMethod | null = 'Safe';
+  protected revenueDate = this.today;
+}
+
+// What a supplier was owed before the treasury: an opening debt.
+@Component({
+  selector: 'app-supplier-opening-dialog',
+  imports: [FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule],
+  template: `
+    <h2 mat-dialog-title>Owed before the treasury <span class="ar">رصيد افتتاحي للمورد</span></h2>
+    <mat-dialog-content>
+      <p class="muted">What {{ data.supplier }} was owed from invoices entered before the treasury. No cash moves.</p>
+      <mat-form-field>
+        <mat-label>Owed · المبلغ المستحق</mat-label>
+        <input matInput type="number" min="0" step="any" [(ngModel)]="owed" aria-label="Owed" />
+        <span matTextSuffix>&nbsp;L.E</span>
+      </mat-form-field>
+      <mat-form-field>
+        <mat-label>As of · بتاريخ</mat-label>
+        <input matInput type="date" [(ngModel)]="date" aria-label="As of" />
+      </mat-form-field>
+    </mat-dialog-content>
+    <mat-dialog-actions align="end">
+      <button mat-button mat-dialog-close>Cancel</button>
+      <button mat-flat-button [disabled]="!owed || owed <= 0 || !date" [mat-dialog-close]="{ owed, date }">Save</button>
+    </mat-dialog-actions>
+  `,
+  styles: `
+    .ar {
+      direction: rtl;
+      unicode-bidi: isolate;
+      margin-left: 6px;
+      opacity: 0.75;
+      font-size: 0.8em;
+    }
+  `,
+})
+export class SupplierOpeningDialog {
+  protected readonly data = inject<{ supplier: string; today?: string }>(MAT_DIALOG_DATA);
+  protected owed: number | null = null;
+  protected date = this.data.today ?? todayIso();
+}
+
+// Enters safe entries: at once for a manager, as a request for anyone else; and pays invoices.
+@Injectable({ providedIn: 'root' })
+export class Treasury {
+  private readonly api = inject(CostingApi);
+  private readonly dialog = inject(MatDialog);
+  private readonly notify = inject(NotifyService);
+  private readonly approvals = inject(Approvals);
+  private readonly businessDay = inject(BusinessDay);
+
+  // Asks for it, then sends it. True when something was entered or asked for.
+  async enter(kind: SafeTransactionKind, preset: Partial<SafeVoucherDialogData> = {}): Promise<boolean> {
+    const today = await this.businessDay.today();
+    const voucher = await firstValueFrom(
+      this.dialog
+        .open<SafeVoucherDialog, SafeVoucherDialogData, SafeVoucherInput>(SafeVoucherDialog, {
+          data: { ...preset, kind, canApprove: this.approvals.canApprove(), today },
+          width: '520px',
+          maxWidth: '95vw',
+        })
+        .afterClosed(),
+    );
+    if (!voucher) {
+      return false;
+    }
+    try {
+      const result = await firstValueFrom(this.api.recordVoucher(voucher));
+      if (isRequested(result)) {
+        await this.approvals.requested(result);
+      } else {
+        this.notify.info(`${safeKindLabels[kind].en} entered: ${voucher.amount.toLocaleString('en-EG', { minimumFractionDigits: 2 })} L.E.`);
+      }
+      return true;
+    } catch (error) {
+      this.notify.error(error, 'The entry could not be saved.');
+      return false;
+    }
+  }
+
+  // An unpaid cash invoice, paid now. The status it is left in, or null when cancelled or refused.
+  async payInvoice(invoiceId: string, data: Omit<PayInvoiceDialogData, 'canApprove' | 'today'>): Promise<InvoicePaymentStatus | null> {
+    const today = await this.businessDay.today();
+    const answer = await firstValueFrom(
+      this.dialog
+        .open<PayInvoiceDialog, PayInvoiceDialogData, { method: PurchasePaymentMethod; revenueDate: string | null }>(PayInvoiceDialog, {
+          data: { ...data, canApprove: this.approvals.canApprove(), today },
+          width: '440px',
+        })
+        .afterClosed(),
+    );
+    if (!answer) {
+      return null;
+    }
+    try {
+      const { paymentStatus } = await firstValueFrom(this.api.payPurchaseInvoice(invoiceId, crypto.randomUUID(), answer.method, answer.revenueDate));
+      this.notify.info(
+        paymentStatus === 'Pending'
+          ? 'Payment submitted to the manager for approval. No cash moves until then.'
+          : paymentStatus === 'OnCredit'
+            ? 'Put on credit: owed to the supplier.'
+            : 'Paid.',
+      );
+      await this.approvals.refresh();
+      return paymentStatus;
+    } catch (error) {
+      this.notify.error(error, errorMessage(error, 'The invoice could not be paid.'));
+      return null;
+    }
+  }
+
+  async supplierOpening(supplierId: string, supplier: string): Promise<boolean> {
+    const today = await this.businessDay.today();
+    const answer = await firstValueFrom(
+      this.dialog
+        .open<SupplierOpeningDialog, { supplier: string; today: string }, { owed: number; date: string }>(SupplierOpeningDialog, { data: { supplier, today } })
+        .afterClosed(),
+    );
+    if (!answer) {
+      return false;
+    }
+    try {
+      await firstValueFrom(this.api.supplierOpeningBalance(supplierId, crypto.randomUUID(), answer.owed, answer.date));
+      this.notify.info(`${supplier}: owed ${answer.owed.toLocaleString('en-EG', { minimumFractionDigits: 2 })} L.E from before the treasury.`);
+      return true;
+    } catch (error) {
+      this.notify.error(error, 'The opening debt could not be saved.');
+      return false;
+    }
+  }
+}

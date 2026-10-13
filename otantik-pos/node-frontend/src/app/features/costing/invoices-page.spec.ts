@@ -7,6 +7,7 @@ import { NotifyService } from '../../core/ui/notify.service';
 import { InvoicePage } from './invoice-page';
 import { InvoicePaperDialog } from './invoice-paper';
 import { InvoiceViewDialog } from './invoice-view-dialog';
+import { Approvals } from './approvals';
 import { InvoicesPage } from './invoices-page';
 
 function summary(overrides: Partial<PurchaseInvoiceSummary>): PurchaseInvoiceSummary {
@@ -26,6 +27,9 @@ function summary(overrides: Partial<PurchaseInvoiceSummary>): PurchaseInvoiceSum
     attachmentFileName: null,
     inventoryTotal: overrides.total ?? 0,
     expenseTotal: 0,
+    paymentMethod: 'Safe',
+    revenueDate: null,
+    paymentStatus: 'Paid',
     ...overrides,
   };
 }
@@ -64,6 +68,9 @@ const posted: PurchaseInvoice = {
   ],
   inventoryTotal: 109.5,
   expenseTotal: 0,
+  paymentMethod: 'DayRevenue',
+  revenueDate: '2026-10-05',
+  paymentStatus: 'Paid',
 };
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
@@ -87,7 +94,7 @@ describe('the invoices history', () => {
   }
 
   beforeEach(() => {
-    purchaseInvoices.mockReset().mockReturnValue(of([farms, oils]));
+    purchaseInvoices.mockReset().mockImplementation((status: string) => of(status === 'Voided' ? [] : [farms, oils]));
     purchaseInvoice.mockReset().mockReturnValue(of(posted));
     purchaseInvoiceFile.mockReset().mockReturnValue(of(new Blob(['\xff\xd8\xff'], { type: 'image/jpeg' })));
     open.mockReset();
@@ -97,23 +104,53 @@ describe('the invoices history', () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  async function history() {
-    configure();
+  async function history(extra: unknown[] = []) {
+    configure(extra);
     const fixture = TestBed.createComponent(InvoicesPage);
     await fixture.whenStable();
     fixture.detectChanges();
     return { el: fixture.nativeElement as HTMLElement, page: fixture.componentInstance as unknown as Record<string, any> };
   }
 
+  it('voids a posted invoice through the approvals, marks one waiting, and keeps the voided aside', async () => {
+    const old = summary({ id: 'old', status: 'Voided', supplierName: 'Delta Oils', supplierInvoiceNumber: 'D-1', total: 500, voidedBy: 'Omar', voidedAtUtc: '2026-10-06T10:00:00Z' });
+    purchaseInvoices.mockImplementation((status: string) => of(status === 'Voided' ? [old] : [farms, oils]));
+    const approvals = {
+      pendingFor: vi.fn((id: string) => (id === 'oils' ? { requestedBy: 'Mona', module: 'PurchaseInvoice', action: 'Delete' } : undefined)),
+      refresh: vi.fn(),
+      delete: vi.fn().mockResolvedValue('Requested'),
+    };
+    const { el, page } = await history([{ provide: Approvals, useValue: approvals }]);
+    const rows = () => [...el.querySelectorAll('tbody tr')];
+
+    expect(rows().map((r) => r.classList.contains('pending-deletion'))).toEqual([false, true]);
+    expect(text(rows()[1])).toContain('Void requestedطلب إلغاء by Mona');
+    // Waiting: locked, no second delete.
+    expect(rows()[1].querySelector('button[aria-label^="Delete"]')).toBeNull();
+    expect(page['shownTotal']()).toBe(2000);
+
+    rows()[0].querySelector<HTMLButtonElement>('button[aria-label="Delete invoice F-1001"]')!.click();
+    expect(approvals.delete).toHaveBeenCalledWith('PurchaseInvoice', 'farms', 'invoice F-1001');
+
+    // Voided ones only when asked for: kept, marked, and out of the total.
+    page['showVoided'].set(true);
+    await Promise.resolve();
+    TestBed.tick();
+    expect(rows()).toHaveLength(3);
+    expect(text(rows()[2])).toContain('Voidedملغاة by Omar');
+    expect(rows()[2].querySelector('button[aria-label^="Delete"]')).toBeNull();
+    expect(page['shownTotal']()).toBe(2000);
+  });
+
   it('lists the posted invoices with their date, supplier, total, who entered them, the paper, and Show', async () => {
     const { el } = await history();
 
     expect(purchaseInvoices).toHaveBeenCalledWith('Posted');
     const rows = [...el.querySelectorAll('tbody tr')];
-    expect(rows.map((r) => [...r.querySelectorAll('td')].slice(0, 5).map(text))).toEqual([
-      ['5 Oct 2026', 'Nile Farms', 'F-1001', 'L.E 100.00', 'Omar'],
+    expect(rows.map((r) => [...r.querySelectorAll('td')].slice(0, 6).map(text))).toEqual([
+      ['5 Oct 2026', 'Nile Farms', 'F-1001', 'L.E 100.00', 'From the safe', 'Omar'],
       // No date on the paper: the day it was posted.
-      ['7 Oct 2026', 'Delta Oils', 'D-77', 'L.E 1,900.00', 'Sara'],
+      ['7 Oct 2026', 'Delta Oils', 'D-77', 'L.E 1,900.00', 'From the safe', 'Sara'],
     ]);
     expect(rows.map((r) => !!r.querySelector('button[aria-label^="View"]'))).toEqual([true, false]);
     expect(rows.map((r) => text(r.querySelector('button.show')!))).toEqual(['visibility Show · عرض', 'visibility Show · عرض']);
@@ -169,6 +206,7 @@ describe('the invoices history', () => {
         ['Invoice no. · رقم الفاتورة', 'F-1001'],
         ['Date · التاريخ', '5 Oct 2026'],
         ['Total · الإجمالي', 'L.E 109.50'],
+        ['Paid · طريقة الدفع', 'Paid from a day’s takings of 5 Oct'],
       ]);
       expect([...el.querySelectorAll('thead th')].map((th) => th.firstChild!.textContent!.trim())).toEqual([
         'Item',

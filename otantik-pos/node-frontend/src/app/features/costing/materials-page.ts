@@ -1,4 +1,4 @@
-import { DecimalPipe } from '@angular/common';
+import { DatePipe, DecimalPipe } from '@angular/common';
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
@@ -7,18 +7,20 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { firstValueFrom } from 'rxjs';
-import { CostingApi, MaterialCost, SaveMaterial, unitLabels } from '../../core/costing/costing.api';
+import { CostingApi, ApprovalRequest, MaterialCost, SaveMaterial, unitLabels } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
+import { Approvals, pendingLabel } from './approvals';
 import { MaterialDialog } from './material-dialog';
 
 // Raw materials and what they cost: AP$ per purchase unit (the weighted average of what was paid),
 // the default yield, and EP$ after it. Stock on hand and its value too.
 @Component({
   selector: 'app-materials-page',
-  imports: [DecimalPipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatInputModule, MatProgressBarModule, MoneyPipe],
+  imports: [DatePipe, DecimalPipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatInputModule, MatProgressBarModule, MatTooltipModule, MoneyPipe],
   template: `
     <div class="toolbar">
       <mat-form-field subscriptSizing="dynamic">
@@ -50,16 +52,21 @@ import { MaterialDialog } from './material-dialog';
               <th class="num">On hand<span class="ar">الرصيد</span></th>
               <th class="num">Stock value<span class="ar">قيمة المخزون</span></th>
               <th class="num">Last price paid<span class="ar">آخر سعر</span></th>
+              <th class="num"><span class="visually-hidden">Actions</span></th>
             </tr>
           </thead>
           <tbody>
             @for (m of shown(); track m.id) {
-              <tr class="clickable" (click)="edit(m)">
+              <tr class="clickable" [class.pending-deletion]="!!pendingOf(m)" (click)="edit(m)">
                 <td class="code">{{ m.code ?? '' }}</td>
                 <td>
                   {{ m.name }}
                   @if (m.kind === 'Prep') {
                     <span class="badge" title="Made in the kitchen: its cost comes from its batches">Prep · نصف مصنع</span>
+                  }
+                  @if (pendingOf(m); as p) {
+                    <div><span class="pending-badge">{{ pendingLabel(p).en }}<span class="ar">{{ pendingLabel(p).ar }}</span></span>
+                      <span class="muted small"> by {{ p.requestedBy }}, {{ p.requestedAtUtc | date: 'd MMM' }}</span></div>
                   }
                 </td>
                 <td>{{ m.category ?? '' }}</td>
@@ -78,6 +85,15 @@ import { MaterialDialog } from './material-dialog';
                 </td>
                 <td class="num">{{ m.stockValue === null ? '' : (m.stockValue | money) }}</td>
                 <td class="num">{{ m.lastPurchaseCostPerPurchaseUnit === null ? '' : (m.lastPurchaseCostPerPurchaseUnit | money) }}</td>
+                <td class="num actions" (click)="$event.stopPropagation()">
+                  @if (pendingOf(m)) {
+                    <mat-icon class="locked" matTooltip="Waiting for a manager's approval: locked until decided" aria-label="Locked: deletion requested">lock_clock</mat-icon>
+                  } @else {
+                    <button mat-icon-button class="danger" (click)="remove(m)" matTooltip="Delete" [attr.aria-label]="'Delete ' + m.name">
+                      <mat-icon>delete</mat-icon>
+                    </button>
+                  }
+                </td>
               </tr>
             }
           </tbody>
@@ -86,11 +102,31 @@ import { MaterialDialog } from './material-dialog';
     }
   `,
   styleUrl: './costing.scss',
+  styles: `
+    .danger {
+      color: var(--mat-sys-error);
+    }
+    .small {
+      font-size: 0.85em;
+    }
+    .actions {
+      white-space: nowrap;
+    }
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+    }
+  `,
 })
 export class MaterialsPage {
+  protected readonly pendingLabel = pendingLabel;
   private readonly api = inject(CostingApi);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
+  private readonly approvals = inject(Approvals);
 
   protected readonly materials = signal<MaterialCost[]>([]);
   protected readonly loading = signal(true);
@@ -119,7 +155,24 @@ export class MaterialsPage {
     return ((m.costPerPurchaseUnit ?? 0) * 100) / m.defaultYieldPercent;
   }
 
+  protected pendingOf(material: MaterialCost): ApprovalRequest | undefined {
+    return this.approvals.pendingFor(material.id);
+  }
+
+  // Archived for a manager; asked of one for anyone else. Only one in no recipe and with nothing
+  // on the shelf can go: the till says why otherwise.
+  protected async remove(material: MaterialCost): Promise<void> {
+    if ((await this.approvals.delete('RawMaterial', material.id, material.name)) === 'Applied') {
+      await this.load();
+    }
+  }
+
   protected async edit(material: MaterialCost | null): Promise<void> {
+    // Locked while its deletion waits for a manager.
+    if (material && this.pendingOf(material)) {
+      this.notify.info(`${material.name} is waiting for a manager to decide its deletion; it can be changed after.`);
+      return;
+    }
     const saved = await firstValueFrom(
       this.dialog.open<MaterialDialog, MaterialCost | null, SaveMaterial>(MaterialDialog, { data: material, width: '640px' }).afterClosed(),
     );
@@ -137,6 +190,7 @@ export class MaterialsPage {
 
   private async load(): Promise<void> {
     this.error.set(null);
+    void this.approvals.refresh();
     try {
       this.materials.set(await firstValueFrom(this.api.materials()));
     } catch (error) {

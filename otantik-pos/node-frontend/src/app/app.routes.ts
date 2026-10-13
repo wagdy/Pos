@@ -1,5 +1,7 @@
 import { Routes } from '@angular/router';
-import { permissionGuard, signedInGuard, signedOutGuard } from './core/auth/guards';
+import { inject } from '@angular/core';
+import { AuthService } from './core/auth/auth.service';
+import { homePath, ordersGuard, permissionGuard, signedInGuard, signedOutGuard } from './core/auth/guards';
 import { Permissions } from './core/auth/permissions';
 
 export const routes: Routes = [
@@ -13,9 +15,10 @@ export const routes: Routes = [
     canActivate: [signedInGuard],
     loadComponent: () => import('./features/shell/shell').then((m) => m.Shell),
     children: [
-      { path: '', pathMatch: 'full', redirectTo: 'orders' },
+      { path: '', pathMatch: 'full', redirectTo: () => homePath(inject(AuthService)) },
       {
         path: 'orders',
+        canActivate: [ordersGuard],
         loadComponent: () => import('./features/orders/open-orders-page').then((m) => m.OpenOrdersPage),
       },
       {
@@ -139,6 +142,35 @@ export const routes: Routes = [
             ],
           },
           {
+            // Financials (الماليات): the safe, its funding, expense vouchers, and what suppliers are owed and paid.
+            path: 'financials',
+            loadComponent: () => import('./features/costing/financials-shell').then((m) => m.FinancialsShell),
+            children: [
+              { path: '', pathMatch: 'full', redirectTo: 'safe' },
+              {
+                path: 'safe',
+                loadComponent: () => import('./features/costing/safe-page').then((m) => m.SafePage),
+              },
+              {
+                path: 'funding',
+                loadComponent: () => import('./features/costing/funding-page').then((m) => m.FundingPage),
+              },
+              {
+                path: 'expenses',
+                loadComponent: () => import('./features/costing/expense-vouchers-page').then((m) => m.ExpenseVouchersPage),
+              },
+              {
+                // ?supplier= for one supplier's statement of account.
+                path: 'suppliers',
+                loadComponent: () => import('./features/costing/supplier-debts-page').then((m) => m.SupplierDebtsPage),
+              },
+              {
+                path: 'payments',
+                loadComponent: () => import('./features/costing/supplier-payments-page').then((m) => m.SupplierPaymentsPage),
+              },
+            ],
+          },
+          {
             path: 'theoretical',
             loadComponent: () => import('./features/costing/theoretical-page').then((m) => m.TheoreticalPage),
           },
@@ -157,6 +189,12 @@ export const routes: Routes = [
           {
             path: 'settings',
             loadComponent: () => import('./features/costing/settings-page').then((m) => m.SettingsPage),
+          },
+          {
+            // A manager's: what others have asked for, waiting for a decision.
+            path: 'approvals',
+            canActivate: [permissionGuard(Permissions.ApprovalDecide)],
+            loadComponent: () => import('./features/costing/approvals-page').then((m) => m.ApprovalsPage),
           },
         ],
       },

@@ -102,6 +102,8 @@ describe('a recipe', () => {
   const recipeCardById = vi.fn();
   const writeRecipe = vi.fn();
   const deleteRecipe = vi.fn();
+  const requestDeletion = vi.fn();
+  const approvalRequests = vi.fn();
   const restoreRecipe = vi.fn();
   const recipeCategories = vi.fn();
   const open = vi.fn();
@@ -121,6 +123,8 @@ describe('a recipe', () => {
             writeRecipe,
             deleteRecipe,
             restoreRecipe,
+            requestDeletion,
+            approvalRequests,
             materials: () => of([beef, bun, tomato, saffron]),
             menu: () => of([cheeseburgerMenu, garlicBreadMenu]),
             recipeCategories,
@@ -166,6 +170,8 @@ describe('a recipe', () => {
     recipeCardById.mockReset().mockImplementation((id: string) => of(id === 'r1' ? r1 : trial));
     writeRecipe.mockReset().mockImplementation((id: string | null) => of({ id: id ?? 'r9' }));
     deleteRecipe.mockReset().mockReturnValue(of(undefined));
+    requestDeletion.mockReset().mockReturnValue(of({ outcome: 'Applied', request: {} }));
+    approvalRequests.mockReset().mockReturnValue(of({ pending: [], decided: [] }));
     restoreRecipe.mockReset().mockReturnValue(of({ id: 'r1', catalogItemId: 6 }));
     recipeCategories.mockReset().mockReturnValue(of([mains, sauces]));
     open.mockReset();
@@ -395,17 +401,33 @@ describe('a recipe', () => {
     });
 
     it('is deleted after a warning that its menu item stops taking stock', async () => {
-      const { fixture, el, page } = await render('view', { recipeId: 'r1' });
-
-      [...el.querySelectorAll('button')].find((b) => text(b).includes('Delete'))!.click();
-      fixture.detectChanges();
-      expect(text(el.querySelector('.banner.danger')!)).toContain('Sales of Classic Cheeseburger stop taking stock');
-      expect(deleteRecipe).not.toHaveBeenCalled();
+      open.mockReturnValue({ afterClosed: () => of({ reason: null }) });
+      const { page } = await render('view', { recipeId: 'r1' });
 
       await page['removeRecipe']();
-      expect(deleteRecipe).toHaveBeenCalledWith('r1');
-      expect(notify.info).toHaveBeenCalledWith('House burger deleted: Classic Cheeseburger no longer takes stock.');
+
+      expect(open.mock.lastCall![1].data).toMatchObject({
+        module: 'Recipe',
+        what: 'House burger',
+        detail: 'Sales of Classic Cheeseburger stop taking stock until another recipe is linked to it.',
+      });
+      expect(requestDeletion).toHaveBeenCalledWith(expect.any(String), 'Recipe', 'r1', null);
+      expect(notify.info).toHaveBeenCalledWith('House burger deleted.');
       expect(navigate).toHaveBeenCalledWith(['/costing/recipes']);
+    });
+
+    it('waiting for a manager to decide its deletion, says who asked and cannot be edited or deleted', async () => {
+      approvalRequests.mockReturnValue(of({
+        pending: [{ id: 'q1', module: 'Recipe', action: 'Delete', recordId: 'r1', summary: 'Recipe House burger', changes: [], reason: null, requestedBy: 'Mona',
+          requestedAtUtc: '2026-10-08T09:00:00Z', status: 'Pending', decidedBy: null, decidedAtUtc: null, decisionNote: null }],
+        decided: [],
+      }));
+      const { fixture, el } = await render('view', { recipeId: 'r1' });
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      expect(text(el.querySelector('.banner.pending')!)).toContain('Mona asked to delete this recipe');
+      expect([...el.querySelectorAll('button, a')].map(text).filter((t) => t.includes('Edit') || t.includes('Delete'))).toEqual([]);
     });
 
     it('when deleted, says so, and can be restored', async () => {

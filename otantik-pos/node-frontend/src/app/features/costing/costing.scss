@@ -197,3 +197,124 @@ tr.surplus td.strong,
   color: var(--mat-sys-on-tertiary-container);
   white-space: nowrap;
 }
+
+// A record whose deletion waits for a manager: still in every figure, marked, and locked.
+tr.pending-deletion td {
+  background: color-mix(in srgb, var(--till-warn) 12%, var(--mat-sys-surface));
+}
+
+.pending-badge,
+.voided-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font: var(--mat-sys-label-small);
+  white-space: nowrap;
+
+  .ar {
+    display: inline;
+    margin-left: 4px;
+  }
+}
+
+.pending-badge {
+  background: color-mix(in srgb, var(--till-warn) 22%, transparent);
+  color: var(--till-warn);
+}
+
+// Posted, then deleted with a manager's approval: kept, its stock reversed.
+.voided-badge {
+  background: var(--mat-sys-surface-container-highest);
+  color: var(--mat-sys-on-surface-variant);
+  text-decoration: none;
+}
+
+.locked {
+  color: var(--till-warn);
+  vertical-align: middle;
+}
+
+// A record a manager has been asked about: what was asked, and that it waits.
+.pending-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--till-warn) 16%, var(--mat-sys-surface));
+  color: var(--mat-sys-on-surface);
+
+  > mat-icon {
+    flex: none;
+    color: var(--till-warn);
+  }
+}
+
+// Figures at a glance, a tile each: the treasury's screens.
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.tile {
+  display: grid;
+  gap: 2px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--mat-sys-outline-variant);
+  background: var(--mat-sys-surface);
+
+  .label {
+    font: var(--mat-sys-label-medium);
+    color: var(--mat-sys-on-surface-variant);
+  }
+  strong {
+    font: var(--mat-sys-headline-small);
+  }
+  &.key {
+    background: var(--mat-sys-secondary-container);
+    color: var(--mat-sys-on-secondary-container);
+    border-color: transparent;
+  }
+}
+
+// What a safe entry is: opening balance, funding, takings, a voucher, a payment.
+.kind {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font: var(--mat-sys-label-small);
+  background: var(--mat-sys-surface-container-high);
+  white-space: nowrap;
+}
+
+// Where an invoice's payment stands: paid, waiting for approval, unpaid, on credit.
+.pay,
+.pay-status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font: var(--mat-sys-label-small);
+  white-space: nowrap;
+  background: var(--mat-sys-surface-container-high);
+
+  &.Paid {
+    background: color-mix(in srgb, var(--till-ok) 18%, transparent);
+  }
+  &.Pending {
+    background: color-mix(in srgb, var(--till-warn) 22%, transparent);
+    color: var(--till-warn);
+  }
+  &.Unpaid {
+    background: color-mix(in srgb, var(--mat-sys-error) 14%, transparent);
+    color: var(--mat-sys-error);
+  }
+  &.OnCredit {
+    background: var(--mat-sys-secondary-container);
+    color: var(--mat-sys-on-secondary-container);
+  }
+}

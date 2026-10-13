@@ -37,10 +37,17 @@ const nileFarms = supplier('nile', 'Nile Farms');
 const deltaOils = supplier('delta', 'Delta Oils');
 
 // What the till answers with: the invoice as saved, each line also in the material's own unit.
-function asInvoice(id: string, body: SavePurchaseInvoice, status: PurchaseInvoice['status'] = 'Draft'): PurchaseInvoice {
+function asInvoice(
+  id: string,
+  body: Omit<SavePurchaseInvoice, 'paymentMethod' | 'revenueDate'> & Partial<SavePurchaseInvoice>,
+  status: PurchaseInvoice['status'] = 'Draft',
+): PurchaseInvoice {
   return {
     id,
     status,
+    paymentMethod: null,
+    revenueDate: null,
+    paymentStatus: status === 'Posted' ? 'Paid' : 'NotPosted',
     ...body,
     supplierName: [nileFarms, deltaOils].find((s) => s.id === body.supplierId)?.name ?? null,
     createdAtUtc: '2026-10-07T09:00:00Z',
@@ -104,6 +111,8 @@ describe('entering a supplier invoice', () => {
   }
 
   function fill(page: Record<string, any>, lines: { rawMaterialId: string | null; quantity: number; cost: number | null; unitSize?: number }[]) {
+    // Paid from the safe, unless the test says otherwise.
+    page['paymentMethod'] ??= 'Safe';
     page['lines'].set(
       lines.map((l) => ({ itemType: l.rawMaterialId ? 'Inventory' : null, expenseItemId: null, unitSize: null, unitLabel: '', ...l })),
     );
@@ -132,6 +141,39 @@ describe('entering a supplier invoice', () => {
     notify.error.mockReset();
   });
 
+  it('needs to know how the invoice is paid: on credit from a supplier, from a day’s takings on a day', async () => {
+    const page = await render();
+    fill(page, [{ rawMaterialId: 'oil', quantity: 20, cost: 1900 }]);
+    page['paymentMethod'] = null;
+    page['touch']();
+    expect(page['ready']()).toBe(false);
+
+    page['paymentMethod'] = 'Credit';
+    page['touch']();
+    expect(page['ready']()).toBe(false);
+    page['supplierEntered'](nileFarms);
+    expect(page['ready']()).toBe(true);
+
+    page['paymentMethod'] = 'DayRevenue';
+    page['revenueDate'] = '2026-10-06';
+    page['touch']();
+    await page['save']();
+    expect(savePurchaseInvoice.mock.lastCall![1]).toMatchObject({ paymentMethod: 'DayRevenue', revenueDate: '2026-10-06', supplierId: 'nile' });
+  });
+
+  it('says when its cash payment waits for a manager', async () => {
+    postPurchaseInvoice.mockImplementation((id: string) =>
+      of({ ...asInvoice(id, { supplierId: null, supplierInvoiceNumber: null, invoiceDate: null, lines: [] }, 'Posted'), paymentMethod: 'Safe', paymentStatus: 'Pending', total: 95 }),
+    );
+    const page = await render();
+    fill(page, [{ rawMaterialId: 'oil', quantity: 1, cost: 95 }]);
+    await page['save']();
+
+    await page['confirm']();
+
+    expect(notify.info).toHaveBeenCalledWith(expect.stringContaining('Its payment waits for a manager’s approval'));
+  });
+
   it('saves a draft and shows it for review; only Confirm & post takes the stock in', async () => {
     const page = await render();
     page['supplierEntered'](deltaOils);
@@ -150,6 +192,8 @@ describe('entering a supplier invoice', () => {
       supplierId: 'delta',
       supplierInvoiceNumber: 'D-77',
       invoiceDate: '2026-10-06',
+      paymentMethod: 'Safe',
+      revenueDate: null,
       lines: [
         { itemType: 'Inventory', rawMaterialId: 'oil', expenseItemId: null, enteredQuantity: 20, unitLabel: 'L', unitSize: 1000, cost: 1900 },
         { itemType: 'Inventory', rawMaterialId: 'bun', expenseItemId: null, enteredQuantity: 50, unitLabel: 'piece', unitSize: 1, cost: null },
@@ -429,6 +473,9 @@ describe('entering a supplier invoice', () => {
       attachmentFileName: 'farm.jpg',
       inventoryTotal: 100,
       expenseTotal: 0,
+      paymentMethod: null,
+      revenueDate: null,
+      paymentStatus: 'NotPosted',
     };
 
     it('are listed, and one continued comes back as it was entered', async () => {
@@ -439,6 +486,7 @@ describe('entering a supplier invoice', () => {
             supplierId: 'nile',
             supplierInvoiceNumber: 'F-1001',
             invoiceDate: '2026-10-05',
+            paymentMethod: 'Credit',
             lines: [{ itemType: 'Inventory', rawMaterialId: 'tomatoes', expenseItemId: null, enteredQuantity: 5, unitLabel: 'kg', unitSize: 1000, cost: 100 }],
           }),
           attachment: { fileName: 'farm.jpg' },
@@ -464,8 +512,10 @@ describe('entering a supplier invoice', () => {
         { entry: tomatoes, itemType: 'Inventory', rawMaterialId: 'tomatoes', expenseItemId: null, quantity: 5, unitSize: 1000, unitLabel: '', cost: 100 },
       ]);
 
+      // How it is paid comes back too.
+      expect(page['paymentMethod']).toBe('Credit');
       await page['save']();
-      expect(savePurchaseInvoice).toHaveBeenCalledWith('draft-1', expect.objectContaining({ supplierId: 'nile' }));
+      expect(savePurchaseInvoice).toHaveBeenCalledWith('draft-1', expect.objectContaining({ supplierId: 'nile', paymentMethod: 'Credit' }));
       page['reset']();
       expect(page['drafts']()).toEqual([draft]);
     });
