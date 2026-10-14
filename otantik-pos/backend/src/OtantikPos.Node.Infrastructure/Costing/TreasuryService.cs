@@ -60,8 +60,12 @@ public sealed record SafeMonth(
     SafeOpening OpeningKind,
     // The opening entry's source, when the treasury opened this month.
     FundingSource? OpeningSource,
+    // What stands: an entry voided this month, and its void, are in neither.
     decimal In,
     decimal Out,
+    // The entries voided this month, money in and money out: left out of In and Out with their voids.
+    decimal VoidedIn,
+    decimal VoidedOut,
     decimal ClosingBalance,
     decimal BalanceNow,
     bool HasOpeningBalance,
@@ -185,6 +189,16 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
             .ToListAsync(cancellationToken);
         var opening = rows.FirstOrDefault(t => t.Kind == SafeTransactionKind.OpeningBalance && !t.IsReversal);
 
+        // An entry and its void, both this month, come to nothing: In and Out count neither, and
+        // the entry is shown apart as voided. An earlier month's entry voided this month stays in
+        // that month, which closed with it, and its void counts here, where it was made.
+        var ids = rows.Select(t => t.Id).ToHashSet();
+        var cancelled = rows.Where(t => t.ReversalOf is { } original && ids.Contains(original))
+            .SelectMany(t => new[] { t.Id, t.ReversalOf!.Value })
+            .ToHashSet();
+        var standing = rows.Where(t => !cancelled.Contains(t.Id)).ToList();
+        var voided = rows.Where(t => cancelled.Contains(t.Id) && !t.IsReversal).ToList();
+
         var names = await NamesAsync(rows, cancellationToken);
         var balance = before;
         var entries = rows.Select(t =>
@@ -197,8 +211,10 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
             year, month, from, to, Money(before),
             anyBefore ? SafeOpening.CarriedOver : opening is not null ? SafeOpening.OpeningEntry : SafeOpening.None,
             anyBefore ? null : opening?.Source,
-            Money(rows.Where(t => t.Amount > 0).Sum(t => t.Amount)),
-            Money(-rows.Where(t => t.Amount < 0).Sum(t => t.Amount)),
+            Money(standing.Where(t => t.Amount > 0).Sum(t => t.Amount)),
+            Money(-standing.Where(t => t.Amount < 0).Sum(t => t.Amount)),
+            Money(voided.Where(t => t.Amount > 0).Sum(t => t.Amount)),
+            Money(-voided.Where(t => t.Amount < 0).Sum(t => t.Amount)),
             Money(balance),
             Money(await safe.SumAsync(t => t.Amount, cancellationToken)),
             await db.SafeTransactions.AnyAsync(t => t.Kind == SafeTransactionKind.OpeningBalance && t.ReversalOf == null && t.VoidedAtUtc == null, cancellationToken),

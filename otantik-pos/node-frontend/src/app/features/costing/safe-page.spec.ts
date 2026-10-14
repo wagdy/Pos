@@ -16,7 +16,7 @@ function entry(overrides: Partial<SafeEntry>): SafeEntry {
 
 const month: SafeMonth = {
   year: 2026, month: 10, from: '2026-10-01', to: '2026-10-31', openingBalance: 12_000, openingKind: 'CarriedOver', openingSource: null,
-  in: 5_000, out: 1_250, closingBalance: 15_750, balanceNow: 15_750, hasOpeningBalance: true,
+  in: 5_000, out: 1_250, voidedIn: 0, voidedOut: 0, closingBalance: 15_750, balanceNow: 15_750, hasOpeningBalance: true,
   entries: [
     entry({ id: 'f', in: 5_000, balance: 17_000 }),
     entry({ id: 'v', kind: 'ExpenseVoucher', description: 'Electricity', out: 1_250, balance: 15_750, recordedBy: 'Mona', approvedBy: 'Omar', date: '2026-10-05' }),
@@ -66,6 +66,17 @@ describe('the safe', () => {
     expect(rows[2]).toEqual(['5 Oct', 'Expense voucher Electricity', '', 'L.E 1,250.00', 'L.E 15,750.00', 'Mona approved by Omar']);
     // No opening balance to enter: it has one.
     expect([...el.querySelectorAll('button')].map(text)).not.toContain('flag Opening balance');
+    // Nothing voided this month: nothing to say about it.
+    expect(el.querySelector('.voided-note')).toBeNull();
+  });
+
+  it('says what was voided this month, which In and Out leave out', async () => {
+    safe.mockReturnValue(of({ ...month, voidedIn: 999, voidedOut: 10_000 }));
+    const { el } = await render();
+
+    expect(text(el.querySelector('.voided-note')!)).toBe(
+      'Not in In or Out: L.E 999.00 in and L.E 10,000.00 out, voided this month along with their reversals. لا تشمل القيود الملغاة.',
+    );
   });
 
   it('shows the tax in a day’s takings entered with it, and what they were before it', async () => {

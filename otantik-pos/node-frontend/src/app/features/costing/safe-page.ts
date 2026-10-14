@@ -72,6 +72,12 @@ import { Treasury, entryTax } from './financials';
           <small class="muted">{{ isThisMonth() ? 'so far' : 'carried over to the next month' }}</small>
         </div>
       </div>
+      @if (s.voidedIn || s.voidedOut) {
+        <p class="note voided-note">
+          Not in In or Out: {{ s.voidedIn | money }} in and {{ s.voidedOut | money }} out, voided this month along with their reversals.
+          <span class="inline-ar">لا تشمل القيود الملغاة.</span>
+        </p>
+      }
 
       @if (waiting().length) {
         <h3>Waiting for approval <span class="inline-ar">بانتظار موافقة المدير</span></h3>

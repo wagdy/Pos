@@ -1584,8 +1584,12 @@ export interface SafeMonth {
   openingBalance: number;
   openingKind: SafeOpening;
   openingSource: FundingSource | null;
+  // What stands: an entry voided this month, and its void, are in neither.
   in: number;
   out: number;
+  // The entries voided this month, left out of in and out with their voids.
+  voidedIn: number;
+  voidedOut: number;
   closingBalance: number;
   balanceNow: number;
   hasOpeningBalance: boolean;

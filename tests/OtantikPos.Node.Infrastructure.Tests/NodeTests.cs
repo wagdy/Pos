@@ -1463,11 +1463,24 @@ public class NodeTests
         Assert.Equal((0m, SafeOpening.OpeningEntry, (FundingSource?)FundingSource.CarriedOver), (month.OpeningBalance, month.OpeningKind, month.OpeningSource));
         Assert.Equal(month.ClosingBalance, month.BalanceNow);
         Assert.Equal(month.In - month.Out, month.ClosingBalance);
+        // The electricity bill and its void are in neither In nor Out, only in what was voided.
+        Assert.Equal((15_000m + cash - 110, 4_000m, 0m, 1_250m), (month.In, month.Out, month.VoidedIn, month.VoidedOut));
         Assert.Equal("Opening balance · carried over", month.Entries[0].Description);
         var funding = await treasury.GetFundingAsync(today, today, ct);
         Assert.Equal((10_000m, 5_000m, cash - 110), (funding.CarriedOver, funding.OwnerFinancing, funding.Revenue));
         // The days before the treasury opened are in its opening balance, not still to be moved in.
         Assert.Equal([today], (await treasury.GetDayRevenueAsync(today.AddDays(-7), today, ct)).Days.Select(d => d.Date));
+
+        // Money put in last month and voided now: last month closed with it, so it stays in that
+        // month's In, and its void is this month's, in Out.
+        var lastMonth = new DateOnly(today.Year, today.Month, 1).AddDays(-1);
+        var late = (await Voucher(New(SafeTransactionKind.Funding, 700, FundingSource.OwnerFinancing) with { Date = lastMonth })).Transaction!;
+        await node.Send(new RequestDeletionCommand(Guid.NewGuid(), ApprovalModule.Treasury, late.Id, "Never came in", "staff-omar", "Omar", CanApprove: true));
+        var before = await treasury.GetSafeAsync(lastMonth.Year, lastMonth.Month, ct);
+        Assert.Equal((700m, 0m, 0m, 700m), (before.In, before.Out, before.VoidedIn, before.ClosingBalance));
+        var after = await treasury.GetSafeAsync(today.Year, today.Month, ct);
+        Assert.Equal((700m, month.In, month.Out + 700, 0m, 1_250m), (after.OpeningBalance, after.In, after.Out, after.VoidedIn, after.VoidedOut));
+        Assert.Equal((month.ClosingBalance, after.ClosingBalance), (after.OpeningBalance + after.In - after.Out, after.BalanceNow));
     }
 
     // A day's purchases entered together (يومية المشتريات المجمعة): an invoice for each supplier, each
