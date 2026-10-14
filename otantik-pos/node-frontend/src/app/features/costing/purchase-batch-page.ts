@@ -160,7 +160,7 @@ const storageKey = 'otantik-till.purchase-batch';
             </mat-form-field>
             <mat-form-field subscriptSizing="dynamic">
               <mat-label>Invoice no. · رقم الفاتورة</mat-label>
-              <input matInput [(ngModel)]="block.number" (ngModelChange)="changed()" maxlength="64" [attr.aria-label]="'Invoice ' + (i + 1) + ', number'" />
+              <input matInput [(ngModel)]="block.number" (ngModelChange)="changed()" maxlength="64" data-western-digits [attr.aria-label]="'Invoice ' + (i + 1) + ', number'" />
             </mat-form-field>
             <span class="spacer"></span>
             <strong class="block-total">{{ block.editor.total() | money }}</strong>

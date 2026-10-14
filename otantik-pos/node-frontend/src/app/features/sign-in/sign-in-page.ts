@@ -9,6 +9,7 @@ import { SignInOption } from '../../core/api/models';
 import { AuthService } from '../../core/auth/auth.service';
 import { homePath } from '../../core/auth/guards';
 import { errorMessage } from '../../core/http/error-message';
+import { westernDigits } from '../../core/ui/western-digits';
 
 // Tap your name, then your PIN. Works with the internet down: the accounts are the delivery
 // system's, copied to the till server, and the PINs live only there.
@@ -99,13 +100,14 @@ export class SignInPage implements OnInit {
       .join('');
   }
 
-  // A keyboard works as well as the keypad.
+  // A keyboard works as well as the keypad, an Arabic one too.
   protected onKey(event: KeyboardEvent): void {
     if (!this.selected()) {
       return;
     }
-    if (/^[0-9]$/.test(event.key)) {
-      this.press(event.key);
+    const key = westernDigits(event.key);
+    if (/^[0-9]$/.test(key)) {
+      this.press(key);
     } else if (event.key === 'Backspace') {
       this.erase();
     } else if (event.key === 'Enter') {

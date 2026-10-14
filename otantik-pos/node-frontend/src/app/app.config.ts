@@ -5,6 +5,7 @@ import { provideRouter, withComponentInputBinding } from '@angular/router';
 import { routes } from './app.routes';
 import { AuthService } from './core/auth/auth.service';
 import { authInterceptor, reachabilityInterceptor } from './core/http/interceptors';
+import { WesternDigits } from './core/ui/western-digits';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -13,6 +14,8 @@ export const appConfig: ApplicationConfig = {
     provideHttpClient(withInterceptors([reachabilityInterceptor, authInterceptor])),
     // Before the first route resolves: who is signed in, as GET /api/auth/me says.
     provideAppInitializer(() => inject(AuthService).restore()),
+    // Arabic digits typed into any field that takes numbers go in as Western ones.
+    provideAppInitializer(() => inject(WesternDigits).install()),
     { provide: MAT_FORM_FIELD_DEFAULT_OPTIONS, useValue: { appearance: 'outline' } },
   ],
 };

@@ -114,7 +114,7 @@ import { InvoiceView } from './invoice-view';
         </mat-form-field>
         <mat-form-field subscriptSizing="dynamic">
           <mat-label>Invoice no. · رقم الفاتورة</mat-label>
-          <input matInput [(ngModel)]="supplierInvoiceNumber" maxlength="64" />
+          <input matInput [(ngModel)]="supplierInvoiceNumber" maxlength="64" data-western-digits />
         </mat-form-field>
         <mat-form-field subscriptSizing="dynamic">
           <mat-label>Invoice date · تاريخ الفاتورة</mat-label>
