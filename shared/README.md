@@ -179,10 +179,10 @@ reviewed change.
   connection string with no `Database=`; without it they are skipped.
 - Done: `OtantikPos.Node.Api`, the tills' REST endpoints and SignalR hub (`/hubs/till`), with
   PIN sign-in, permissions from `RolePermissions`, and errors in the delivery system's
-  `{ "errors": [...] }` shape. Development uses its own database, `otantik_pos_node`.
+  `{ "errors": [...] }` shape. Development uses its own database, `otantik_pos_node_local`.
 - Done: the till app, `otantik-pos/node-frontend` (Angular 21.2, Angular Material and CDK
   21.2.8, standalone and zoneless). `npm run build` writes it into `OtantikPos.Node.Api/wwwroot`,
-  which the API serves; `npm start` serves it on :4200 with `/api` and `/hubs` proxied to :5080.
+  which the API serves; `npm start` serves it on :4210 with `/api` and `/hubs` proxied to :5081.
   Buttons follow `GET /api/auth/me`'s permissions only. Fonts are bundled, so it looks right
   with no internet. Its Reports screen (`GET /api/reports/day`) shows one business day from the
   till's own database.
