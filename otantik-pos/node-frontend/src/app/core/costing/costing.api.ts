@@ -1190,6 +1190,10 @@ export class CostingApi {
     return this.http.get<ReconciliationReport>('/api/financials/reconciliation', { params: { from, to } });
   }
 
+  dailyCash(from: string, to: string): Observable<DailyCashReport> {
+    return this.http.get<DailyCashReport>('/api/financials/daily-cash', { params: { from, to } });
+  }
+
   financialSettings(): Observable<FinancialSettings> {
     return this.http.get<FinancialSettings>('/api/financials/settings');
   }
@@ -1776,4 +1780,37 @@ export interface ReconciliationReport {
   taxPercent: number | null;
   total: ReconciliationDay;
   days: ReconciliationDay[];
+}
+
+// Each day's takings as they were spent (يومية الإيراد): the invoices paid straight out of them
+// (deductions), and the cash counted into the safe for them (netToSafe). The two are the day's cash
+// (gross). A line is one invoice paid, with what it bought, the dearest first; or one count.
+export interface DailyCashLine {
+  id: string;
+  kind: SafeTransactionKind;
+  date: string;
+  description: string;
+  amount: number;
+  purchaseInvoiceId: string | null;
+  items: string[];
+  recordedBy: string;
+  approvedBy: string | null;
+}
+
+export interface DailyCashDay {
+  date: string;
+  gross: number;
+  deductions: number;
+  netToSafe: number;
+  paid: DailyCashLine[];
+  counted: DailyCashLine[];
+}
+
+export interface DailyCashReport {
+  from: string;
+  to: string;
+  gross: number;
+  deductions: number;
+  netToSafe: number;
+  days: DailyCashDay[];
 }

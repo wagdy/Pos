@@ -39,6 +39,7 @@ export class FinancialsShell {
     { path: 'safe', icon: 'account_balance_wallet', en: 'Safe', ar: 'الخزنة' },
     { path: 'funding', icon: 'savings', en: 'Funding sources', ar: 'مصادر التمويل' },
     { path: 'reconciliation', icon: 'rule', en: 'Reconciliation', ar: 'مطابقة الإيرادات' },
+    { path: 'daily-cash', icon: 'calendar_view_day', en: 'Daily cash', ar: 'يومية الإيراد' },
     { path: 'expenses', icon: 'receipt', en: 'Expense vouchers', ar: 'إذن صرف مصروفات' },
     { path: 'suppliers', icon: 'account_balance', en: 'Supplier debts', ar: 'مديونيات الموردين' },
     { path: 'payments', icon: 'payments', en: 'Supplier payments', ar: 'أذونات صرف الموردين' },

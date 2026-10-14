@@ -1483,6 +1483,66 @@ public class NodeTests
         Assert.Equal((month.ClosingBalance, after.ClosingBalance), (after.OpeningBalance + after.In - after.Out, after.BalanceNow));
     }
 
+    // Each day's takings as they were spent (يومية الإيراد): the invoices paid straight out of them,
+    // what was counted into the safe, and the two together; voided entries left out, and the safe
+    // as it was.
+    [Fact]
+    public async Task Each_days_takings_show_the_invoices_paid_out_of_them_and_what_reached_the_safe()
+    {
+        await using var node = await TestNode.StartAsync();
+        var ct = TestContext.Current.CancellationToken;
+        using var scope = node.Scope();
+        var treasury = node.Service<TreasuryService>(scope);
+        var today = treasury.Today;
+        var yesterday = today.AddDays(-1);
+        var tomatoes = (await node.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram))).Id;
+        var onions = (await node.Send(new CreateRawMaterialCommand("Onions", UnitOfMeasure.Gram))).Id;
+        var nileFarms = (await node.Send(new SaveSupplierCommand(Guid.NewGuid(), "Nile Farms"))).Id;
+        async Task<Guid> PaidFromTakings(Guid? supplier, string? number, DateOnly takings, IReadOnlyList<PurchaseInvoiceLineEntry> lines)
+        {
+            var id = Guid.NewGuid();
+            await node.Send(new SavePurchaseInvoiceCommand(id, supplier, number, today, lines, "Omar", PurchasePaymentMethod.DayRevenue, takings));
+            Assert.Equal(InvoicePaymentStatus.Paid, (await node.Send(new PostPurchaseInvoiceCommand(id, "Omar"))).PaymentStatus);
+            return id;
+        }
+        Task<SafeVoucherResultDto> Counted(decimal amount, DateOnly takings) => node.Send(new RecordSafeVoucherCommand(
+            Guid.NewGuid(), new SafeVoucher(Guid.NewGuid(), SafeTransactionKind.RevenueTransfer, amount, today, RevenueDate: takings), null,
+            "staff-omar", "Omar", true));
+        Task Void(ApprovalModule module, Guid id) =>
+            node.Send(new RequestDeletionCommand(Guid.NewGuid(), module, id, "Entered by mistake", "staff-omar", "Omar", CanApprove: true));
+
+        // Today's takings: Nile Farms' invoice and a market one paid out of them, then the rest
+        // counted into the safe. An invoice and a count, both voided, are not in it.
+        var nile = await PaidFromTakings(nileFarms, "F-1", today, [new(tomatoes, 5, "kg", 1000, 100), new(onions, 10, "kg", 1000, 300)]);
+        var market = await PaidFromTakings(null, null, today, [new(tomatoes, 1, "kg", 1000, 50)]);
+        await Void(ApprovalModule.PurchaseInvoice, await PaidFromTakings(null, null, today, [new(onions, 1, "kg", 1000, 999)]));
+        await Counted(1_000, today);
+        await Void(ApprovalModule.Treasury, (await Counted(5_000, today)).Transaction!.Id);
+        // Yesterday's: an invoice paid out of them, nothing counted in yet.
+        await PaidFromTakings(null, "M-7", yesterday, [new(onions, 2, "kg", 1000, 70)]);
+        var safe = (await treasury.GetSafeAsync(today.Year, today.Month, ct)).BalanceNow;
+
+        var report = await treasury.GetDailyCashAsync(yesterday, today, ct);
+        Assert.Equal((1_520m, 520m, 1_000m), (report.Gross, report.Deductions, report.NetToSafe));
+        Assert.Equal([today, yesterday], report.Days.Select(d => d.Date));
+        var day = report.Days[0];
+        Assert.Equal((1_450m, 450m, 1_000m), (day.Gross, day.Deductions, day.NetToSafe));
+        Assert.Equal(
+            [
+                ("Invoice F-1 · Nile Farms", 400m, (Guid?)nile, "Onions, Tomatoes"),
+                ($"Invoice of {today.ToString("d MMM", System.Globalization.CultureInfo.InvariantCulture)}", 50m, market, "Tomatoes"),
+            ],
+            day.Paid.Select(l => (l.Description, l.Amount, l.PurchaseInvoiceId, string.Join(", ", l.Items))));
+        Assert.Equal(("Counted into the safe", 1_000m, today, "Omar"), day.Counted.Select(l => (l.Description, l.Amount, l.Date, l.RecordedBy)).Single());
+        var before = report.Days[1];
+        Assert.Equal((70m, 70m, 0m, "Invoice M-7"), (before.Gross, before.Deductions, before.NetToSafe, before.Paid.Single().Description));
+        Assert.Empty(before.Counted);
+
+        // Reading it moves nothing; and a day with none of either is not there.
+        Assert.Equal(safe, (await treasury.GetSafeAsync(today.Year, today.Month, ct)).BalanceNow);
+        Assert.Empty((await treasury.GetDailyCashAsync(today.AddDays(-9), today.AddDays(-2), ct)).Days);
+    }
+
     // A day's purchases entered together (يومية المشتريات المجمعة): an invoice for each supplier, each
     // its own posted invoice with its own payment, never one for the lot; none saved unless all can be.
     [Fact]

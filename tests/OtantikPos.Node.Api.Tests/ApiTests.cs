@@ -358,7 +358,8 @@ public class ApiTests
 
     // Tax and service: the tax rate is the bills' own, shown to whoever keeps the books; the
     // service charge is a manager's to set. A day's takings with the tax in them: the tax kept
-    // apart, all of the cash in the safe, and the day reconciled with its sales.
+    // apart, all of the cash in the safe, and the day reconciled with its sales and in the daily cash,
+    // which a cashier does not see.
     [Fact]
     public async Task Tax_and_service_are_a_managers_to_set_and_takings_keep_their_tax_apart()
     {
@@ -397,6 +398,13 @@ public class ApiTests
         var report = await Json(await accountant.GetAsync($"/api/financials/reconciliation?from={today}&to={today}", Cancel));
         var total = report.GetProperty("total");
         Assert.Equal((1_000m, 0m, 1_000m), (total.GetProperty("netCash").GetDecimal(), total.GetProperty("expectedCash").GetDecimal(), total.GetProperty("difference").GetDecimal()));
+
+        // Nothing paid out of the day's takings: all of it reached the safe.
+        string Daily = $"/api/financials/daily-cash?from={today}&to={today}";
+        var day = (await Json(await accountant.GetAsync(Daily, Cancel))).GetProperty("days").EnumerateArray().Single();
+        Assert.Equal((1_140m, 0m, 1_140m, "Counted into the safe"), (day.GetProperty("gross").GetDecimal(), day.GetProperty("deductions").GetDecimal(),
+            day.GetProperty("netToSafe").GetDecimal(), day.GetProperty("counted").EnumerateArray().Single().GetProperty("description").GetString()));
+        Assert.Equal(HttpStatusCode.Forbidden, (await (await api.CashierAsync(manager)).GetAsync(Daily, Cancel)).StatusCode);
     }
 
     // Raw materials brought in from Excel: the template downloaded, filled in and imported by

@@ -164,6 +164,10 @@ export const routes: Routes = [
                 loadComponent: () => import('./features/costing/reconciliation-page').then((m) => m.ReconciliationPage),
               },
               {
+                path: 'daily-cash',
+                loadComponent: () => import('./features/costing/daily-cash-page').then((m) => m.DailyCashPage),
+              },
+              {
                 path: 'expenses',
                 loadComponent: () => import('./features/costing/expense-vouchers-page').then((m) => m.ExpenseVouchersPage),
               },

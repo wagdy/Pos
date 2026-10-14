@@ -89,6 +89,19 @@ public sealed record DayRevenue(DateOnly Date, decimal CashSales, decimal PaidOu
 
 public sealed record DayRevenueReport(DateOnly From, DateOnly To, decimal CashSales, decimal PaidOut, decimal Transferred, decimal Left, IReadOnlyList<DayRevenue> Days);
 
+// Each day's takings as they were spent (يومية الإيراد): the invoices paid straight out of them
+// (Deductions), and the cash counted into the safe for them (NetToSafe, what Takings in entered).
+// The two together are the day's cash (Gross). A line is one invoice paid, with what it bought,
+// the dearest first; or one count into the safe.
+public sealed record DailyCashLine(
+    Guid Id, SafeTransactionKind Kind, DateOnly Date, string Description, decimal Amount, Guid? PurchaseInvoiceId, IReadOnlyList<string> Items,
+    string RecordedBy, string? ApprovedBy);
+
+public sealed record DailyCashDay(
+    DateOnly Date, decimal Gross, decimal Deductions, decimal NetToSafe, IReadOnlyList<DailyCashLine> Paid, IReadOnlyList<DailyCashLine> Counted);
+
+public sealed record DailyCashReport(DateOnly From, DateOnly To, decimal Gross, decimal Deductions, decimal NetToSafe, IReadOnlyList<DailyCashDay> Days);
+
 public sealed record ExpenseVoucherRow(
     Guid Id, DateOnly Date, Guid ExpenseItemId, string ExpenseItem, string? Category, decimal Amount, string? Notes, string RecordedBy, string? ApprovedBy,
     DateTime? VoidedAtUtc, string? VoidedBy);
@@ -272,6 +285,63 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         return new DayRevenueReport(
             from, to, Money(days.Sum(d => d.CashSales)), Money(days.Sum(d => d.PaidOut)), Money(days.Sum(d => d.Transferred)),
             Money(days.Sum(d => d.Left)), days);
+    }
+
+    // Each day of the period whose takings paid an invoice or were counted into the safe, latest
+    // first. A voided entry and its void are both of the entry's day, and come to nothing: neither
+    // is listed. Read only: the safe and the takings are as they were.
+    public async Task<DailyCashReport> GetDailyCashAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken)
+    {
+        Period(from, to);
+        var rows = await db.SafeTransactions.AsNoTracking()
+            .Where(t => t.RevenueDate != null && t.RevenueDate >= from && t.RevenueDate <= to
+                && (t.Kind == SafeTransactionKind.RevenueTransfer || t.Kind == SafeTransactionKind.InvoicePayment)
+                && t.ReversalOf == null && t.VoidedAtUtc == null)
+            .OrderBy(t => t.BusinessDate).ThenBy(t => t.RecordedAtUtc)
+            .ToListAsync(cancellationToken);
+
+        var names = await NamesAsync(rows, cancellationToken);
+        var invoiceIds = rows.Where(t => t.PurchaseInvoiceId != null).Select(t => t.PurchaseInvoiceId!.Value).Distinct().ToList();
+        var invoices = await db.PurchaseInvoices.AsNoTracking().Include(i => i.Lines)
+            .Where(i => invoiceIds.Contains(i.Id))
+            .ToDictionaryAsync(i => i.Id, cancellationToken);
+        var materialIds = invoices.Values.SelectMany(i => i.Lines).Where(l => l.RawMaterialId != null).Select(l => l.RawMaterialId!.Value).Distinct().ToList();
+        var materials = await db.RawMaterials.AsNoTracking().Where(m => materialIds.Contains(m.Id))
+            .ToDictionaryAsync(m => m.Id, m => m.Name, cancellationToken);
+
+        DailyCashLine Line(SafeTransaction t)
+        {
+            if (t.Kind == SafeTransactionKind.RevenueTransfer)
+                return new DailyCashLine(t.Id, t.Kind, t.BusinessDate, "Counted into the safe", Money(t.Amount), null, [], t.RecordedBy, t.ApprovedBy);
+
+            var invoice = t.PurchaseInvoiceId is { } id ? invoices.GetValueOrDefault(id) : null;
+            var what = invoice?.SupplierInvoiceNumber is { } number ? $"Invoice {number}"
+                : invoice?.InvoiceDate is { } date ? $"Invoice of {date.ToString("d MMM", Invariant)}"
+                : "Invoice";
+            if ((invoice?.SupplierId ?? t.SupplierId) is { } supplier)
+                what += $" · {names.Suppliers.GetValueOrDefault(supplier) ?? "a removed supplier"}";
+            var items = invoice is null ? [] : invoice.Lines
+                .OrderByDescending(l => l.Cost ?? 0)
+                .Select(l => l.RawMaterialId is { } m ? materials.GetValueOrDefault(m) ?? "A removed material"
+                    : l.ExpenseItemId is { } e ? names.Expenses.GetValueOrDefault(e) ?? "A removed expense"
+                    : "An item")
+                .Distinct()
+                .ToList();
+            return new DailyCashLine(t.Id, t.Kind, t.BusinessDate, what, Money(-t.Amount), t.PurchaseInvoiceId, items, t.RecordedBy, t.ApprovedBy);
+        }
+
+        var days = rows.GroupBy(t => t.RevenueDate!.Value).OrderByDescending(g => g.Key)
+            .Select(g =>
+            {
+                var paid = g.Where(t => t.Kind == SafeTransactionKind.InvoicePayment).Select(Line).ToList();
+                var counted = g.Where(t => t.Kind == SafeTransactionKind.RevenueTransfer).Select(Line).ToList();
+                var deductions = paid.Sum(l => l.Amount);
+                var net = counted.Sum(l => l.Amount);
+                return new DailyCashDay(g.Key, Money(deductions + net), Money(deductions), Money(net), paid, counted);
+            })
+            .ToList();
+        return new DailyCashReport(
+            from, to, Money(days.Sum(d => d.Gross)), Money(days.Sum(d => d.Deductions)), Money(days.Sum(d => d.NetToSafe)), days);
     }
 
     // What each business day took in cash, as the day report counts it: the till's paid orders of
