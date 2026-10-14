@@ -604,6 +604,10 @@ public sealed class SafeStore : ISafeTransactionRepository
     public void Add(SafeTransaction aggregate) => _entries.Add(aggregate);
     public Task<decimal> SafeBalanceAsync(DateOnly? through = null, CancellationToken cancellationToken = default) =>
         Task.FromResult(_entries.Where(t => t.Fund == CashFund.Safe && (through == null || t.BusinessDate <= through)).Sum(t => t.Amount));
+    public Task<SafeTransaction?> GetTakingsAsync(DateOnly revenueDate, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_entries.FirstOrDefault(t => t.Kind == SafeTransactionKind.RevenueTransfer && t.RevenueDate == revenueDate && !t.IsReversal && !t.IsVoided));
+    public Task<decimal> PaidOutOfTakingsAsync(DateOnly revenueDate, CancellationToken cancellationToken = default) =>
+        Task.FromResult(-_entries.Where(t => t.Fund == CashFund.DayRevenue && t.RevenueDate == revenueDate).Sum(t => t.Amount));
     public Task<SafeTransaction?> GetPaymentOfInvoiceAsync(Guid invoiceId, CancellationToken cancellationToken = default) =>
         Task.FromResult(_entries.SingleOrDefault(t => t.PurchaseInvoiceId == invoiceId && t.Kind == SafeTransactionKind.InvoicePayment && !t.IsReversal && !t.IsVoided));
     public Task<IReadOnlySet<Guid>> PaidInvoicesAsync(IReadOnlyCollection<Guid> invoiceIds, CancellationToken cancellationToken = default) =>

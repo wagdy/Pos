@@ -10,7 +10,7 @@ function entry(overrides: Partial<SafeEntry>): SafeEntry {
   return {
     id: 'e', kind: 'Funding', fund: 'Safe', date: '2026-10-02', description: 'Funding · owners’ financing', in: 0, out: 0, balance: 0, source: null,
     revenueDate: null, supplierId: null, purchaseInvoiceId: null, expenseItemId: null, notes: null, recordedBy: 'Omar', recordedAtUtc: '2026-10-02T09:00:00Z',
-    approvedBy: null, reversalOf: null, voidedAtUtc: null, voidedBy: null, includesTax: false, taxPercent: null, tax: 0, ...overrides,
+    approvedBy: null, reversalOf: null, voidedAtUtc: null, voidedBy: null, includesTax: false, taxPercent: null, tax: 0, gross: null, ...overrides,
   };
 }
 
@@ -89,6 +89,23 @@ describe('the safe', () => {
     expect(text(el.querySelectorAll('tbody tr')[1].querySelectorAll('td')[1])).toBe(
       'Takings in Takings of 12 Oct Tax in it at 14%: L.E 140.00 · L.E 1,000.00 before tax',
     );
+  });
+
+  it('shows a day’s takings entered gross: what reached the safe, and the tax in the gross', async () => {
+    safe.mockReturnValue(of({
+      ...month,
+      entries: [entry({
+        id: 't', kind: 'RevenueTransfer', description: 'Takings of 13 Oct · L.E 10,495.00 gross, less L.E 1,454.07 paid out of them', in: 9_040.93,
+        balance: 21_040.93, gross: 10_495, includesTax: true, taxPercent: 14, tax: 1_288.86,
+      })],
+    }));
+    const { el } = await render();
+
+    const cells = el.querySelectorAll('tbody tr')[1].querySelectorAll('td');
+    expect(text(cells[1])).toBe(
+      'Takings in Takings of 13 Oct · L.E 10,495.00 gross, less L.E 1,454.07 paid out of them Tax in it at 14%: L.E 1,288.86 · L.E 9,206.14 before tax',
+    );
+    expect(text(cells[2])).toBe('L.E 9,040.93');
   });
 
   it('enters money in and out, and voids an entry through the approvals', async () => {

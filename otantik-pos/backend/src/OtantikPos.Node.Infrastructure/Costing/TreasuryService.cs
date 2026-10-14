@@ -34,11 +34,13 @@ public sealed record SafeEntryRow(
     Guid? ReversalOf,
     DateTime? VoidedAtUtc,
     string? VoidedBy,
-    // A day's takings entered with the tax in them: the rate, and the tax (signed as In and Out
-    // are: a voided entry's reversal takes it back).
+    // A day's takings entered with the tax in them: the rate, and the tax in their gross (signed as
+    // In and Out are: a voided entry's reversal takes it back).
     bool IncludesTax = false,
     decimal? TaxPercent = null,
-    decimal Tax = 0);
+    decimal Tax = 0,
+    // A day's takings: their gross, as entered; In is what of it reached the safe.
+    decimal? Gross = null);
 
 // How a month's opening balance came about: carried over from the month before (رصيد مرحل), the
 // treasury's own opening entry, made this month, or none yet.
@@ -82,23 +84,29 @@ public sealed record FundingReport(
     decimal Total,
     IReadOnlyList<SafeEntryRow> Entries);
 
-// One business day's cash: what the till and cash-on-delivery took, what was paid straight out of
-// it, what went into the safe, and what is left (not yet moved in, or short when below zero). Only
+// One business day's cash: what the till and cash-on-delivery took, the takings entered for it
+// (gross), what was paid straight out of them, what of them went into the safe, and what is left:
+// the till's cash not entered as takings (below zero, more was entered than the till took). Only
 // from the treasury's opening on.
-public sealed record DayRevenue(DateOnly Date, decimal CashSales, decimal PaidOut, decimal Transferred, decimal Left);
+public sealed record DayRevenue(DateOnly Date, decimal CashSales, decimal Entered, decimal PaidOut, decimal Transferred, decimal Left);
 
-public sealed record DayRevenueReport(DateOnly From, DateOnly To, decimal CashSales, decimal PaidOut, decimal Transferred, decimal Left, IReadOnlyList<DayRevenue> Days);
+public sealed record DayRevenueReport(
+    DateOnly From, DateOnly To, decimal CashSales, decimal Entered, decimal PaidOut, decimal Transferred, decimal Left, IReadOnlyList<DayRevenue> Days);
 
-// Each day's takings as they were spent (يومية الإيراد): the invoices paid straight out of them
-// (Deductions), and the cash counted into the safe for them (NetToSafe, what Takings in entered).
-// The two together are the day's cash (Gross). A line is one invoice paid, with what it bought,
-// the dearest first; or one count into the safe.
+// Each day's takings as they were spent (يومية الإيراد): the gross entered for them (Gross), the
+// invoices paid straight out of them (Deductions), and what is left of them in the safe
+// (NetToSafe). A line is one invoice paid, with what it bought, the dearest first; or the takings
+// entered, at their gross.
 public sealed record DailyCashLine(
     Guid Id, SafeTransactionKind Kind, DateOnly Date, string Description, decimal Amount, Guid? PurchaseInvoiceId, IReadOnlyList<string> Items,
     string RecordedBy, string? ApprovedBy);
 
 public sealed record DailyCashDay(
-    DateOnly Date, decimal Gross, decimal Deductions, decimal NetToSafe, IReadOnlyList<DailyCashLine> Paid, IReadOnlyList<DailyCashLine> Counted);
+    DateOnly Date, decimal Gross, decimal Deductions, decimal NetToSafe, IReadOnlyList<DailyCashLine> Paid, IReadOnlyList<DailyCashLine> Entered);
+
+// A day's takings as they stand before they are entered: the gross already entered for them, if
+// any; and what was paid straight out of them, which entering them takes off.
+public sealed record TakingsPreview(DateOnly Date, decimal? Entered, decimal PaidOut, int Invoices);
 
 public sealed record DailyCashReport(DateOnly From, DateOnly To, decimal Gross, decimal Deductions, decimal NetToSafe, IReadOnlyList<DailyCashDay> Days);
 
@@ -150,8 +158,8 @@ public sealed record SaveFinancialSettingsRequest(decimal ServicePercent);
 
 // One business day of the reconciliation (مطابقة الإيرادات), or the period's total (no Date).
 //
-// The cash: the day's takings as entered, and what was paid straight out of them before they
-// reached the safe; the tax in that; and so the cash before tax (A, NetCash).
+// The cash: the day's takings as entered, gross, of which some was paid straight out (PaidOut)
+// and the rest went into the safe; the tax in them; and so the cash before tax (A, NetCash).
 //
 // The sales: every item sold, at its price (B, ItemSales); less promo discounts and the points
 // bills were paid with, plus delivery fees, less money handed back, all before tax; less what was
@@ -265,26 +273,43 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         Period(from, to);
         from = await FromOpeningAsync(from, cancellationToken);
         if (from > to)
-            return new DayRevenueReport(from, to, 0, 0, 0, 0, []);
+            return new DayRevenueReport(from, to, 0, 0, 0, 0, 0, []);
         var sales = await CashSalesAsync(from, to, cancellationToken);
         var moved = await db.SafeTransactions.AsNoTracking()
             .Where(t => t.RevenueDate != null && t.RevenueDate >= from && t.RevenueDate <= to)
-            .Select(t => new { t.Kind, t.Amount, RevenueDate = t.RevenueDate!.Value })
+            .Select(t => new { t.Kind, t.Fund, t.Amount, t.GrossAmount, RevenueDate = t.RevenueDate!.Value })
             .ToListAsync(cancellationToken);
 
+        // Voids net out with what they undo, as they share its day.
         var days = sales.Keys.Concat(moved.Select(m => m.RevenueDate)).Distinct().OrderByDescending(d => d)
             .Select(day =>
             {
                 var cash = sales.GetValueOrDefault(day);
-                // A payment out of the day is negative there; a transfer is positive in the safe.
-                var paid = -moved.Where(m => m.RevenueDate == day && m.Kind == SafeTransactionKind.InvoicePayment).Sum(m => m.Amount);
-                var transferred = moved.Where(m => m.RevenueDate == day && m.Kind == SafeTransactionKind.RevenueTransfer).Sum(m => m.Amount);
-                return new DayRevenue(day, Money(cash), Money(paid), Money(transferred), Money(cash - paid - transferred));
+                var ofDay = moved.Where(m => m.RevenueDate == day).ToList();
+                var entered = ofDay.Where(m => m.Kind == SafeTransactionKind.RevenueTransfer).Sum(m => m.GrossAmount ?? m.Amount);
+                var paid = -ofDay.Where(m => m.Kind == SafeTransactionKind.InvoicePayment).Sum(m => m.Amount);
+                // What of the day's takings is in the safe: the takings less what the drawer had
+                // paid by then, less what was paid out of the safe for them since.
+                var transferred = ofDay.Where(m => m.Fund == CashFund.Safe).Sum(m => m.Amount);
+                return new DayRevenue(day, Money(cash), Money(entered), Money(paid), Money(transferred), Money(cash - entered));
             })
             .ToList();
         return new DayRevenueReport(
-            from, to, Money(days.Sum(d => d.CashSales)), Money(days.Sum(d => d.PaidOut)), Money(days.Sum(d => d.Transferred)),
-            Money(days.Sum(d => d.Left)), days);
+            from, to, Money(days.Sum(d => d.CashSales)), Money(days.Sum(d => d.Entered)), Money(days.Sum(d => d.PaidOut)),
+            Money(days.Sum(d => d.Transferred)), Money(days.Sum(d => d.Left)), days);
+    }
+
+    // A day's takings before they are entered: the Takings in screen shows what will be taken off.
+    public async Task<TakingsPreview> GetTakingsPreviewAsync(DateOnly day, CancellationToken cancellationToken)
+    {
+        var entries = await db.SafeTransactions.AsNoTracking()
+            .Where(t => t.RevenueDate == day && (t.Kind == SafeTransactionKind.RevenueTransfer || t.Fund == CashFund.DayRevenue))
+            .ToListAsync(cancellationToken);
+        var entered = entries.FirstOrDefault(t => t.Kind == SafeTransactionKind.RevenueTransfer && !t.IsReversal && !t.IsVoided);
+        var drawer = entries.Where(t => t.Fund == CashFund.DayRevenue).ToList();
+        return new TakingsPreview(
+            day, entered is null ? null : Money(entered.GrossAmount ?? entered.Amount), Money(-drawer.Sum(t => t.Amount)),
+            drawer.Count(t => !t.IsReversal && !t.IsVoided));
     }
 
     // Each day of the period whose takings paid an invoice or were counted into the safe, latest
@@ -295,13 +320,13 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         Period(from, to);
         var rows = await db.SafeTransactions.AsNoTracking()
             .Where(t => t.RevenueDate != null && t.RevenueDate >= from && t.RevenueDate <= to
-                && (t.Kind == SafeTransactionKind.RevenueTransfer || t.Kind == SafeTransactionKind.InvoicePayment)
-                && t.ReversalOf == null && t.VoidedAtUtc == null)
+                && (t.Kind == SafeTransactionKind.RevenueTransfer || t.Kind == SafeTransactionKind.InvoicePayment))
             .OrderBy(t => t.BusinessDate).ThenBy(t => t.RecordedAtUtc)
             .ToListAsync(cancellationToken);
+        var standing = rows.Where(t => !t.IsReversal && !t.IsVoided).ToList();
 
-        var names = await NamesAsync(rows, cancellationToken);
-        var invoiceIds = rows.Where(t => t.PurchaseInvoiceId != null).Select(t => t.PurchaseInvoiceId!.Value).Distinct().ToList();
+        var names = await NamesAsync(standing, cancellationToken);
+        var invoiceIds = standing.Where(t => t.PurchaseInvoiceId != null).Select(t => t.PurchaseInvoiceId!.Value).Distinct().ToList();
         var invoices = await db.PurchaseInvoices.AsNoTracking().Include(i => i.Lines)
             .Where(i => invoiceIds.Contains(i.Id))
             .ToDictionaryAsync(i => i.Id, cancellationToken);
@@ -312,7 +337,7 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         DailyCashLine Line(SafeTransaction t)
         {
             if (t.Kind == SafeTransactionKind.RevenueTransfer)
-                return new DailyCashLine(t.Id, t.Kind, t.BusinessDate, "Counted into the safe", Money(t.Amount), null, [], t.RecordedBy, t.ApprovedBy);
+                return new DailyCashLine(t.Id, t.Kind, t.BusinessDate, "Takings entered", Money(t.GrossAmount ?? t.Amount), null, [], t.RecordedBy, t.ApprovedBy);
 
             var invoice = t.PurchaseInvoiceId is { } id ? invoices.GetValueOrDefault(id) : null;
             var what = invoice?.SupplierInvoiceNumber is { } number ? $"Invoice {number}"
@@ -330,15 +355,21 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
             return new DailyCashLine(t.Id, t.Kind, t.BusinessDate, what, Money(-t.Amount), t.PurchaseInvoiceId, items, t.RecordedBy, t.ApprovedBy);
         }
 
+        // The sums count every entry, voids too, so a void netting out with what it undid, or
+        // putting cash back into the safe, is counted as it moved. The lines are what stands.
         var days = rows.GroupBy(t => t.RevenueDate!.Value).OrderByDescending(g => g.Key)
             .Select(g =>
             {
-                var paid = g.Where(t => t.Kind == SafeTransactionKind.InvoicePayment).Select(Line).ToList();
-                var counted = g.Where(t => t.Kind == SafeTransactionKind.RevenueTransfer).Select(Line).ToList();
-                var deductions = paid.Sum(l => l.Amount);
-                var net = counted.Sum(l => l.Amount);
-                return new DailyCashDay(g.Key, Money(deductions + net), Money(deductions), Money(net), paid, counted);
+                var gross = g.Where(t => t.Kind == SafeTransactionKind.RevenueTransfer).Sum(t => t.GrossAmount ?? t.Amount);
+                var deductions = -g.Where(t => t.Kind == SafeTransactionKind.InvoicePayment).Sum(t => t.Amount);
+                var net = g.Where(t => t.Fund == CashFund.Safe).Sum(t => t.Amount);
+                var lines = standing.Where(t => t.RevenueDate == g.Key).ToList();
+                return new DailyCashDay(
+                    g.Key, Money(gross), Money(deductions), Money(net),
+                    lines.Where(t => t.Kind == SafeTransactionKind.InvoicePayment).Select(Line).ToList(),
+                    lines.Where(t => t.Kind == SafeTransactionKind.RevenueTransfer).Select(Line).ToList());
             })
+            .Where(d => d.Paid.Count > 0 || d.Entered.Count > 0 || d.Gross != 0 || d.Deductions != 0 || d.NetToSafe != 0)
             .ToList();
         return new DailyCashReport(
             from, to, Money(days.Sum(d => d.Gross)), Money(days.Sum(d => d.Deductions)), Money(days.Sum(d => d.NetToSafe)), days);
@@ -410,16 +441,13 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
 
     private static ReconciliationDay Reconcile(DateOnly? day, IReadOnlyList<SafeTransaction> cash, IReadOnlyList<SaleOrder> sales)
     {
-        // The cash, voided entries netting out with their reversals.
+        // The cash, voided entries netting out with their reversals: the takings as entered, gross,
+        // what was paid straight out of them, and the tax in the gross.
         var takings = cash.Where(t => t.Kind == SafeTransactionKind.RevenueTransfer).ToList();
-        var entered = takings.Sum(t => t.Amount);
+        var entered = takings.Sum(t => t.GrossAmount ?? t.Amount);
         var paidOut = -cash.Where(t => t.Kind == SafeTransactionKind.InvoicePayment).Sum(t => t.Amount);
-        // What was paid out of the takings was part of them: entered with the tax in them, it had
-        // tax in it too, at their rate.
-        var rate = takings.Where(t => t.IncludesTax && !t.IsReversal && !t.IsVoided)
-            .OrderByDescending(t => t.RecordedAtUtc).Select(t => t.TaxPercent).FirstOrDefault();
-        var tax = takings.Sum(t => t.TaxAmount) + (rate is { } r ? SafeTransaction.TaxIn(paidOut, r) : 0);
-        var netCash = entered + paidOut - tax;
+        var tax = takings.Sum(t => t.TaxAmount);
+        var netCash = entered - tax;
 
         // The sales, before tax. A bill's money before tax is its items, less its promo discount and
         // points, plus its delivery fee; a refund is taken back in the same proportion.
@@ -633,7 +661,8 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         {
             SafeTransactionKind.OpeningBalance => $"Opening balance · {SourceName(t.Source)}",
             SafeTransactionKind.Funding => $"Funding · {SourceName(t.Source)}",
-            SafeTransactionKind.RevenueTransfer => $"Takings of {t.RevenueDate!.Value.ToString("d MMM", Invariant)}",
+            SafeTransactionKind.RevenueTransfer => $"Takings of {t.RevenueDate!.Value.ToString("d MMM", Invariant)}" +
+                (t.PaidOut != 0 ? $" · {Pounds(Math.Abs(t.GrossAmount!.Value))} gross, less {Pounds(Math.Abs(t.PaidOut))} paid out of them" : ""),
             SafeTransactionKind.ExpenseVoucher => t.ExpenseItemId is { } e ? names.Expenses.GetValueOrDefault(e) ?? "A removed expense" : "An expense",
             SafeTransactionKind.SupplierPayment => $"Payment to {Supplier()}",
             _ => (t.PurchaseInvoiceId is { } i && names.Invoices.GetValueOrDefault(i) is { } number ? $"Invoice {number}" : "Invoice") +
@@ -643,8 +672,10 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         return new SafeEntryRow(
             t.Id, t.Kind, t.Fund, t.BusinessDate, t.IsReversal ? $"Voided: {what}" : what, t.Amount > 0 ? t.Amount : 0, t.Amount < 0 ? -t.Amount : 0,
             balance is { } b ? Money(b) : null, t.Source, t.RevenueDate, t.SupplierId, t.PurchaseInvoiceId, t.ExpenseItemId, t.Notes, t.RecordedBy,
-            t.RecordedAtUtc, t.ApprovedBy, t.ReversalOf, t.VoidedAtUtc, t.VoidedBy, t.IncludesTax, t.TaxPercent, t.TaxAmount);
+            t.RecordedAtUtc, t.ApprovedBy, t.ReversalOf, t.VoidedAtUtc, t.VoidedBy, t.IncludesTax, t.TaxPercent, t.TaxAmount, t.GrossAmount);
     }
+
+    private static string Pounds(decimal value) => $"L.E {value.ToString("N2", Invariant)}";
 
     private static string SourceName(FundingSource? source) => source switch
     {

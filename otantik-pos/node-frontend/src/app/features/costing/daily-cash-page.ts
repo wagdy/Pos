@@ -10,10 +10,10 @@ import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { monthBounds } from './financials';
 
-// The daily cash (يومية الإيراد): each day's takings as they were spent, month by month. The
-// invoices paid straight out of a day's takings, and the cash counted into the safe for it; the
-// two are the day's cash. A day opens to its invoices and counts. Read only: the safe is as it is.
-// Expense vouchers are paid from the safe, never from a day's takings, so they are not here.
+// The daily cash (يومية الإيراد): each day's takings as they were spent, month by month. The gross
+// entered for a day, less the invoices paid straight out of its takings, is what of it is in the
+// safe. A day opens to its takings and invoices. Read only: the safe is as it is. Expense vouchers
+// are paid from the safe, never from a day's takings, so they are not here.
 @Component({
   selector: 'app-daily-cash-page',
   imports: [DatePipe, MatButtonModule, MatIconModule, MatProgressBarModule, MoneyPipe, RouterLink],
@@ -47,9 +47,9 @@ import { monthBounds } from './financials';
         </div>
       </div>
       <p class="note">
-        Each day's cash: the invoices paid straight out of its takings, and what was counted into the safe for it. Open a day for its
+        Each day's takings as entered, gross, less the invoices paid straight out of them: the rest is in the safe. Open a day for its
         invoices. Expense vouchers are paid from the safe, so they are not here; voided entries are left out.
-        <span class="inline-ar">إيراد كل يوم: ما صرف منه للفواتير، وما ورد للخزنة.</span>
+        <span class="inline-ar">إجمالي الإيراد ناقص ما صرف منه للفواتير = الصافي للخزنة.</span>
       </p>
 
       <div class="table-wrap">
@@ -84,6 +84,23 @@ import { monthBounds } from './financials';
               @if (isOpen(d)) {
                 <tr class="details">
                   <td colspan="5">
+                    <h4>Takings entered <span class="inline-ar">الإيراد المسجل</span></h4>
+                    @if (d.entered.length) {
+                      <table class="lines">
+                        <tbody>
+                          @for (l of d.entered; track l.id) {
+                            <tr class="entered">
+                              <td class="when muted">{{ l.date | date: 'd MMM' }}</td>
+                              <td>{{ l.description }}</td>
+                              <td class="num">{{ l.amount | money }}</td>
+                              <td class="by">{{ l.recordedBy }}</td>
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+                    } @else {
+                      <p class="muted small">Not entered yet.</p>
+                    }
                     <h4>Paid out of these takings <span class="inline-ar">المنصرف من الإيراد</span></h4>
                     @if (d.paid.length) {
                       <table class="lines">
@@ -115,28 +132,11 @@ import { monthBounds } from './financials';
                     } @else {
                       <p class="muted small">Nothing was paid out of these takings.</p>
                     }
-                    <h4>Counted into the safe <span class="inline-ar">المورد للخزنة</span></h4>
-                    @if (d.counted.length) {
-                      <table class="lines">
-                        <tbody>
-                          @for (l of d.counted; track l.id) {
-                            <tr class="counted">
-                              <td class="when muted">{{ l.date | date: 'd MMM' }}</td>
-                              <td>{{ l.description }}</td>
-                              <td class="num">{{ l.amount | money }}</td>
-                              <td class="by">{{ l.recordedBy }}</td>
-                            </tr>
-                          }
-                        </tbody>
-                      </table>
-                    } @else {
-                      <p class="muted small">Not counted into the safe yet.</p>
-                    }
                   </td>
                 </tr>
               }
             } @empty {
-              <tr><td colspan="5" class="muted">No takings paid out or counted into the safe this month.</td></tr>
+              <tr><td colspan="5" class="muted">No takings entered or paid out this month.</td></tr>
             }
           </tbody>
           @if (r.days.length) {

@@ -43,6 +43,11 @@ public sealed class FinancialsController(ISender sender, TreasuryService treasur
     public Task<ReconciliationReport> GetReconciliation([FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken cancellationToken) =>
         treasury.GetReconciliationAsync(from, to, cancellationToken);
 
+    // A day's takings before they are entered: what was paid out of them, which entering them takes off.
+    [HttpGet("takings")]
+    public Task<TakingsPreview> GetTakingsPreview([FromQuery] DateOnly day, CancellationToken cancellationToken) =>
+        treasury.GetTakingsPreviewAsync(day, cancellationToken);
+
     // Each day's takings as they were spent: the invoices paid out of them, and what reached the safe.
     [HttpGet("daily-cash")]
     public Task<DailyCashReport> GetDailyCash([FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken cancellationToken) =>

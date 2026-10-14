@@ -12,15 +12,21 @@ using OtantikPos.Inventory.Domain.Treasury;
 namespace OtantikPos.Inventory.Application.Treasury;
 
 // The treasury (الماليات): the safe's ledger and what is owed to suppliers. Cash goes into the
-// safe as its opening balance, as funding, or as a day's takings moved in; it goes out as expense
+// safe as its opening balance, as funding, or as a day's takings; it goes out as expense
 // vouchers, supplier payments, and invoices paid in cash, from the safe or straight from a day's
 // takings. An invoice on credit is owed to its supplier until a payment voucher pays it.
+//
+// A day's takings are entered gross, as the POS totals them, once. What was paid straight out of
+// them by then came out of the drawer, so the safe gets the rest; what is paid out of them, or put
+// back by a void, once they are in, moves the safe. Either way the safe ends with the gross less
+// what the day's takings paid.
 //
 // Every safe entry is a manager's: anyone else's is a request (ApprovalRequests.cs), and no cash
 // moves until it is approved. A supplier's opening debt moves no cash, and is entered at once.
 
 // A safe entry as entered: held by a request until a manager approves it. TransactionId is made
-// by the till. IncludesTax: a day's takings counted with the tax in them; TaxPercent is the till's
+// by the till. A day's takings' Amount is their gross. IncludesTax: a day's takings with the tax
+// in them; TaxPercent is the till's
 // rate, set by the server when it is entered (never the screen's), and kept with a request so the
 // approval takes the tax off at the rate that was asked.
 public sealed record SafeVoucher(
@@ -63,11 +69,13 @@ public sealed record SafeTransactionDto(
     string? VoidedBy,
     bool IncludesTax,
     decimal? TaxPercent,
-    decimal TaxAmount)
+    decimal TaxAmount,
+    decimal? GrossAmount)
 {
     public static SafeTransactionDto From(SafeTransaction t) => new(
         t.Id, t.Kind, t.Fund, t.Amount, t.BusinessDate, t.RevenueDate, t.Source, t.SupplierId, t.PurchaseInvoiceId, t.ExpenseItemId, t.Notes,
-        t.RecordedBy, t.RecordedAtUtc, t.ApprovedBy, t.ReversalOf, t.VoidedAtUtc, t.VoidedBy, t.IncludesTax, t.TaxPercent, t.TaxAmount);
+        t.RecordedBy, t.RecordedAtUtc, t.ApprovedBy, t.ReversalOf, t.VoidedAtUtc, t.VoidedBy, t.IncludesTax, t.TaxPercent, t.TaxAmount,
+        t.GrossAmount);
 }
 
 // Checks, describes and enters safe entries: for a manager's own and for an approval alike. What
@@ -139,8 +147,12 @@ internal sealed class TreasuryWriter(
                     throw new DomainException("Say where the money came from: the owners' financing, or another source.");
                 break;
             case SafeTransactionKind.RevenueTransfer:
-                if (voucher.RevenueDate is null)
+                if (voucher.RevenueDate is not { } day)
                     throw new DomainException("Choose the day whose takings go into the safe.");
+                // One gross a day, as the POS has one total.
+                if (await safe.GetTakingsAsync(day, cancellationToken) is { } entered)
+                    throw new DomainException(
+                        $"The takings of {Day(day)} are entered already: {Money(entered.GrossAmount ?? entered.Amount)}. To change them, void that entry and enter them again.");
                 break;
             case SafeTransactionKind.ExpenseVoucher:
                 await ExpenseItemAsync(voucher.ExpenseItemId, cancellationToken);
@@ -186,7 +198,7 @@ internal sealed class TreasuryWriter(
             case SafeTransactionKind.RevenueTransfer:
                 entry = SafeTransaction.RevenueTransfer(
                     id, voucher.Amount, voucher.Date, voucher.RevenueDate!.Value, voucher.Notes, recordedBy, approvedBy,
-                    voucher.IncludesTax ? voucher.TaxPercent : null);
+                    voucher.IncludesTax ? voucher.TaxPercent : null, await safe.PaidOutOfTakingsAsync(voucher.RevenueDate.Value, cancellationToken));
                 break;
             case SafeTransactionKind.ExpenseVoucher:
                 entry = SafeTransaction.ExpenseVoucher(id, voucher.Amount, voucher.Date, voucher.ExpenseItemId!.Value, voucher.Notes, recordedBy, approvedBy);
@@ -199,7 +211,8 @@ internal sealed class TreasuryWriter(
             {
                 var invoice = await UnpaidInvoiceAsync(voucher.PurchaseInvoiceId, cancellationToken);
                 entry = SafeTransaction.InvoicePayment(
-                    id, invoice.Total, voucher.Date, invoice.Id, invoice.SupplierId, invoice.RevenueDate, recordedBy, approvedBy);
+                    id, invoice.Total, voucher.Date, invoice.Id, invoice.SupplierId, invoice.RevenueDate, recordedBy, approvedBy,
+                    await TakingsInSafeAsync(invoice.RevenueDate, cancellationToken));
                 break;
             }
             default:
@@ -211,10 +224,11 @@ internal sealed class TreasuryWriter(
     }
 
     // Voids it, today: the opposite amount in the safe's ledger, and on the supplier's account too
-    // for a supplier payment.
+    // for a supplier payment. A payment out of a day's takings goes back into the safe when they
+    // are in it.
     public async Task VoidAsync(SafeTransaction entry, string by, CancellationToken cancellationToken)
     {
-        safe.Add(entry.Void(Guid.NewGuid(), Today, by));
+        safe.Add(entry.Void(Guid.NewGuid(), Today, by, await TakingsInSafeAsync(entry.RevenueDate, cancellationToken)));
         if (entry.Kind == SafeTransactionKind.SupplierPayment)
             foreach (var line in (await suppliersLedger.GetBySourceAsync(entry.Id, cancellationToken)).Where(l => !l.IsReversal))
                 suppliersLedger.Add(line.Reverse(Today, by));
@@ -282,7 +296,11 @@ internal sealed class TreasuryWriter(
                 changes.Add(new ApprovalChange("Source", null, from));
                 break;
             case SafeTransactionKind.RevenueTransfer:
-                summary = $"Takings of {Day(voucher.RevenueDate!.Value)} into the safe · {amount}";
+            {
+                var paidOut = await safe.PaidOutOfTakingsAsync(voucher.RevenueDate!.Value, cancellationToken);
+                summary = $"Takings of {Day(voucher.RevenueDate.Value)} · {amount} gross, {Money(voucher.Amount - paidOut)} into the safe";
+                changes.Add(new ApprovalChange("Paid out of them", null, Money(paidOut)));
+                changes.Add(new ApprovalChange("Into the safe", null, Money(voucher.Amount - paidOut)));
                 if (voucher.IncludesTax && voucher.TaxPercent is { } rate)
                 {
                     var tax = SafeTransaction.TaxIn(voucher.Amount, rate);
@@ -291,6 +309,7 @@ internal sealed class TreasuryWriter(
                 }
 
                 break;
+            }
             case SafeTransactionKind.ExpenseVoucher:
                 var item = await ExpenseItemAsync(voucher.ExpenseItemId, cancellationToken);
                 summary = $"Expense voucher · {item.Name} · {amount}";
@@ -314,12 +333,21 @@ internal sealed class TreasuryWriter(
                 throw new DomainException("Say what the safe entry is.");
         }
 
-        changes.Insert(1, new ApprovalChange("Amount", null, amount));
-        if (voucher.Kind != SafeTransactionKind.InvoicePayment || voucher.RevenueDate is null)
+        changes.Insert(1, new ApprovalChange(voucher.Kind == SafeTransactionKind.RevenueTransfer ? "Gross takings" : "Amount", null, amount));
+        // What the safe holds after it: a payment out of a day's takings moves it once they are in it.
+        var fromDrawer = voucher is { Kind: SafeTransactionKind.InvoicePayment, RevenueDate: not null }
+            && !await TakingsInSafeAsync(voucher.RevenueDate, cancellationToken);
+        decimal? moves = voucher.Kind switch
+        {
+            _ when fromDrawer => null,
+            SafeTransactionKind.OpeningBalance or SafeTransactionKind.Funding => voucher.Amount,
+            SafeTransactionKind.RevenueTransfer => voucher.Amount - await safe.PaidOutOfTakingsAsync(voucher.RevenueDate!.Value, cancellationToken),
+            _ => -voucher.Amount,
+        };
+        if (moves is { } by)
         {
             var balance = await safe.SafeBalanceAsync(null, cancellationToken);
-            var into = voucher.Kind is SafeTransactionKind.OpeningBalance or SafeTransactionKind.Funding or SafeTransactionKind.RevenueTransfer;
-            changes.Add(new ApprovalChange("Safe", Money(balance), Money(balance + (into ? voucher.Amount : -voucher.Amount))));
+            changes.Add(new ApprovalChange("Safe", Money(balance), Money(balance + by)));
         }
 
         if (!string.IsNullOrWhiteSpace(voucher.Notes))
@@ -334,13 +362,18 @@ internal sealed class TreasuryWriter(
         {
             SafeTransactionKind.OpeningBalance => $"Opening balance · {SourceName(entry.Source)}",
             SafeTransactionKind.Funding => $"Funding · {SourceName(entry.Source)}",
-            SafeTransactionKind.RevenueTransfer => $"Takings of {Day(entry.RevenueDate!.Value)} into the safe",
+            SafeTransactionKind.RevenueTransfer => $"Takings of {Day(entry.RevenueDate!.Value)} · {Money(entry.GrossAmount ?? entry.Amount)} gross, into the safe",
             SafeTransactionKind.ExpenseVoucher => $"Expense voucher · {(entry.ExpenseItemId is { } e ? (await expenses.GetByIdAsync(e, cancellationToken))?.Name : null) ?? "an expense"}",
             SafeTransactionKind.SupplierPayment => $"Supplier payment · {(entry.SupplierId is { } s ? (await suppliers.GetByIdAsync(s, cancellationToken))?.Name : null) ?? "a supplier"}",
             _ => $"Invoice payment from {(entry.RevenueDate is { } day ? $"the takings of {Day(day)}" : "the safe")}",
         };
         return $"{what} · {Money(Math.Abs(entry.Amount))} · {Day(entry.BusinessDate)}";
     }
+
+    // Whether a day's takings are entered, and so in the safe: what is paid out of them, or put
+    // back, moves the safe.
+    private async Task<bool> TakingsInSafeAsync(DateOnly? revenueDate, CancellationToken cancellationToken) =>
+        revenueDate is { } day && await safe.GetTakingsAsync(day, cancellationToken) is not null;
 
     private async Task<Supplier> SupplierAsync(Guid? id, CancellationToken cancellationToken) =>
         id is { } supplierId

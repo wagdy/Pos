@@ -93,6 +93,33 @@ public class TreasuryTests
     }
 
     [Fact]
+    public void A_days_takings_go_into_the_safe_gross_less_what_was_paid_out_of_them()
+    {
+        // The POS says 10,495; the drawer paid 1,454.07 out of it: 9,040.93 into the safe, the tax
+        // in the gross.
+        var takings = SafeTransaction.RevenueTransfer(Guid.NewGuid(), 10_495, Today, Today, null, "Omar", taxPercent: 14, paidOut: 1_454.07m);
+        Assert.Equal(
+            ((decimal?)10_495m, 9_040.93m, 1_454.07m, 1_288.86m, 9_206.14m),
+            (takings.GrossAmount, takings.Amount, takings.PaidOut, takings.TaxAmount, takings.NetAmount));
+        // Paid out more than the gross: the rest comes out of the safe.
+        Assert.Equal(-20m, SafeTransaction.RevenueTransfer(Guid.NewGuid(), 50, Today, Today, null, "Omar", paidOut: 70).Amount);
+        Assert.Throws<DomainException>(() => SafeTransaction.RevenueTransfer(Guid.NewGuid(), 50, Today, Today, null, "Omar", paidOut: -1));
+        // Voided, the gross goes back with what went in.
+        var reversal = takings.Void(Guid.NewGuid(), Today, "Omar");
+        Assert.Equal(((decimal?)-10_495m, -9_040.93m), (reversal.GrossAmount, reversal.Amount));
+
+        // Paid out of a day's takings once they are in the safe: out of the safe.
+        var later = SafeTransaction.InvoicePayment(Guid.NewGuid(), 45, Today, Guid.NewGuid(), null, Today, "Omar", takingsInSafe: true);
+        Assert.Equal((CashFund.Safe, -45m), (later.Fund, later.Amount));
+
+        // The drawer's payment voided once they are in the safe goes back into it; before, into the drawer.
+        var drawer = SafeTransaction.InvoicePayment(Guid.NewGuid(), 50, Today, Guid.NewGuid(), null, Today, "Omar");
+        Assert.Equal((CashFund.Safe, 50m), (drawer.Void(Guid.NewGuid(), Today, "Omar", takingsInSafe: true).Fund, 50m));
+        var early = SafeTransaction.InvoicePayment(Guid.NewGuid(), 50, Today, Guid.NewGuid(), null, Today, "Omar");
+        Assert.Equal(CashFund.DayRevenue, early.Void(Guid.NewGuid(), Today, "Omar").Fund);
+    }
+
+    [Fact]
     public void A_supplier_is_owed_what_was_bought_on_credit_less_what_was_paid()
     {
         var supplier = Guid.NewGuid();

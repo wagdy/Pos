@@ -12,12 +12,13 @@ const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 describe('entering a safe entry', () => {
   const supplierBalances = vi.fn();
   const expenseItems = vi.fn();
+  const takingsPreview = vi.fn();
   const close = vi.fn();
 
   async function dialog(data: SafeVoucherDialogData) {
     TestBed.configureTestingModule({
       providers: [
-        { provide: CostingApi, useValue: { supplierBalances, expenseItems } },
+        { provide: CostingApi, useValue: { supplierBalances, expenseItems, takingsPreview } },
         { provide: MAT_DIALOG_DATA, useValue: data },
         { provide: MatDialogRef, useValue: { close } },
       ],
@@ -34,6 +35,7 @@ describe('entering a safe entry', () => {
       { supplierId: 'delta', supplier: 'Delta Oils', isArchived: false, openingDebt: 0, creditPurchases: 100, payments: 100, balance: 0, lastPaidOn: null, openInvoices: 0 },
     ]));
     expenseItems.mockReset().mockReturnValue(of([]));
+    takingsPreview.mockReset().mockImplementation((day: string) => of({ date: day, entered: null, paidOut: 0, invoices: 0 }));
     close.mockReset();
   });
 
@@ -69,11 +71,11 @@ describe('entering a safe entry', () => {
     expect([page['date'], page['today']]).toEqual(['2026-10-12', '2026-10-12']);
   });
 
-  it('takes the tax out of takings that include it, at the till’s rate, and says all of it goes into the safe', async () => {
+  it('takes the tax out of takings that include it, at the till’s rate, from the gross', async () => {
     const { el, page } = await dialog({ kind: 'RevenueTransfer', canApprove: true, revenueDate: '2026-10-12', amount: 1_140, taxPercent: 14, includesTax: true });
 
     expect(page['taxSplit']()).toEqual({ net: 1_000, tax: 140 });
-    expect(text(el)).toContain('Before tax L.E 1,000.00 · tax at 14% L.E 140.00. All L.E 1,140.00 goes into the safe.');
+    expect(text(el)).toContain('Before tax L.E 1,000.00 · tax at 14% L.E 140.00, in the gross.');
     page['done']();
     expect(close.mock.lastCall![0]).toMatchObject({ kind: 'RevenueTransfer', amount: 1_140, includesTax: true });
   });
@@ -88,6 +90,50 @@ describe('entering a safe entry', () => {
     expect(text(el)).toContain('The till has no tax rate yet');
     page['done']();
     expect(close.mock.lastCall![0]).toMatchObject({ includesTax: false });
+  });
+
+  it('enters a day’s takings gross, and shows what was paid out of them and what goes into the safe', async () => {
+    takingsPreview.mockImplementation((day: string) =>
+      of(day === '2026-10-13' ? { date: day, entered: null, paidOut: 1_454.07, invoices: 5 } : { date: day, entered: null, paidOut: 0, invoices: 0 }));
+    const { el, page } = await dialog({ kind: 'RevenueTransfer', canApprove: true, revenueDate: '2026-10-13', amount: 10_495, today: '2026-10-14' });
+    // Each line: its English label (the Arabic apart), and the sum.
+    const label = (dt: Element) =>
+      [...dt.childNodes].filter((n) => n.nodeType !== Node.COMMENT_NODE && !(n instanceof Element && n.classList.contains('ar'))).map((n) => n.textContent).join('').replace(/\s+/g, ' ').trim();
+    const breakdown = () => [...el.querySelectorAll('.breakdown > div')].map((row) => [label(row.querySelector('dt')!), text(row.querySelector('dd')!)]);
+
+    expect(takingsPreview).toHaveBeenCalledWith('2026-10-13');
+    expect(breakdown()).toEqual([
+      ['Gross takings entered', 'L.E 10,495.00'],
+      ['Less paid out of them · 5 invoices', 'L.E 1,454.07'],
+      ['Net into the safe', 'L.E 9,040.93'],
+    ]);
+    expect([...el.querySelectorAll('.breakdown .ar')].map(text)).toEqual(['إجمالي الإيراد', 'المنصرف منه', 'الصافي للخزنة']);
+
+    // Another day: what was paid out of that one.
+    page['revenueDate'] = '2026-10-12';
+    page['takingsDayChosen']();
+    await Promise.resolve();
+    expect(page['netIntoSafe']()).toBe(10_495);
+
+    page['revenueDate'] = '2026-10-13';
+    page['takingsDayChosen']();
+    await Promise.resolve();
+    page['done']();
+    expect(close.mock.lastCall![0]).toMatchObject({ kind: 'RevenueTransfer', amount: 10_495, revenueDate: '2026-10-13' });
+  });
+
+  it('says when more was paid out of the takings than their gross, and refuses a day already entered', async () => {
+    takingsPreview.mockReturnValue(of({ date: '2026-10-13', entered: null, paidOut: 1_454, invoices: 2 }));
+    const short = await dialog({ kind: 'RevenueTransfer', canApprove: true, revenueDate: '2026-10-13', amount: 1_000, today: '2026-10-14' });
+    expect(text(short.el)).toContain('The invoices paid out of these takings come to L.E 454.00 more than them: that comes out of the safe.');
+    expect(short.page['problem']()).toBeNull();
+    TestBed.resetTestingModule();
+
+    takingsPreview.mockReturnValue(of({ date: '2026-10-13', entered: 10_495, paidOut: 1_454.07, invoices: 5 }));
+    const { el, page } = await dialog({ kind: 'RevenueTransfer', canApprove: true, revenueDate: '2026-10-13', amount: 500, today: '2026-10-14' });
+    expect(page['problem']()).toBe('These takings are entered already: L.E 10,495.00. To change them, void that entry on the Safe tab and enter them again.');
+    // Nothing to break down: they are in already.
+    expect(el.querySelector('.breakdown')).toBeNull();
   });
 
   it('works the tax out to the piastre, as the server does', () => {

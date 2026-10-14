@@ -10,8 +10,8 @@ import { MoneyPipe } from '../../core/ui/money.pipe';
 import { monthBounds } from './financials';
 
 // The reconciliation (مطابقة الإيرادات): each business day's cash before tax against the cash its
-// sales should have brought in. A is the takings entered for the day, with what was paid straight
-// out of them, less the tax in them. B is every item sold at its price, from costing's sales; less
+// sales should have brought in. A is the takings entered for the day, gross, less the tax in
+// them. B is every item sold at its price, from costing's sales; less
 // what did not come in as cash and plus delivery fees, all before tax, it is the cash expected.
 // The difference shows a day short (items sold, cash missing) or over (cash for items not rung up).
 @Component({
@@ -52,7 +52,7 @@ import { monthBounds } from './financials';
         </div>
       </div>
       <p class="note">
-        A: the cash entered as each day's takings, with what was paid straight out of them, less the tax in them{{ rateNote(r) }}. B: every
+        A: each day's takings as entered, gross (what was paid straight out of them is part of them), less the tax in them{{ rateNote(r) }}. B: every
         item sold at its menu price, before tax, at the till and online. Less discounts, points, refunds and what was paid by
         card or online, plus delivery fees, it is the cash the day should have brought in. Below zero, cash is missing for items sold;
         above it, cash came in for items not rung up.
@@ -85,7 +85,7 @@ import { monthBounds } from './financials';
           <thead>
             <tr>
               <th>Day<span class="ar">اليوم</span></th>
-              <th class="num">Cash entered<span class="ar">المورد</span></th>
+              <th class="num">Takings entered<span class="ar">الإيراد المسجل</span></th>
               <th class="num">Paid out of it<span class="ar">مدفوع منه</span></th>
               <th class="num">Tax in it<span class="ar">الضريبة</span></th>
               <th class="num">Cash before tax (A)<span class="ar">صافي النقدية</span></th>

@@ -11,8 +11,9 @@ import { Treasury, entryTax, monthBounds } from './financials';
 
 // Funding sources (مصادر التمويل): every sum put into the safe in a month, by where it came from:
 // carried over, the owners' financing, another source, and the days' cash takings. Below, each
-// day's cash: what the till and cash-on-delivery took, what was paid straight out of it, what went
-// into the safe, and what is left to move in (or short). A day's cash is moved in from its row.
+// day's cash: what the till and cash-on-delivery took, the takings entered for it (gross), what was
+// paid straight out of them, what of them went into the safe, and the till's cash not entered. A
+// day's takings are entered from its row.
 @Component({
   selector: 'app-funding-page',
   imports: [DatePipe, MatButtonModule, MatIconModule, MatProgressBarModule, MoneyPipe],
@@ -93,8 +94,9 @@ import { Treasury, entryTax, monthBounds } from './financials';
     <h3>Each day's cash <span class="inline-ar">إيرادات الأيام النقدية</span></h3>
     <p class="note">
       Cash sales at the till and cash on delivery, by business day, from the treasury's opening balance on (the cash of the days before is in
-      it). What is left is still to be counted into the safe; below zero, it was short.
-      <span class="inline-ar">ما تبقى لم يورد بعد للخزنة.</span>
+      it). The takings entered are the day's gross; what was paid out of them stays out of the safe. Left is the till's cash not entered as
+      takings; below zero, more was entered than the till took.
+      <span class="inline-ar">المتبقي: نقدية لم تسجل كإيراد بعد.</span>
     </p>
     @if (revenue(); as r) {
       <div class="table-wrap">
@@ -103,6 +105,7 @@ import { Treasury, entryTax, monthBounds } from './financials';
             <tr>
               <th>Day<span class="ar">اليوم</span></th>
               <th class="num">Cash taken<span class="ar">المبيعات النقدية</span></th>
+              <th class="num">Takings entered<span class="ar">الإيراد المسجل</span></th>
               <th class="num">Paid out of it<span class="ar">مدفوع منه</span></th>
               <th class="num">Into the safe<span class="ar">مورد للخزنة</span></th>
               <th class="num">Left<span class="ar">المتبقي</span></th>
@@ -114,17 +117,18 @@ import { Treasury, entryTax, monthBounds } from './financials';
               <tr>
                 <td class="nowrap">{{ d.date | date: 'EEE d MMM' }}</td>
                 <td class="num">{{ d.cashSales | money }}</td>
+                <td class="num">{{ d.entered ? (d.entered | money) : '—' }}</td>
                 <td class="num">{{ d.paidOut ? (d.paidOut | money) : '—' }}</td>
                 <td class="num">{{ d.transferred ? (d.transferred | money) : '—' }}</td>
                 <td class="num strong" [class.negative]="d.left < 0">{{ d.left | money }}</td>
                 <td class="num">
-                  @if (d.left > 0) {
-                    <button mat-stroked-button (click)="moveIn(d)"><mat-icon>move_to_inbox</mat-icon> Into the safe</button>
+                  @if (!d.entered && d.cashSales > 0) {
+                    <button mat-stroked-button (click)="moveIn(d)"><mat-icon>move_to_inbox</mat-icon> Enter takings</button>
                   }
                 </td>
               </tr>
             } @empty {
-              <tr><td colspan="6" class="muted">No cash taken this month.</td></tr>
+              <tr><td colspan="7" class="muted">No cash taken this month.</td></tr>
             }
           </tbody>
           @if (r.days.length) {
@@ -132,6 +136,7 @@ import { Treasury, entryTax, monthBounds } from './financials';
               <tr>
                 <td>The month</td>
                 <td class="num">{{ r.cashSales | money }}</td>
+                <td class="num">{{ r.entered | money }}</td>
                 <td class="num">{{ r.paidOut | money }}</td>
                 <td class="num">{{ r.transferred | money }}</td>
                 <td class="num strong" [class.negative]="r.left < 0">{{ r.left | money }}</td>
@@ -204,10 +209,10 @@ export class FundingPage {
     }
   }
 
-  // A day's cash counted into the safe: what is left, unless less was counted. The till's bills
-  // charge tax, so its cash has the tax in it.
+  // A day's takings entered: its gross, what the till took, unless the POS says otherwise. The
+  // till's bills charge tax, so its cash has the tax in it.
   protected async moveIn(day: DayRevenue): Promise<void> {
-    if (await this.treasury.enter('RevenueTransfer', { revenueDate: day.date, amount: day.left, includesTax: true })) {
+    if (await this.treasury.enter('RevenueTransfer', { revenueDate: day.date, amount: day.cashSales, includesTax: true })) {
       await this.load();
     }
   }

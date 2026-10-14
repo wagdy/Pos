@@ -1384,9 +1384,10 @@ public class NodeTests
         Assert.Equal(InvoicePaymentStatus.Paid, (await node.Send(new PostPurchaseInvoiceCommand(market, "Omar"))).PaymentStatus);
         Assert.Equal((100m, 15_000m), ((await Takings()).PaidOut, await Safe()));
 
-        // The rest of the day's cash counted into the safe, 10 short.
-        await Voucher(New(SafeTransactionKind.RevenueTransfer, cash - 110, takings: today));
-        Assert.Equal((cash - 110, 10m), ((await Takings()).Transferred, (await Takings()).Left));
+        // The day's takings entered gross, 10 short of what the till took: the 100 paid out of them
+        // stays out, the rest goes into the safe.
+        await Voucher(New(SafeTransactionKind.RevenueTransfer, cash - 10, takings: today));
+        Assert.Equal((cash - 10, cash - 110, 10m), ((await Takings()).Entered, (await Takings()).Transferred, (await Takings()).Left));
         Assert.Equal(15_000m + cash - 110, await Safe());
 
         // Nile Farms: owed 500 from before, then 2,500 on credit, which needs the supplier.
@@ -1463,8 +1464,10 @@ public class NodeTests
         Assert.Equal((0m, SafeOpening.OpeningEntry, (FundingSource?)FundingSource.CarriedOver), (month.OpeningBalance, month.OpeningKind, month.OpeningSource));
         Assert.Equal(month.ClosingBalance, month.BalanceNow);
         Assert.Equal(month.In - month.Out, month.ClosingBalance);
-        // The electricity bill and its void are in neither In nor Out, only in what was voided.
-        Assert.Equal((15_000m + cash - 110, 4_000m, 0m, 1_250m), (month.In, month.Out, month.VoidedIn, month.VoidedOut));
+        // Voided, with their voids, in neither In nor Out but in what was voided: the electricity
+        // bill, and the accountant's 40 of tomatoes, paid out of the day's takings once they were in
+        // the safe.
+        Assert.Equal((15_000m + cash - 110, 4_000m, 0m, 1_290m), (month.In, month.Out, month.VoidedIn, month.VoidedOut));
         Assert.Equal("Opening balance · carried over", month.Entries[0].Description);
         var funding = await treasury.GetFundingAsync(today, today, ct);
         Assert.Equal((10_000m, 5_000m, cash - 110), (funding.CarriedOver, funding.OwnerFinancing, funding.Revenue));
@@ -1479,22 +1482,24 @@ public class NodeTests
         var before = await treasury.GetSafeAsync(lastMonth.Year, lastMonth.Month, ct);
         Assert.Equal((700m, 0m, 0m, 700m), (before.In, before.Out, before.VoidedIn, before.ClosingBalance));
         var after = await treasury.GetSafeAsync(today.Year, today.Month, ct);
-        Assert.Equal((700m, month.In, month.Out + 700, 0m, 1_250m), (after.OpeningBalance, after.In, after.Out, after.VoidedIn, after.VoidedOut));
+        Assert.Equal((700m, month.In, month.Out + 700, 0m, 1_290m), (after.OpeningBalance, after.In, after.Out, after.VoidedIn, after.VoidedOut));
         Assert.Equal((month.ClosingBalance, after.ClosingBalance), (after.OpeningBalance + after.In - after.Out, after.BalanceNow));
     }
 
-    // Each day's takings as they were spent (يومية الإيراد): the invoices paid straight out of them,
-    // what was counted into the safe, and the two together; voided entries left out, and the safe
-    // as it was.
+    // A day's takings are entered gross (توريد إيراد), as the POS totals them, once. What was paid
+    // straight out of them before came out of the drawer: the safe gets the rest. Paid out of them,
+    // or put back by a void, once they are in, moves the safe. Either way the safe ends with the
+    // gross less what the day's takings paid, and the daily cash, the reconciliation and the
+    // day's cash say so (يومية الإيراد).
     [Fact]
-    public async Task Each_days_takings_show_the_invoices_paid_out_of_them_and_what_reached_the_safe()
+    public async Task A_days_takings_are_entered_gross_and_the_safe_gets_them_less_what_was_paid_out_of_them()
     {
         await using var node = await TestNode.StartAsync();
         var ct = TestContext.Current.CancellationToken;
         using var scope = node.Scope();
         var treasury = node.Service<TreasuryService>(scope);
         var today = treasury.Today;
-        var yesterday = today.AddDays(-1);
+        var (yesterday, before) = (today.AddDays(-1), today.AddDays(-2));
         var tomatoes = (await node.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram))).Id;
         var onions = (await node.Send(new CreateRawMaterialCommand("Onions", UnitOfMeasure.Gram))).Id;
         var nileFarms = (await node.Send(new SaveSupplierCommand(Guid.NewGuid(), "Nile Farms"))).Id;
@@ -1505,42 +1510,71 @@ public class NodeTests
             Assert.Equal(InvoicePaymentStatus.Paid, (await node.Send(new PostPurchaseInvoiceCommand(id, "Omar"))).PaymentStatus);
             return id;
         }
-        Task<SafeVoucherResultDto> Counted(decimal amount, DateOnly takings) => node.Send(new RecordSafeVoucherCommand(
-            Guid.NewGuid(), new SafeVoucher(Guid.NewGuid(), SafeTransactionKind.RevenueTransfer, amount, today, RevenueDate: takings), null,
+        Task<SafeVoucherResultDto> Takings(decimal gross, DateOnly day) => node.Send(new RecordSafeVoucherCommand(
+            Guid.NewGuid(), new SafeVoucher(Guid.NewGuid(), SafeTransactionKind.RevenueTransfer, gross, today, RevenueDate: day), null,
             "staff-omar", "Omar", true));
         Task Void(ApprovalModule module, Guid id) =>
             node.Send(new RequestDeletionCommand(Guid.NewGuid(), module, id, "Entered by mistake", "staff-omar", "Omar", CanApprove: true));
+        async Task<decimal> Safe() => (await treasury.GetSafeAsync(today.Year, today.Month, ct)).BalanceNow;
 
-        // Today's takings: Nile Farms' invoice and a market one paid out of them, then the rest
-        // counted into the safe. An invoice and a count, both voided, are not in it.
+        // Through the day, the drawer pays Nile Farms and the market; one invoice is voided. The
+        // safe does not move.
         var nile = await PaidFromTakings(nileFarms, "F-1", today, [new(tomatoes, 5, "kg", 1000, 100), new(onions, 10, "kg", 1000, 300)]);
         var market = await PaidFromTakings(null, null, today, [new(tomatoes, 1, "kg", 1000, 50)]);
         await Void(ApprovalModule.PurchaseInvoice, await PaidFromTakings(null, null, today, [new(onions, 1, "kg", 1000, 999)]));
-        await Counted(1_000, today);
-        await Void(ApprovalModule.Treasury, (await Counted(5_000, today)).Transaction!.Id);
-        // Yesterday's: an invoice paid out of them, nothing counted in yet.
+        Assert.Equal(0m, await Safe());
+        Assert.Equal(new TakingsPreview(today, null, 450m, 2), await treasury.GetTakingsPreviewAsync(today, ct));
+
+        // The POS says 10,495: into the safe go 10,045. Once a day.
+        var entered = (await Takings(10_495, today)).Transaction!;
+        Assert.Equal((10_495m, 10_045m), (entered.GrossAmount, entered.Amount));
+        Assert.Equal(10_045m, await Safe());
+        Assert.Contains("entered already", (await Assert.ThrowsAsync<DomainException>(() => Takings(1, today))).Message);
+        Assert.Equal(10_495m, (await treasury.GetTakingsPreviewAsync(today, ct)).Entered);
+
+        // Once they are in: another invoice paid out of them takes from the safe, and the market's,
+        // voided, puts its 50 back into it.
+        await PaidFromTakings(null, "L-2", today, [new(onions, 1, "kg", 1000, 45)]);
+        Assert.Equal(10_000m, await Safe());
+        await Void(ApprovalModule.PurchaseInvoice, market);
+        Assert.Equal(10_050m, await Safe());
+
+        // Entered wrong: voided, and entered again at 10,500. The safe has 10,500 less what stands
+        // paid out of them, 445.
+        await Void(ApprovalModule.Treasury, entered.Id);
+        await Takings(10_500, today);
+        Assert.Equal(10_055m, await Safe());
+
+        // Yesterday's paid out more than its gross: the safe pays the rest. The day before's are
+        // not entered yet: what was paid out of them is the drawer's.
         await PaidFromTakings(null, "M-7", yesterday, [new(onions, 2, "kg", 1000, 70)]);
-        var safe = (await treasury.GetSafeAsync(today.Year, today.Month, ct)).BalanceNow;
+        await Takings(50, yesterday);
+        await PaidFromTakings(null, null, before, [new(tomatoes, 1, "kg", 1000, 30)]);
+        Assert.Equal(10_035m, await Safe());
 
-        var report = await treasury.GetDailyCashAsync(yesterday, today, ct);
-        Assert.Equal((1_520m, 520m, 1_000m), (report.Gross, report.Deductions, report.NetToSafe));
-        Assert.Equal([today, yesterday], report.Days.Select(d => d.Date));
-        var day = report.Days[0];
-        Assert.Equal((1_450m, 450m, 1_000m), (day.Gross, day.Deductions, day.NetToSafe));
+        var report = await treasury.GetDailyCashAsync(before, today, ct);
+        Assert.Equal((10_550m, 545m, 10_035m), (report.Gross, report.Deductions, report.NetToSafe));
         Assert.Equal(
-            [
-                ("Invoice F-1 · Nile Farms", 400m, (Guid?)nile, "Onions, Tomatoes"),
-                ($"Invoice of {today.ToString("d MMM", System.Globalization.CultureInfo.InvariantCulture)}", 50m, market, "Tomatoes"),
-            ],
+            [(today, 10_500m, 445m, 10_055m), (yesterday, 50m, 70m, -20m), (before, 0m, 30m, 0m)],
+            report.Days.Select(d => (d.Date, d.Gross, d.Deductions, d.NetToSafe)));
+        var day = report.Days[0];
+        Assert.Equal(
+            [("Invoice F-1 · Nile Farms", 400m, (Guid?)nile, "Onions, Tomatoes"), ("Invoice L-2", 45m, day.Paid[1].PurchaseInvoiceId, "Onions")],
             day.Paid.Select(l => (l.Description, l.Amount, l.PurchaseInvoiceId, string.Join(", ", l.Items))));
-        Assert.Equal(("Counted into the safe", 1_000m, today, "Omar"), day.Counted.Select(l => (l.Description, l.Amount, l.Date, l.RecordedBy)).Single());
-        var before = report.Days[1];
-        Assert.Equal((70m, 70m, 0m, "Invoice M-7"), (before.Gross, before.Deductions, before.NetToSafe, before.Paid.Single().Description));
-        Assert.Empty(before.Counted);
+        Assert.Equal(("Takings entered", 10_500m, "Omar"), day.Entered.Select(l => (l.Description, l.Amount, l.RecordedBy)).Single());
+        Assert.Empty(report.Days[2].Entered);
 
-        // Reading it moves nothing; and a day with none of either is not there.
-        Assert.Equal(safe, (await treasury.GetSafeAsync(today.Year, today.Month, ct)).BalanceNow);
-        Assert.Empty((await treasury.GetDailyCashAsync(today.AddDays(-9), today.AddDays(-2), ct)).Days);
+        // The safe's line, the reconciliation and the day's cash: the gross as entered.
+        var line = (await treasury.GetSafeAsync(today.Year, today.Month, ct)).Entries
+            .Last(e => e.Kind == SafeTransactionKind.RevenueTransfer && e.RevenueDate == today);
+        Assert.Equal(
+            ($"Takings of {today.ToString("d MMM", System.Globalization.CultureInfo.InvariantCulture)} · L.E 10,500.00 gross, less L.E 450.00 paid out of them",
+                10_050m, (decimal?)10_500m),
+            (line.Description, line.In, line.Gross));
+        var reconciled = (await treasury.GetReconciliationAsync(today, today, ct)).Days.Single();
+        Assert.Equal((10_500m, 445m, 10_500m), (reconciled.TakingsEntered, reconciled.PaidOut, reconciled.NetCash));
+        var cash = (await treasury.GetDayRevenueAsync(today, today, ct)).Days.Single();
+        Assert.Equal((10_500m, 445m, 10_055m, -10_500m), (cash.Entered, cash.PaidOut, cash.Transferred, cash.Left));
     }
 
     // A day's purchases entered together (يومية المشتريات المجمعة): an invoice for each supplier, each
@@ -1632,17 +1666,18 @@ public class NodeTests
         var card = await Sell("R2", PaymentMethod.Visa, (FakeDeliverySystem.Burger, 1));
         Assert.True(cash.RefundedAmount > 0);
 
-        // 100 of the cash paid out for tomatoes; the rest counted into the safe 10 short, with the
-        // tax in it. A mistaken entry, voided, nets out.
+        // 100 of the cash paid out for tomatoes; the day's takings entered gross, 10 short, with the
+        // tax in them. A mistaken entry, voided, nets out.
         var tomatoes = (await node.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram))).Id;
         var market = Guid.NewGuid();
         await node.Send(new SavePurchaseInvoiceCommand(market, null, null, today, [new(tomatoes, 5, "kg", 1000, 100)], "Omar",
             PurchasePaymentMethod.DayRevenue, today));
         await node.Send(new PostPurchaseInvoiceCommand(market, "Omar"));
-        var counted = cash.TotalAmount - cash.RefundedAmount - 100 - 10;
-        var entry = await Takings(counted);
         var wrong = await Takings(999);
-        await node.Send(new RequestDeletionCommand(Guid.NewGuid(), ApprovalModule.Treasury, wrong.Id, "Typed twice", "staff-omar", "Omar", CanApprove: true));
+        await node.Send(new RequestDeletionCommand(Guid.NewGuid(), ApprovalModule.Treasury, wrong.Id, "Mistyped", "staff-omar", "Omar", CanApprove: true));
+        var gross = cash.TotalAmount - cash.RefundedAmount - 10;
+        var entry = await Takings(gross);
+        Assert.Equal(gross - 100, entry.Amount);
 
         var report = await treasury.GetReconciliationAsync(today, today, ct);
         var day = Assert.Single(report.Days);
@@ -1650,9 +1685,9 @@ public class NodeTests
         var rate = entry.TaxPercent!.Value;
         Assert.Equal(rate, report.TaxPercent);
 
-        // A: all the day's cash, what was paid out of it too, less the tax in it.
-        var tax = SafeTransaction.TaxIn(counted, rate) + SafeTransaction.TaxIn(100, rate);
-        Assert.Equal((counted, 100m, tax, counted + 100 - tax), (day.TakingsEntered, day.PaidOut, day.Tax, day.NetCash));
+        // A: the day's takings as entered, what was paid out of them too, less the tax in them.
+        var tax = SafeTransaction.TaxIn(gross, rate);
+        Assert.Equal((gross, 100m, tax, gross - tax), (day.TakingsEntered, day.PaidOut, day.Tax, day.NetCash));
 
         // B: every item sold at its price, the lemonade handed back and the card's burger too.
         Assert.Equal(2 * 120 + 2 * 30 + 120m, day.ItemSales);

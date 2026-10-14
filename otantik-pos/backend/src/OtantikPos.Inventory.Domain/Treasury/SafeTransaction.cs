@@ -3,8 +3,9 @@ using Otantik.BuildingBlocks;
 namespace OtantikPos.Inventory.Domain.Treasury;
 
 // Where cash is kept. The safe (الخزنة) holds the restaurant's cash; each business day's cash
-// takings are a fund of their own until they are moved into it, and a purchase can be paid
-// straight out of them.
+// takings are a fund of their own, the drawer, until they are entered, and a purchase can be paid
+// straight out of them. Once a day's takings are in the safe, what is paid out of them, or put
+// back by a void, moves the safe.
 public enum CashFund
 {
     Safe = 1,
@@ -21,7 +22,8 @@ public enum SafeTransactionKind
     // Money put into the safe from outside the sales: the owners', a loan.
     Funding = 2,
 
-    // A day's cash takings moved into the safe.
+    // A day's cash takings entered (توريد إيراد): the POS's gross for the day, into the safe less
+    // what was paid straight out of them.
     RevenueTransfer = 3,
 
     // A cash expense: a bill, wages, petty cash. On the profit and loss under its expense item.
@@ -96,13 +98,19 @@ public sealed class SafeTransaction : AggregateRoot
     public Guid? ExpenseItemId { get; private set; }
     public string? Notes { get; private set; }
 
+    // A day's takings: the POS's gross for the day, as entered (إجمالي الإيراد). Amount is what
+    // reached the safe: the gross less what had been paid straight out of the day's takings by
+    // then (PaidOut). Signed as Amount is; null for every other entry.
+    public decimal? GrossAmount { get; private set; }
+    public decimal PaidOut => GrossAmount is { } gross ? gross - Amount : 0;
+
     // A day's takings entered as including tax (هل إجمالي الإيراد يشمل الضريبة؟): the rate taken off
-    // and the tax in Amount, signed as Amount is. Amount stays the whole sum counted, the cash in
-    // the safe; NetAmount is the takings before tax, as the menu's prices are.
+    // and the tax in the gross, signed as it is. NetAmount is the takings before tax, as the
+    // menu's prices are.
     public bool IncludesTax { get; private set; }
     public decimal? TaxPercent { get; private set; }
     public decimal TaxAmount { get; private set; }
-    public decimal NetAmount => Amount - TaxAmount;
+    public decimal NetAmount => (GrossAmount ?? Amount) - TaxAmount;
 
     public string RecordedBy { get; private set; } = string.Empty;
     public DateTime RecordedAtUtc { get; private set; }
@@ -134,24 +142,32 @@ public sealed class SafeTransaction : AggregateRoot
         Guid id, decimal amount, DateOnly date, FundingSource source, string? notes, string recordedBy, string? approvedBy = null) =>
         new(id, SafeTransactionKind.Funding, CashFund.Safe, Positive(amount), date, notes, recordedBy, approvedBy) { Source = Defined(source) };
 
-    // A day's cash takings counted into the safe: what was counted, which may differ from what
-    // the till says, so a shortfall shows on that day. With taxPercent, the sum counted includes
-    // tax at that rate, and the tax in it is kept apart: all of it still goes into the safe.
+    // A day's cash takings entered: gross, the POS's total for the day, which may differ from what
+    // the till says, so a shortfall shows on that day. Into the safe goes the gross less paidOut,
+    // what was paid straight out of the day's takings before they were entered; when that is more
+    // than the gross, the rest comes out of the safe. With taxPercent, the gross includes tax at
+    // that rate, and the tax in it is kept apart.
     public static SafeTransaction RevenueTransfer(
-        Guid id, decimal amount, DateOnly date, DateOnly revenueDate, string? notes, string recordedBy, string? approvedBy = null,
-        decimal? taxPercent = null)
+        Guid id, decimal gross, DateOnly date, DateOnly revenueDate, string? notes, string recordedBy, string? approvedBy = null,
+        decimal? taxPercent = null, decimal paidOut = 0)
     {
         if (revenueDate > date)
             throw new DomainException("A day's takings are moved into the safe on that day or after it.");
-        var entry = new SafeTransaction(id, SafeTransactionKind.RevenueTransfer, CashFund.Safe, Positive(amount), date, notes, recordedBy, approvedBy)
+        if (paidOut < 0)
+            throw new DomainException("What was paid out of a day's takings is zero or more.");
+        var entered = Positive(gross);
+        var entry = new SafeTransaction(
+            id, SafeTransactionKind.RevenueTransfer, CashFund.Safe, entered - Math.Round(paidOut, 2, MidpointRounding.AwayFromZero), date, notes,
+            recordedBy, approvedBy)
         {
             RevenueDate = revenueDate,
+            GrossAmount = entered,
         };
         if (taxPercent is { } rate)
         {
             entry.IncludesTax = true;
             entry.TaxPercent = rate;
-            entry.TaxAmount = TaxIn(entry.Amount, rate);
+            entry.TaxAmount = TaxIn(entered, rate);
         }
 
         return entry;
@@ -180,15 +196,17 @@ public sealed class SafeTransaction : AggregateRoot
             SupplierId = supplierId,
         };
 
-    // From the safe, or from a day's takings (revenueDate).
+    // From the safe, or from a day's takings (revenueDate): out of the drawer until they are
+    // entered, out of the safe once they are in it (takingsInSafe).
     public static SafeTransaction InvoicePayment(
-        Guid id, decimal amount, DateOnly date, Guid invoiceId, Guid? supplierId, DateOnly? revenueDate, string recordedBy, string? approvedBy = null)
+        Guid id, decimal amount, DateOnly date, Guid invoiceId, Guid? supplierId, DateOnly? revenueDate, string recordedBy, string? approvedBy = null,
+        bool takingsInSafe = false)
     {
         if (revenueDate > date)
             throw new DomainException("An invoice is paid from the takings of its day or a day before it.");
         return new SafeTransaction(
-            id, SafeTransactionKind.InvoicePayment, revenueDate is null ? CashFund.Safe : CashFund.DayRevenue, -Positive(amount), date, null,
-            recordedBy, approvedBy)
+            id, SafeTransactionKind.InvoicePayment, revenueDate is null || takingsInSafe ? CashFund.Safe : CashFund.DayRevenue, -Positive(amount),
+            date, null, recordedBy, approvedBy)
         {
             PurchaseInvoiceId = invoiceId,
             SupplierId = supplierId,
@@ -196,8 +214,10 @@ public sealed class SafeTransaction : AggregateRoot
         };
     }
 
-    // Voids it: the opposite amount, entered on `today`, naming it. Voiding again is refused.
-    public SafeTransaction Void(Guid reversalId, DateOnly today, string voidedBy)
+    // Voids it: the opposite amount, entered on `today`, naming it. Voiding again is refused. A
+    // payment out of a day's takings made before they were entered goes back into the safe when
+    // they are in it now (takingsInSafe): it was taken off what went in.
+    public SafeTransaction Void(Guid reversalId, DateOnly today, string voidedBy, bool takingsInSafe = false)
     {
         if (IsReversal)
             throw new DomainException("A reversal is not voided again.");
@@ -205,8 +225,10 @@ public sealed class SafeTransaction : AggregateRoot
             throw new DomainException("This has already been voided.");
         VoidedAtUtc = DateTime.UtcNow;
         VoidedBy = voidedBy;
-        return new SafeTransaction(reversalId, Kind, Fund, -Amount, today, "Voided", voidedBy, null)
+        var fund = Fund == CashFund.DayRevenue && takingsInSafe ? CashFund.Safe : Fund;
+        return new SafeTransaction(reversalId, Kind, fund, -Amount, today, "Voided", voidedBy, null)
         {
+            GrossAmount = -GrossAmount,
             IncludesTax = IncludesTax,
             TaxPercent = TaxPercent,
             TaxAmount = -TaxAmount,
@@ -230,6 +252,13 @@ public interface ISafeTransactionRepository : IRepository<SafeTransaction>
 {
     // The safe's balance: everything in and out of it, up to and including `through` when given.
     Task<decimal> SafeBalanceAsync(DateOnly? through = null, CancellationToken cancellationToken = default);
+
+    // A day's takings as entered, if they are and are not voided since.
+    Task<SafeTransaction?> GetTakingsAsync(DateOnly revenueDate, CancellationToken cancellationToken = default);
+
+    // What was paid straight out of a day's takings while they were not in the safe: what is taken
+    // off them when they are entered.
+    Task<decimal> PaidOutOfTakingsAsync(DateOnly revenueDate, CancellationToken cancellationToken = default);
 
     // What an invoice's cash payment is, if it was paid in cash and not voided since.
     Task<SafeTransaction?> GetPaymentOfInvoiceAsync(Guid invoiceId, CancellationToken cancellationToken = default);

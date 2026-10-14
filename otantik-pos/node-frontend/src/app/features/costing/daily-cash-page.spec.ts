@@ -11,8 +11,8 @@ function line(overrides: Partial<DailyCashLine>): DailyCashLine {
   };
 }
 
-// The 12th: two invoices paid out of its takings, the rest counted into the safe the next morning.
-// The 11th: an invoice paid out of it, nothing counted in yet.
+// The 12th: 21,474.72 entered the next morning, two invoices paid out of it, the rest in the safe.
+// The 11th: an invoice paid out of its takings, which are not entered yet.
 const report: DailyCashReport = {
   from: '2026-10-01', to: '2026-10-31', gross: 21_544.72, deductions: 5_598.72, netToSafe: 15_946,
   days: [
@@ -22,12 +22,12 @@ const report: DailyCashReport = {
         line({ id: 'veg', description: 'Invoice of 12 Oct · الخضار', amount: 439, purchaseInvoiceId: 'inv-veg', items: ['طماطم', 'كرنب'] }),
         line({ id: 'coal', description: 'Invoice F-3', amount: 5_089.72, purchaseInvoiceId: 'inv-coal', items: ['فحم'], recordedBy: 'Mona', approvedBy: 'Omar' }),
       ],
-      counted: [line({ id: 'in', kind: 'RevenueTransfer', description: 'Counted into the safe', amount: 15_946 })],
+      entered: [line({ id: 'in', kind: 'RevenueTransfer', description: 'Takings entered', amount: 21_474.72 })],
     },
     {
       date: '2026-10-11', gross: 70, deductions: 70, netToSafe: 0,
       paid: [line({ id: 'm7', description: 'Invoice M-7', amount: 70, purchaseInvoiceId: 'inv-m7', items: ['بصل'] })],
-      counted: [],
+      entered: [],
     },
   ],
 };
@@ -74,7 +74,7 @@ describe('the daily cash', () => {
     expect(el.querySelector('tr.details')).toBeNull();
   });
 
-  it('opens a day to the invoices paid out of its takings and the cash counted into the safe', async () => {
+  it('opens a day to its takings as entered and the invoices paid out of them', async () => {
     const { fixture, el } = await render();
 
     const open = el.querySelector<HTMLButtonElement>('tr.day button')!;
@@ -89,15 +89,17 @@ describe('the daily cash', () => {
       ['13 Oct', 'Invoice F-3', 'فحم', 'L.E 5,089.72', 'Mona approved by Omar'],
     ]);
     expect(details.querySelector('tr.paid a')!.getAttribute('href')).toBe('/costing/purchases/invoices/inv-veg');
-    expect([...details.querySelectorAll('tr.counted td')].map(text)).toEqual(['13 Oct', 'Counted into the safe', 'L.E 15,946.00', 'Omar']);
+    expect([...details.querySelectorAll('tr.entered td')].map(text)).toEqual(['13 Oct', 'Takings entered', 'L.E 21,474.72', 'Omar']);
+    // The takings first, then what was paid out of them.
+    expect([...details.querySelectorAll('h4')].map((h) => text(h))).toEqual(['Takings entered الإيراد المسجل', 'Paid out of these takings المنصرف من الإيراد']);
 
-    // The button closes it again, and opens the 11th, nothing counted from it yet.
+    // The button closes it again, and opens the 11th, its takings not entered yet.
     open.click();
     (el.querySelectorAll<HTMLButtonElement>('tr.day button')[1]).click();
     fixture.detectChanges();
     expect(el.querySelectorAll('tr.details').length).toBe(1);
     expect(paid(el.querySelector('tr.details')!)).toEqual([['13 Oct', 'Invoice M-7', 'بصل', 'L.E 70.00', 'Omar']]);
-    expect(text(el.querySelector('tr.details p')!)).toBe('Not counted into the safe yet.');
+    expect(text(el.querySelector('tr.details p')!)).toBe('Not entered yet.');
   });
 
   it('goes month by month, each opening closed', async () => {
@@ -112,7 +114,7 @@ describe('the daily cash', () => {
 
     const before = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1);
     expect(dailyCash.mock.lastCall![0]).toBe(`${before.getFullYear()}-${String(before.getMonth() + 1).padStart(2, '0')}-01`);
-    expect(text(el.querySelector('tbody')!)).toBe('No takings paid out or counted into the safe this month.');
+    expect(text(el.querySelector('tbody')!)).toBe('No takings entered or paid out this month.');
     expect([...el.querySelectorAll('button')].map(text)).toContain('This month');
   });
 });

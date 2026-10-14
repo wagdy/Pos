@@ -402,9 +402,17 @@ public class ApiTests
         // Nothing paid out of the day's takings: all of it reached the safe.
         string Daily = $"/api/financials/daily-cash?from={today}&to={today}";
         var day = (await Json(await accountant.GetAsync(Daily, Cancel))).GetProperty("days").EnumerateArray().Single();
-        Assert.Equal((1_140m, 0m, 1_140m, "Counted into the safe"), (day.GetProperty("gross").GetDecimal(), day.GetProperty("deductions").GetDecimal(),
-            day.GetProperty("netToSafe").GetDecimal(), day.GetProperty("counted").EnumerateArray().Single().GetProperty("description").GetString()));
+        Assert.Equal((1_140m, 0m, 1_140m, "Takings entered"), (day.GetProperty("gross").GetDecimal(), day.GetProperty("deductions").GetDecimal(),
+            day.GetProperty("netToSafe").GetDecimal(), day.GetProperty("entered").EnumerateArray().Single().GetProperty("description").GetString()));
         Assert.Equal(HttpStatusCode.Forbidden, (await (await api.CashierAsync(manager)).GetAsync(Daily, Cancel)).StatusCode);
+
+        // The day's takings are in: the Takings in screen says so, and a second entry is refused.
+        var preview = await Json(await accountant.GetAsync($"/api/financials/takings?day={today}", Cancel));
+        Assert.Equal((1_140m, 0m), (preview.GetProperty("entered").GetDecimal(), preview.GetProperty("paidOut").GetDecimal()));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await manager.PostAsJsonAsync("/api/financials/vouchers", new
+        {
+            requestId = Guid.NewGuid(), transactionId = Guid.NewGuid(), kind = "RevenueTransfer", amount = 500, revenueDate = today,
+        }, Cancel)).StatusCode);
     }
 
     // Raw materials brought in from Excel: the template downloaded, filled in and imported by

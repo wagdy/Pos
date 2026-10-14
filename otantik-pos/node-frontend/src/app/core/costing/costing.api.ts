@@ -1186,6 +1186,10 @@ export class CostingApi {
     return this.http.get<DayRevenueReport>('/api/financials/revenue', { params: { from, to } });
   }
 
+  takingsPreview(day: string): Observable<TakingsPreview> {
+    return this.http.get<TakingsPreview>('/api/financials/takings', { params: { day } });
+  }
+
   reconciliation(from: string, to: string): Observable<ReconciliationReport> {
     return this.http.get<ReconciliationReport>('/api/financials/reconciliation', { params: { from, to } });
   }
@@ -1570,10 +1574,13 @@ export interface SafeEntry {
   reversalOf: string | null;
   voidedAtUtc: string | null;
   voidedBy: string | null;
-  // A day's takings entered with the tax in them: the rate, and the tax (signed as in and out are).
+  // A day's takings entered with the tax in them: the rate, and the tax in their gross (signed as in
+  // and out are).
   includesTax: boolean;
   taxPercent: number | null;
   tax: number;
+  // A day's takings: their gross, as entered; in is what of it reached the safe.
+  gross: number | null;
 }
 
 // How a month's opening balance came about: carried over from the month before, the treasury's
@@ -1611,10 +1618,12 @@ export interface FundingReport {
   entries: SafeEntry[];
 }
 
-// One business day's cash: taken, paid straight out of it, moved into the safe, and what is left.
+// One business day's cash: what the till took, the takings entered for it (gross), what was paid
+// straight out of them, what of them reached the safe, and the till's cash not entered as takings.
 export interface DayRevenue {
   date: string;
   cashSales: number;
+  entered: number;
   paidOut: number;
   transferred: number;
   left: number;
@@ -1624,10 +1633,20 @@ export interface DayRevenueReport {
   from: string;
   to: string;
   cashSales: number;
+  entered: number;
   paidOut: number;
   transferred: number;
   left: number;
   days: DayRevenue[];
+}
+
+// A day's takings before they are entered: the gross already entered (null when not), and what was
+// paid straight out of them, which entering them takes off.
+export interface TakingsPreview {
+  date: string;
+  entered: number | null;
+  paidOut: number;
+  invoices: number;
 }
 
 export interface ExpenseVoucherRow {
@@ -1727,7 +1746,7 @@ export interface SafeVoucherInput {
   expenseItemId: string | null;
   notes: string | null;
   reason: string | null;
-  // A day's takings counted with the tax in them: the server takes it off at the till's rate.
+  // A day's takings, gross, with the tax in them: the server takes it off at the till's rate.
   includesTax: boolean;
 }
 
@@ -1742,6 +1761,7 @@ export interface SafeTransaction {
   includesTax: boolean;
   taxPercent: number | null;
   taxAmount: number;
+  grossAmount: number | null;
 }
 
 // Tax and service (إعدادات الضريبة والخدمة): the till's tax rate, as the delivery system set it
@@ -1782,9 +1802,9 @@ export interface ReconciliationReport {
   days: ReconciliationDay[];
 }
 
-// Each day's takings as they were spent (يومية الإيراد): the invoices paid straight out of them
-// (deductions), and the cash counted into the safe for them (netToSafe). The two are the day's cash
-// (gross). A line is one invoice paid, with what it bought, the dearest first; or one count.
+// Each day's takings as they were spent (يومية الإيراد): the gross entered for them, the invoices
+// paid straight out of them (deductions), and what is left of them in the safe (netToSafe). A line
+// is one invoice paid, with what it bought, the dearest first; or the takings entered, at their gross.
 export interface DailyCashLine {
   id: string;
   kind: SafeTransactionKind;
@@ -1803,7 +1823,7 @@ export interface DailyCashDay {
   deductions: number;
   netToSafe: number;
   paid: DailyCashLine[];
-  counted: DailyCashLine[];
+  entered: DailyCashLine[];
 }
 
 export interface DailyCashReport {

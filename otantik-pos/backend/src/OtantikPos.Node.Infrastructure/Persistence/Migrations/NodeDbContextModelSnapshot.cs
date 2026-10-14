@@ -1416,6 +1416,10 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
+                    b.Property<decimal?>("GrossAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
                     b.Property<bool>("IncludesTax")
                         .HasColumnType("boolean");
 

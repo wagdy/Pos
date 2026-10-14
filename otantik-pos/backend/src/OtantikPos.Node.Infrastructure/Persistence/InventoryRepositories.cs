@@ -214,6 +214,18 @@ internal sealed class SafeTransactionRepository(NodeDbContext db) : ISafeTransac
             .SumAsync(t => t.Amount, cancellationToken);
 
     // Tracked: voiding it marks it.
+    public Task<SafeTransaction?> GetTakingsAsync(DateOnly revenueDate, CancellationToken cancellationToken = default) =>
+        db.SafeTransactions.FirstOrDefaultAsync(
+            t => t.Kind == SafeTransactionKind.RevenueTransfer && t.RevenueDate == revenueDate && t.ReversalOf == null && t.VoidedAtUtc == null,
+            cancellationToken);
+
+    // The drawer's own: payments out of the day while it was not in the safe, less their voids.
+    public async Task<decimal> PaidOutOfTakingsAsync(DateOnly revenueDate, CancellationToken cancellationToken = default) =>
+        -await db.SafeTransactions
+            .Where(t => t.Fund == CashFund.DayRevenue && t.RevenueDate == revenueDate)
+            .SumAsync(t => t.Amount, cancellationToken);
+
+    // Tracked: voiding it marks it.
     public Task<SafeTransaction?> GetPaymentOfInvoiceAsync(Guid invoiceId, CancellationToken cancellationToken = default) =>
         db.SafeTransactions.SingleOrDefaultAsync(
             t => t.PurchaseInvoiceId == invoiceId && t.Kind == SafeTransactionKind.InvoicePayment && t.ReversalOf == null && t.VoidedAtUtc == null,
