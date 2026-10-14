@@ -1,0 +1,32 @@
+# The PostgreSQL the till's development settings expect (appsettings.Development.json):
+# localhost:5434, user otantik. Reachable from this computer only, and for development only.
+# The till creates its database, otantik_pos_node_local, when it first starts, and the
+# integration tests make their own beside it. See "Running it on a laptop" in README.md.
+#
+#   docker compose -f dev/docker-compose.yml up -d
+#
+# Its data is kept in the otantik-pos-dev-data volume, between restarts and when the container
+# is removed. `down -v` deletes that volume, and the till's data with it.
+name: otantik-pos-dev
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: otantik-pos-dev-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: otantik
+      POSTGRES_PASSWORD: otantik-dev
+      POSTGRES_DB: otantik_pos_node_local
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - otantik-pos-dev-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U otantik -d otantik_pos_node_local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  otantik-pos-dev-data:

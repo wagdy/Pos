@@ -20,14 +20,20 @@ separate repository. The till talks to it only through the contract in `shared/R
 
 ## Running it on a laptop
 
-You need the .NET 10 SDK, Node 22 and a PostgreSQL 15+.
+You need the .NET 10 SDK, Node 22, and Docker or a PostgreSQL 15+ of your own.
 
-- Till server: `dotnet run --project otantik-pos/backend/src/OtantikPos.Node.Api` (port 5080;
-  development settings in `appsettings.Development.json`).
-- Till app: `npm ci` and `npm start` in `otantik-pos/node-frontend` (port 4200, proxied to the
-  server), or `npm run build` to build it into the server's `wwwroot`.
-- Without a delivery system, `otantik-pos/backend/tools/OtantikPos.DevCloud` plays one on
-  `127.0.0.1:5099`.
+- Database: `docker compose -f dev/docker-compose.yml up -d` starts a PostgreSQL on
+  `127.0.0.1:5434`, the one the development settings (`appsettings.Development.json`) use. Its
+  data stays in a Docker volume between restarts. With a PostgreSQL of your own, set
+  `ConnectionStrings:OtantikPos` to it instead.
+- Till server: `dotnet run --project otantik-pos/backend/src/OtantikPos.Node.Api`, on
+  `http://localhost:5081`. On its first start it creates its database and a manager with
+  PIN 1234 (`Auth:BootstrapManager` in the development settings).
+- Till app: `npm ci` and `npm start` in `otantik-pos/node-frontend` (`http://localhost:4210`,
+  proxied to the server), or `npm run build` to build it into the server's `wwwroot`.
+- Delivery system: the development settings look for one on `http://localhost:5080`. Without
+  one, `otantik-pos/backend/tools/OtantikPos.DevCloud` plays one on `127.0.0.1:5099`: start the
+  till server with `-- --DeliverySystem:BaseUrl=http://127.0.0.1:5099 --DeliverySystem:NodeKey=test-node-key`.
 
 ### Printers
 
@@ -39,11 +45,7 @@ the receipts' on 9102. Each ticket the till prints shows in its output as plain 
 python3 dev/fake-printer.py
 ```
 
-Then start the till server pointed at them:
-
-```
-dotnet run --project otantik-pos/backend/src/OtantikPos.Node.Api -- --Printing:Printers:Kitchen:Host=127.0.0.1 --Printing:Printers:Kitchen:Port=9101 --Printing:Printers:Receipt:Host=127.0.0.1 --Printing:Printers:Receipt:Port=9102
-```
+The development settings already point the till server at them.
 
 A round sent to the kitchen prints on the kitchen's printer; **Print receipt** on a paid bill
 prints on the receipts' printer.
@@ -55,5 +57,10 @@ dotnet test --solution Otantik.slnx
 ```
 
 The integration tests need a PostgreSQL: set `OTANTIKPOS_TEST_DB` to a connection string with no
-`Database=`. Without it they are skipped. The till app's tests: `npx ng test --watch=false` in
-`otantik-pos/node-frontend`.
+`Database=`. Without it they are skipped. With `dev/docker-compose.yml` running:
+
+```
+OTANTIKPOS_TEST_DB="Host=localhost;Port=5434;Username=otantik;Password=otantik-dev" dotnet test --solution Otantik.slnx
+```
+
+The till app's tests: `npx ng test --watch=false` in `otantik-pos/node-frontend`.
