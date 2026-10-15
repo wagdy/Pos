@@ -1523,7 +1523,7 @@ public class NodeTests
         var market = await PaidFromTakings(null, null, today, [new(tomatoes, 1, "kg", 1000, 50)]);
         await Void(ApprovalModule.PurchaseInvoice, await PaidFromTakings(null, null, today, [new(onions, 1, "kg", 1000, 999)]));
         Assert.Equal(0m, await Safe());
-        Assert.Equal(new TakingsPreview(today, null, 450m, 2), await treasury.GetTakingsPreviewAsync(today, ct));
+        Assert.Equal(new TakingsPreview(today, null, 450m, 2, 0), await treasury.GetTakingsPreviewAsync(today, ct));
 
         // The POS says 10,495: into the safe go 10,045. Once a day.
         var entered = (await Takings(10_495, today)).Transaction!;
@@ -1598,8 +1598,9 @@ public class NodeTests
         Task<decimal> OnHand(Guid id) => node.Db(db => db.RawMaterials.Where(m => m.Id == id).Select(m => m.QuantityOnHand).SingleAsync());
         BatchInvoice Tomatoes(Guid? supplier, decimal cost = 100) => new(Guid.NewGuid(), supplier, "F-1", [new(tomatoes, 5, "kg", 1000, cost)]);
         BatchInvoice Milk(Guid? supplier) => new(Guid.NewGuid(), supplier, null, [new(milk, 10, "L", 1000, 420)]);
-        Task<IReadOnlyList<PurchaseInvoiceDto>> Batch(PurchasePaymentMethod method, bool manager, params BatchInvoice[] invoices) =>
-            node.Send(new PostPurchaseBatchCommand(today, method, null, invoices, manager ? "Omar" : "Mona", manager ? "staff-omar" : "staff-mona", manager));
+        async Task<IReadOnlyList<PurchaseInvoiceDto>> Batch(PurchasePaymentMethod method, bool manager, params BatchInvoice[] invoices) =>
+            (await node.Send(new PostPurchaseBatchCommand(today, method, null, invoices, manager ? "Omar" : "Mona", manager ? "staff-omar" : "staff-mona", manager)))
+            .Invoices;
 
         // A manager's, paid from the safe: two invoices, each its supplier's, each paid on its own.
         var paid = await Batch(PurchasePaymentMethod.Safe, true, Tomatoes(nile), Milk(delta));
@@ -1635,6 +1636,88 @@ public class NodeTests
         var count = await node.Db(db => db.PurchaseInvoices.CountAsync());
         Assert.Equal(again.Select(i => i.InvoiceId), (await Batch(PurchasePaymentMethod.Safe, true, again)).Select(i => i.Id));
         Assert.Equal(count, await node.Db(db => db.PurchaseInvoices.CountAsync()));
+    }
+
+    // A supplier paid in the daily batch (سداد مورد): an old debt settled with no invoice and no
+    // stock, from the day's takings or the safe as the batch is paid, against what they are owed and
+    // off it on their account; never on credit, never more than owed, and nothing saved unless all is.
+    [Fact]
+    public async Task Suppliers_are_paid_in_the_daily_batch_against_what_they_are_owed()
+    {
+        await using var node = await TestNode.StartAsync();
+        var ct = TestContext.Current.CancellationToken;
+        using var scope = node.Scope();
+        var treasury = node.Service<TreasuryService>(scope);
+        var today = treasury.Today;
+        var tomatoes = (await node.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram))).Id;
+        async Task<Guid> Supplier(string name, decimal owedBefore)
+        {
+            var id = (await node.Send(new SaveSupplierCommand(Guid.NewGuid(), name))).Id;
+            await node.Send(new SetSupplierOpeningBalanceCommand(Guid.NewGuid(), id, owedBefore, today, "Omar"));
+            return id;
+        }
+        var nile = await Supplier("Nile Farms", 1_000);
+        var cairo = await Supplier("Cairo Foods", 500);
+        await node.Send(new RecordSafeVoucherCommand(
+            Guid.NewGuid(), new SafeVoucher(Guid.NewGuid(), SafeTransactionKind.OpeningBalance, 10_000, today, FundingSource.CarriedOver),
+            null, "staff-omar", "Omar", CanApprove: true));
+        async Task<decimal> Safe() => (await treasury.GetSafeAsync(today.Year, today.Month, ct)).BalanceNow;
+        async Task<decimal> Owed(Guid supplier) => (await treasury.GetSupplierStatementAsync(supplier, ct))!.Balance;
+        Task<decimal> OnHand() => node.Db(db => db.RawMaterials.Where(m => m.Id == tomatoes).Select(m => m.QuantityOnHand).SingleAsync());
+        BatchPayment Pay(Guid supplier, decimal amount, string? notes = null) => new(Guid.NewGuid(), supplier, amount, notes);
+        Task<PurchaseBatchResult> Batch(PurchasePaymentMethod method, BatchInvoice[] invoices, BatchPayment[] payments, bool manager = true) =>
+            node.Send(new PostPurchaseBatchCommand(
+                today, method, method == PurchasePaymentMethod.DayRevenue ? today : null, invoices, manager ? "Omar" : "Mona",
+                manager ? "staff-omar" : "staff-mona", manager, payments));
+
+        // Out of the day's takings, beside the market's invoice: Nile Farms paid 600 and 300 of the
+        // 1,000 owed. The drawer pays; the safe and the stock are as they were but for the invoice.
+        var first = Pay(nile, 600, "Receipt R-12");
+        var made = await Batch(PurchasePaymentMethod.DayRevenue, [new(Guid.NewGuid(), null, null, [new(tomatoes, 5, "kg", 1000, 100)])], [first, Pay(nile, 300)]);
+        Assert.Equal([("Nile Farms", 600m, "Receipt R-12", ApprovalOutcome.Applied), ("Nile Farms", 300m, (string?)null, ApprovalOutcome.Applied)],
+            made.Payments.Select(p => (p.Supplier, p.Amount, p.Notes, p.Outcome)));
+        Assert.Single(made.Invoices);
+        Assert.Equal((100m, 10_000m, 5_000m), (await Owed(nile), await Safe(), await OnHand()));
+        Assert.Equal(new TakingsPreview(today, null, 1_000m, 1, 2), await treasury.GetTakingsPreviewAsync(today, ct));
+
+        // The day's takings entered, 5,000 gross: the 1,000 paid out of them stays out of the safe.
+        await node.Send(new RecordSafeVoucherCommand(
+            Guid.NewGuid(), new SafeVoucher(Guid.NewGuid(), SafeTransactionKind.RevenueTransfer, 5_000, today, RevenueDate: today), null,
+            "staff-omar", "Omar", true));
+        Assert.Equal(14_000m, await Safe());
+        // Paid out of them now they are in: out of the safe.
+        await Batch(PurchasePaymentMethod.DayRevenue, [], [Pay(nile, 100)]);
+        Assert.Equal((0m, 13_900m), (await Owed(nile), await Safe()));
+
+        // More than owed, two payments together more than owed, or on credit: refused, nothing saved.
+        Assert.Equal("Payment 1 · Nile Farms: Nothing is owed to Nile Farms.",
+            (await Assert.ThrowsAsync<DomainException>(() => Batch(PurchasePaymentMethod.Safe, [], [Pay(nile, 1)]))).Message);
+        Assert.Equal("Payment 2 · Cairo Foods: Cairo Foods is owed L.E 200.00 after the payments above: pay that much or less.",
+            (await Assert.ThrowsAsync<DomainException>(() => Batch(PurchasePaymentMethod.Safe, [], [Pay(cairo, 300), Pay(cairo, 300)]))).Message);
+        Assert.Contains("A supplier payment is cash",
+            (await Assert.ThrowsAsync<DomainException>(() => Batch(PurchasePaymentMethod.Credit, [], [Pay(cairo, 100)]))).Message);
+        Assert.Equal((500m, 13_900m), (await Owed(cairo), await Safe()));
+
+        // The accountant's, from the safe: asked of a manager, nothing moves until approved. Sent
+        // again, it is not asked twice.
+        var hers = Pay(cairo, 200);
+        Assert.Equal(ApprovalOutcome.Requested, (await Batch(PurchasePaymentMethod.Safe, [], [hers], manager: false)).Payments.Single().Outcome);
+        await Batch(PurchasePaymentMethod.Safe, [], [hers], manager: false);
+        var asked = (await node.Send(new GetApprovalRequestsQuery())).Pending.Single(r => r.RecordId == hers.TransactionId);
+        Assert.Equal((500m, 13_900m), (await Owed(cairo), await Safe()));
+        await node.Send(new ApproveRequestCommand(asked.Id, "Omar"));
+        Assert.Equal((300m, 13_700m), (await Owed(cairo), await Safe()));
+
+        // In the day's cash and the supplier payments: from the takings, with the receipt.
+        var day = (await treasury.GetDailyCashAsync(today, today, ct)).Days.Single();
+        Assert.Equal((5_000m, 1_100m, 3_900m), (day.Gross, day.Deductions, day.NetToSafe));
+        Assert.Contains(day.Paid, l => (l.Description, l.Amount, string.Join(", ", l.Items)) == ("Payment to Nile Farms", 600m, "Receipt R-12"));
+        var rows = await treasury.GetSupplierPaymentsAsync(today, today, ct);
+        Assert.Equal([(DateOnly?)today, today, today, null], rows.Select(r => r.FromTakingsOf).OrderByDescending(d => d.HasValue));
+
+        // The first, voided now the takings are in: its 600 back into the safe, and owed again.
+        await node.Send(new RequestDeletionCommand(Guid.NewGuid(), ApprovalModule.Treasury, first.TransactionId, "Paid twice", "staff-omar", "Omar", CanApprove: true));
+        Assert.Equal((600m, 14_300m), (await Owed(nile), await Safe()));
     }
 
     // The reconciliation (مطابقة الإيرادات): the day's cash before tax against what its sales, at

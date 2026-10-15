@@ -61,6 +61,9 @@ import { Treasury, monthBounds } from './financials';
                 <td class="nowrap">{{ p.date | date: 'd MMM' }}</td>
                 <td>
                   <a [routerLink]="['../suppliers']" [queryParams]="{ supplier: p.supplierId }">{{ p.supplier }}</a>
+                  @if (p.fromTakingsOf) {
+                    <div class="muted small">From the takings of {{ p.fromTakingsOf | date: 'd MMM' }} · من إيراد يوم</div>
+                  }
                   @if (p.notes) {
                     <div class="muted small">{{ p.notes }}</div>
                   }

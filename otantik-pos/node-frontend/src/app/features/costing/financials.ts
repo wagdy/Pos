@@ -190,8 +190,8 @@ const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
               <div>
                 <dt>
                   Less paid out of them
-                  @if (p.invoices) {
-                    <span class="muted small">&nbsp;· {{ p.invoices }} {{ p.invoices === 1 ? 'invoice' : 'invoices' }}</span>
+                  @if (p.invoices || p.supplierPayments) {
+                    <span class="muted small">&nbsp;· {{ paidOutCount(p) }}</span>
                   }
                   <span class="ar">المنصرف منه</span>
                 </dt>
@@ -365,6 +365,12 @@ export class SafeVoucherDialog {
 
   protected takingsDayChosen(): void {
     void this.loadPreview();
+  }
+
+  // "5 invoices, 1 supplier payment".
+  protected paidOutCount(p: TakingsPreview): string {
+    const count = (n: number, one: string, many: string) => (n ? `${n} ${n === 1 ? one : many}` : '');
+    return [count(p.invoices, 'invoice', 'invoices'), count(p.supplierPayments, 'supplier payment', 'supplier payments')].filter(Boolean).join(', ');
   }
 
   // A supplier chosen: what they are owed, to pay in full unless less is typed.

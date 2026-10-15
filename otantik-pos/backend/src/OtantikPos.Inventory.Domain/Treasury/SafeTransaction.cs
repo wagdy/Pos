@@ -29,7 +29,8 @@ public enum SafeTransactionKind
     // A cash expense: a bill, wages, petty cash. On the profit and loss under its expense item.
     ExpenseVoucher = 4,
 
-    // Paid to a supplier against what the restaurant owes them.
+    // Paid to a supplier against what the restaurant owes them (سداد مورد), from the safe or
+    // straight from a day's takings.
     SupplierPayment = 5,
 
     // A purchase invoice paid in cash when it was posted, from the safe or a day's takings.
@@ -189,12 +190,22 @@ public sealed class SafeTransaction : AggregateRoot
             ExpenseItemId = expenseItemId,
         };
 
+    // From the safe, or from a day's takings (revenueDate), as an invoice is: out of the drawer
+    // until they are entered, out of the safe once they are in it (takingsInSafe).
     public static SafeTransaction SupplierPayment(
-        Guid id, decimal amount, DateOnly date, Guid supplierId, string? notes, string recordedBy, string? approvedBy = null) =>
-        new(id, SafeTransactionKind.SupplierPayment, CashFund.Safe, -Positive(amount), date, notes, recordedBy, approvedBy)
+        Guid id, decimal amount, DateOnly date, Guid supplierId, string? notes, string recordedBy, string? approvedBy = null,
+        DateOnly? revenueDate = null, bool takingsInSafe = false)
+    {
+        if (revenueDate > date)
+            throw new DomainException("A supplier is paid from the takings of the payment's day or a day before it.");
+        return new SafeTransaction(
+            id, SafeTransactionKind.SupplierPayment, revenueDate is null || takingsInSafe ? CashFund.Safe : CashFund.DayRevenue, -Positive(amount),
+            date, notes, recordedBy, approvedBy)
         {
             SupplierId = supplierId,
+            RevenueDate = revenueDate,
         };
+    }
 
     // From the safe, or from a day's takings (revenueDate): out of the drawer until they are
     // entered, out of the safe once they are in it (takingsInSafe).

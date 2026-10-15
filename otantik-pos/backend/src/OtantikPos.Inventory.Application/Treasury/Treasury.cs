@@ -204,7 +204,9 @@ internal sealed class TreasuryWriter(
                 entry = SafeTransaction.ExpenseVoucher(id, voucher.Amount, voucher.Date, voucher.ExpenseItemId!.Value, voucher.Notes, recordedBy, approvedBy);
                 break;
             case SafeTransactionKind.SupplierPayment:
-                entry = SafeTransaction.SupplierPayment(id, voucher.Amount, voucher.Date, voucher.SupplierId!.Value, voucher.Notes, recordedBy, approvedBy);
+                entry = SafeTransaction.SupplierPayment(
+                    id, voucher.Amount, voucher.Date, voucher.SupplierId!.Value, voucher.Notes, recordedBy, approvedBy, voucher.RevenueDate,
+                    await TakingsInSafeAsync(voucher.RevenueDate, cancellationToken));
                 suppliersLedger.Add(SupplierLedgerEntry.Payment(entry));
                 break;
             case SafeTransactionKind.InvoicePayment:
@@ -318,8 +320,10 @@ internal sealed class TreasuryWriter(
             case SafeTransactionKind.SupplierPayment:
                 var supplier = await SupplierAsync(voucher.SupplierId, cancellationToken);
                 var owed = await suppliersLedger.BalanceAsync(supplier.Id, cancellationToken);
-                summary = $"Supplier payment · {supplier.Name} · {amount}";
+                var paidFrom = voucher.RevenueDate is { } takings ? $"the takings of {Day(takings)}" : "the safe";
+                summary = $"Supplier payment · {supplier.Name} · {amount}{(voucher.RevenueDate is null ? "" : $" from {paidFrom}")}";
                 changes.Add(new ApprovalChange($"Owed to {supplier.Name}", Money(owed), Money(owed - voucher.Amount)));
+                changes.Add(new ApprovalChange("Paid from", null, paidFrom));
                 break;
             case SafeTransactionKind.InvoicePayment:
                 var invoice = await UnpaidInvoiceAsync(voucher.PurchaseInvoiceId, cancellationToken);
@@ -335,7 +339,7 @@ internal sealed class TreasuryWriter(
 
         changes.Insert(1, new ApprovalChange(voucher.Kind == SafeTransactionKind.RevenueTransfer ? "Gross takings" : "Amount", null, amount));
         // What the safe holds after it: a payment out of a day's takings moves it once they are in it.
-        var fromDrawer = voucher is { Kind: SafeTransactionKind.InvoicePayment, RevenueDate: not null }
+        var fromDrawer = voucher is { Kind: SafeTransactionKind.InvoicePayment or SafeTransactionKind.SupplierPayment, RevenueDate: not null }
             && !await TakingsInSafeAsync(voucher.RevenueDate, cancellationToken);
         decimal? moves = voucher.Kind switch
         {
@@ -364,7 +368,8 @@ internal sealed class TreasuryWriter(
             SafeTransactionKind.Funding => $"Funding · {SourceName(entry.Source)}",
             SafeTransactionKind.RevenueTransfer => $"Takings of {Day(entry.RevenueDate!.Value)} · {Money(entry.GrossAmount ?? entry.Amount)} gross, into the safe",
             SafeTransactionKind.ExpenseVoucher => $"Expense voucher · {(entry.ExpenseItemId is { } e ? (await expenses.GetByIdAsync(e, cancellationToken))?.Name : null) ?? "an expense"}",
-            SafeTransactionKind.SupplierPayment => $"Supplier payment · {(entry.SupplierId is { } s ? (await suppliers.GetByIdAsync(s, cancellationToken))?.Name : null) ?? "a supplier"}",
+            SafeTransactionKind.SupplierPayment => $"Supplier payment · {(entry.SupplierId is { } s ? (await suppliers.GetByIdAsync(s, cancellationToken))?.Name : null) ?? "a supplier"}" +
+                (entry.RevenueDate is { } paidFrom ? $" from the takings of {Day(paidFrom)}" : ""),
             _ => $"Invoice payment from {(entry.RevenueDate is { } day ? $"the takings of {Day(day)}" : "the safe")}",
         };
         return $"{what} · {Money(Math.Abs(entry.Amount))} · {Day(entry.BusinessDate)}";

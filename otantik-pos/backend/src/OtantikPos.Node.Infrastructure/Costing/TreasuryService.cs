@@ -105,8 +105,9 @@ public sealed record DailyCashDay(
     DateOnly Date, decimal Gross, decimal Deductions, decimal NetToSafe, IReadOnlyList<DailyCashLine> Paid, IReadOnlyList<DailyCashLine> Entered);
 
 // A day's takings as they stand before they are entered: the gross already entered for them, if
-// any; and what was paid straight out of them, which entering them takes off.
-public sealed record TakingsPreview(DateOnly Date, decimal? Entered, decimal PaidOut, int Invoices);
+// any; and what was paid straight out of them, invoices and supplier payments, which entering them
+// takes off.
+public sealed record TakingsPreview(DateOnly Date, decimal? Entered, decimal PaidOut, int Invoices, int SupplierPayments);
 
 public sealed record DailyCashReport(DateOnly From, DateOnly To, decimal Gross, decimal Deductions, decimal NetToSafe, IReadOnlyList<DailyCashDay> Days);
 
@@ -146,9 +147,10 @@ public sealed record SupplierStatement(
     IReadOnlyList<SupplierStatementLine> Lines,
     IReadOnlyList<OpenInvoice> OpenInvoices);
 
+// FromTakingsOf: paid straight out of that day's takings, not the safe.
 public sealed record SupplierPaymentRow(
     Guid Id, DateOnly Date, Guid SupplierId, string Supplier, decimal Amount, string? Notes, string RecordedBy, string? ApprovedBy,
-    DateTime? VoidedAtUtc, string? VoidedBy);
+    DateTime? VoidedAtUtc, string? VoidedBy, DateOnly? FromTakingsOf = null);
 
 // Tax and service (إعدادات الضريبة والخدمة): the till's tax rate, as the delivery system set it (null
 // until it has synced, when the till cannot price a bill either), and the service charge.
@@ -287,7 +289,7 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
                 var cash = sales.GetValueOrDefault(day);
                 var ofDay = moved.Where(m => m.RevenueDate == day).ToList();
                 var entered = ofDay.Where(m => m.Kind == SafeTransactionKind.RevenueTransfer).Sum(m => m.GrossAmount ?? m.Amount);
-                var paid = -ofDay.Where(m => m.Kind == SafeTransactionKind.InvoicePayment).Sum(m => m.Amount);
+                var paid = -ofDay.Where(m => m.Kind is SafeTransactionKind.InvoicePayment or SafeTransactionKind.SupplierPayment).Sum(m => m.Amount);
                 // What of the day's takings is in the safe: the takings less what the drawer had
                 // paid by then, less what was paid out of the safe for them since.
                 var transferred = ofDay.Where(m => m.Fund == CashFund.Safe).Sum(m => m.Amount);
@@ -307,9 +309,10 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
             .ToListAsync(cancellationToken);
         var entered = entries.FirstOrDefault(t => t.Kind == SafeTransactionKind.RevenueTransfer && !t.IsReversal && !t.IsVoided);
         var drawer = entries.Where(t => t.Fund == CashFund.DayRevenue).ToList();
+        var standing = drawer.Where(t => !t.IsReversal && !t.IsVoided).ToList();
         return new TakingsPreview(
             day, entered is null ? null : Money(entered.GrossAmount ?? entered.Amount), Money(-drawer.Sum(t => t.Amount)),
-            drawer.Count(t => !t.IsReversal && !t.IsVoided));
+            standing.Count(t => t.Kind == SafeTransactionKind.InvoicePayment), standing.Count(t => t.Kind == SafeTransactionKind.SupplierPayment));
     }
 
     // Each day of the period whose takings paid an invoice or were counted into the safe, latest
@@ -320,7 +323,7 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         Period(from, to);
         var rows = await db.SafeTransactions.AsNoTracking()
             .Where(t => t.RevenueDate != null && t.RevenueDate >= from && t.RevenueDate <= to
-                && (t.Kind == SafeTransactionKind.RevenueTransfer || t.Kind == SafeTransactionKind.InvoicePayment))
+                && (t.Kind == SafeTransactionKind.RevenueTransfer || t.Kind == SafeTransactionKind.InvoicePayment || t.Kind == SafeTransactionKind.SupplierPayment))
             .OrderBy(t => t.BusinessDate).ThenBy(t => t.RecordedAtUtc)
             .ToListAsync(cancellationToken);
         var standing = rows.Where(t => !t.IsReversal && !t.IsVoided).ToList();
@@ -338,6 +341,11 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         {
             if (t.Kind == SafeTransactionKind.RevenueTransfer)
                 return new DailyCashLine(t.Id, t.Kind, t.BusinessDate, "Takings entered", Money(t.GrossAmount ?? t.Amount), null, [], t.RecordedBy, t.ApprovedBy);
+            // An old debt paid: the supplier, and the notes (a receipt number) as what it was for.
+            if (t.Kind == SafeTransactionKind.SupplierPayment)
+                return new DailyCashLine(
+                    t.Id, t.Kind, t.BusinessDate, $"Payment to {names.Suppliers.GetValueOrDefault(t.SupplierId!.Value) ?? "a removed supplier"}",
+                    Money(-t.Amount), null, t.Notes is { } notes ? [notes] : [], t.RecordedBy, t.ApprovedBy);
 
             var invoice = t.PurchaseInvoiceId is { } id ? invoices.GetValueOrDefault(id) : null;
             var what = invoice?.SupplierInvoiceNumber is { } number ? $"Invoice {number}"
@@ -361,12 +369,12 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
             .Select(g =>
             {
                 var gross = g.Where(t => t.Kind == SafeTransactionKind.RevenueTransfer).Sum(t => t.GrossAmount ?? t.Amount);
-                var deductions = -g.Where(t => t.Kind == SafeTransactionKind.InvoicePayment).Sum(t => t.Amount);
+                var deductions = -g.Where(t => t.Kind is SafeTransactionKind.InvoicePayment or SafeTransactionKind.SupplierPayment).Sum(t => t.Amount);
                 var net = g.Where(t => t.Fund == CashFund.Safe).Sum(t => t.Amount);
                 var lines = standing.Where(t => t.RevenueDate == g.Key).ToList();
                 return new DailyCashDay(
                     g.Key, Money(gross), Money(deductions), Money(net),
-                    lines.Where(t => t.Kind == SafeTransactionKind.InvoicePayment).Select(Line).ToList(),
+                    lines.Where(t => t.Kind != SafeTransactionKind.RevenueTransfer).Select(Line).ToList(),
                     lines.Where(t => t.Kind == SafeTransactionKind.RevenueTransfer).Select(Line).ToList());
             })
             .Where(d => d.Paid.Count > 0 || d.Entered.Count > 0 || d.Gross != 0 || d.Deductions != 0 || d.NetToSafe != 0)
@@ -420,7 +428,7 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
 
         var cash = await db.SafeTransactions.AsNoTracking()
             .Where(t => t.RevenueDate != null && t.RevenueDate >= from && t.RevenueDate <= to
-                && (t.Kind == SafeTransactionKind.RevenueTransfer || t.Kind == SafeTransactionKind.InvoicePayment))
+                && (t.Kind == SafeTransactionKind.RevenueTransfer || t.Kind == SafeTransactionKind.InvoicePayment || t.Kind == SafeTransactionKind.SupplierPayment))
             .ToListAsync(cancellationToken);
         var (fromUtc, _) = clock.Bounds(from);
         var (_, toUtc) = clock.Bounds(to);
@@ -445,7 +453,7 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         // what was paid straight out of them, and the tax in the gross.
         var takings = cash.Where(t => t.Kind == SafeTransactionKind.RevenueTransfer).ToList();
         var entered = takings.Sum(t => t.GrossAmount ?? t.Amount);
-        var paidOut = -cash.Where(t => t.Kind == SafeTransactionKind.InvoicePayment).Sum(t => t.Amount);
+        var paidOut = -cash.Where(t => t.Kind is SafeTransactionKind.InvoicePayment or SafeTransactionKind.SupplierPayment).Sum(t => t.Amount);
         var tax = takings.Sum(t => t.TaxAmount);
         var netCash = entered - tax;
 
@@ -584,7 +592,7 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         return payments
             .Select(t => new SupplierPaymentRow(
                 t.Id, t.BusinessDate, t.SupplierId!.Value, names.GetValueOrDefault(t.SupplierId.Value) ?? "A removed supplier", Money(-t.Amount), t.Notes,
-                t.RecordedBy, t.ApprovedBy, t.VoidedAtUtc, t.VoidedBy))
+                t.RecordedBy, t.ApprovedBy, t.VoidedAtUtc, t.VoidedBy, t.RevenueDate))
             .ToList();
     }
 
@@ -664,7 +672,8 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
             SafeTransactionKind.RevenueTransfer => $"Takings of {t.RevenueDate!.Value.ToString("d MMM", Invariant)}" +
                 (t.PaidOut != 0 ? $" · {Pounds(Math.Abs(t.GrossAmount!.Value))} gross, less {Pounds(Math.Abs(t.PaidOut))} paid out of them" : ""),
             SafeTransactionKind.ExpenseVoucher => t.ExpenseItemId is { } e ? names.Expenses.GetValueOrDefault(e) ?? "A removed expense" : "An expense",
-            SafeTransactionKind.SupplierPayment => $"Payment to {Supplier()}",
+            SafeTransactionKind.SupplierPayment => $"Payment to {Supplier()}" +
+                (t.RevenueDate is { } paidFrom ? $" · from the takings of {paidFrom.ToString("d MMM", Invariant)}" : ""),
             _ => (t.PurchaseInvoiceId is { } i && names.Invoices.GetValueOrDefault(i) is { } number ? $"Invoice {number}" : "Invoice") +
                  (t.SupplierId is null ? "" : $" · {Supplier()}") +
                  (t.RevenueDate is { } day ? $" · from the takings of {day.ToString("d MMM", Invariant)}" : ""),

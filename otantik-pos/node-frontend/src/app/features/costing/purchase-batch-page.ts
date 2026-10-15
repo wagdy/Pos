@@ -11,8 +11,9 @@ import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import {
   CostingApi,
-  PurchaseInvoice,
+  PurchaseBatchResult,
   PurchasePaymentMethod,
+  SupplierBalance,
   paymentMethodLabels,
   paymentStatusLabels,
 } from '../../core/costing/costing.api';
@@ -32,21 +33,32 @@ interface BatchBlock {
   editor: InvoiceLines;
 }
 
+// A supplier paid in the batch (سداد مورد): an old debt settled, no invoice and no stock. Its id is
+// the payment's, made here.
+interface PaymentBlock {
+  id: string;
+  supplierId: string | null;
+  amount: number | null;
+  notes: string;
+}
+
 // What is kept in the browser while a batch is being entered, so a reload does not lose it.
 interface StoredBatch {
   invoiceDate: string;
   paymentMethod: PurchasePaymentMethod | null;
   revenueDate: string;
   blocks: { id: string; supplierId: string | null; supplierName: string | null; number: string; lines: Omit<InvoiceLine, 'entry'>[] }[];
+  payments?: PaymentBlock[];
 }
 
 const storageKey = 'otantik-till.purchase-batch';
 
 // A day's purchases entered together (يومية المشتريات المجمعة): the date and how they were paid,
-// chosen once, then an invoice for each supplier, each entered as on the invoice screen. Sent
-// together, each becomes its own posted invoice, its stock in and paid as chosen: on credit owed
-// to its supplier, in cash paid for a manager and asked of one for anyone else. None is saved
-// unless all can be. A batch not sent yet is kept in this browser.
+// chosen once, then an invoice for each supplier, each entered as on the invoice screen, and
+// suppliers paid against what they are owed. Sent together, each invoice becomes its own posted
+// invoice, its stock in and paid as chosen: on credit owed to its supplier, in cash paid for a
+// manager and asked of one for anyone else. A payment is cash, never on credit, and never more than
+// the supplier is owed. None is saved unless all can be. A batch not sent yet is kept in this browser.
 @Component({
   selector: 'app-purchase-batch-page',
   providers: [PurchaseCatalog],
@@ -69,12 +81,13 @@ const storageKey = 'otantik-till.purchase-batch';
     } @else if (error()) {
       <p class="error">{{ error() }}</p>
     } @else {
-      @if (posted(); as made) {
+      @if (posted(); as result) {
         <section class="posted" role="status">
           <h2>
-            {{ made.length === 1 ? '1 invoice posted' : made.length + ' invoices posted' }}
-            <span class="inline-ar">تم ترحيل الفواتير</span>
+            {{ sentLabel(result) }}
+            <span class="inline-ar">تم ترحيل اليومية</span>
           </h2>
+          @if (result.invoices.length) {
           <div class="table-wrap">
             <table class="grid">
               <thead>
@@ -86,7 +99,7 @@ const storageKey = 'otantik-till.purchase-batch';
                 </tr>
               </thead>
               <tbody>
-                @for (inv of made; track inv.id) {
+                @for (inv of result.invoices; track inv.id) {
                   <tr>
                     <td><a [routerLink]="['/costing/purchases/invoices', inv.id]">{{ inv.supplierName ?? 'No supplier' }}</a></td>
                     <td>{{ inv.supplierInvoiceNumber ?? '—' }}</td>
@@ -97,13 +110,45 @@ const storageKey = 'otantik-till.purchase-batch';
               </tbody>
             </table>
           </div>
+          }
+          @if (result.payments.length) {
+            <div class="table-wrap">
+              <table class="grid payments-made">
+                <thead>
+                  <tr>
+                    <th>Supplier paid<span class="ar">المورد</span></th>
+                    <th>Notes<span class="ar">ملاحظات</span></th>
+                    <th class="num">Amount<span class="ar">القيمة</span></th>
+                    <th>Payment<span class="ar">السداد</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (pay of result.payments; track pay.transactionId) {
+                    <tr>
+                      <td>{{ pay.supplier }}</td>
+                      <td>{{ pay.notes ?? '—' }}</td>
+                      <td class="num">{{ pay.amount | money }}</td>
+                      <td>
+                        @if (pay.outcome === 'Applied') {
+                          Paid<span class="ar">تم السداد</span>
+                        } @else {
+                          Waits for a manager<span class="ar">بانتظار موافقة المدير</span>
+                        }
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          }
           <button mat-button (click)="posted.set(null)">Done</button>
         </section>
       }
 
       <p class="note">
         A day's purchases from several suppliers, entered together: the date and how they were paid once, then an invoice for each
-        supplier. Each is posted as its own invoice, on its supplier's account.
+        supplier. Each is posted as its own invoice, on its supplier's account. A supplier paid an old debt, with no invoice, is a
+        supplier payment.
         <span class="inline-ar">يومية المشتريات المجمعة: كل مورد بفاتورة مستقلة.</span>
       </p>
       <div class="header">
@@ -115,10 +160,12 @@ const storageKey = 'otantik-till.purchase-batch';
           <mat-label>Paid · طريقة الدفع</mat-label>
           <mat-select [(ngModel)]="paymentMethod" (ngModelChange)="changed()" aria-label="How they are paid" required>
             @for (m of paymentMethods; track m) {
-              <mat-option [value]="m">{{ paymentLabels[m].en }} · {{ paymentLabels[m].ar }}</mat-option>
+              <mat-option [value]="m" [disabled]="m === 'Credit' && payments().length > 0">{{ paymentLabels[m].en }} · {{ paymentLabels[m].ar }}</mat-option>
             }
           </mat-select>
-          @if (paymentMethod === 'Credit') {
+          @if (paymentMethod !== 'Credit' && payments().length) {
+            <mat-hint>Supplier payments are cash: not on credit.</mat-hint>
+          } @else if (paymentMethod === 'Credit') {
             <mat-hint>Each owed to its supplier until paid by a payment voucher.</mat-hint>
           } @else if (!paymentMethod) {
             <mat-hint>Required to post them.</mat-hint>
@@ -132,7 +179,7 @@ const storageKey = 'otantik-till.purchase-batch';
         }
       </div>
       @if (!approvals.canApprove() && paymentMethod && paymentMethod !== 'Credit') {
-        <p class="ask">Each invoice's cash payment goes to a manager for approval; the stock is in at once.</p>
+        <p class="ask">Each invoice's cash payment, and each supplier payment, goes to a manager for approval; the stock is in at once.</p>
       }
 
       @for (block of blocks(); track block.id; let i = $index) {
@@ -164,7 +211,7 @@ const storageKey = 'otantik-till.purchase-batch';
             </mat-form-field>
             <span class="spacer"></span>
             <strong class="block-total">{{ block.editor.total() | money }}</strong>
-            <button mat-icon-button (click)="removeBlock(i)" [disabled]="blocks().length === 1" [attr.aria-label]="'Take invoice ' + (i + 1) + ' off the batch'">
+            <button mat-icon-button (click)="removeBlock(i)" [disabled]="blocks().length === 1 && !payments().length" [attr.aria-label]="'Take invoice ' + (i + 1) + ' off the batch'">
               <mat-icon>delete</mat-icon>
             </button>
           </div>
@@ -172,10 +219,51 @@ const storageKey = 'otantik-till.purchase-batch';
         </section>
       }
 
+      @for (pay of payments(); track pay.id; let j = $index) {
+        <section class="block payment-block" [attr.aria-label]="'Supplier payment ' + (j + 1)">
+          <div class="block-head">
+            <h3>Supplier payment {{ j + 1 }} <span class="inline-ar">سداد مورد {{ j + 1 }}</span></h3>
+            <mat-form-field subscriptSizing="dynamic" class="supplier">
+              <mat-label>Supplier · المورد</mat-label>
+              <mat-select [(ngModel)]="pay.supplierId" (ngModelChange)="changed()" [attr.aria-label]="'Supplier payment ' + (j + 1) + ', supplier'">
+                @for (s of owedSuppliers(); track s.supplierId) {
+                  <mat-option [value]="s.supplierId">{{ s.supplier }} · owed {{ s.balance | money }}</mat-option>
+                } @empty {
+                  <mat-option disabled>No supplier is owed anything: enter an old debt on Financials · Supplier debts</mat-option>
+                }
+              </mat-select>
+              @if (owedBefore(j); as owed) {
+                <mat-hint>Owed {{ owed | money }}{{ paidAbove(j) ? ' after the payments above' : '' }}</mat-hint>
+              }
+            </mat-form-field>
+            <mat-form-field subscriptSizing="dynamic" class="amount">
+              <mat-label>Payment amount · قيمة السداد</mat-label>
+              <input matInput type="number" min="0" step="any" [(ngModel)]="pay.amount" (ngModelChange)="changed()"
+                [attr.aria-label]="'Supplier payment ' + (j + 1) + ', amount'" />
+              <span matTextSuffix>&nbsp;L.E</span>
+              @if (overOwed(j)) {
+                <mat-hint class="warn-text">More than they are owed.</mat-hint>
+              }
+            </mat-form-field>
+            <mat-form-field subscriptSizing="dynamic" class="notes">
+              <mat-label>Notes / receipt no. · ملاحظات</mat-label>
+              <input matInput [(ngModel)]="pay.notes" (ngModelChange)="changed()" maxlength="300" [attr.aria-label]="'Supplier payment ' + (j + 1) + ', notes'" />
+            </mat-form-field>
+            <span class="spacer"></span>
+            <button mat-icon-button (click)="removePayment(j)" [attr.aria-label]="'Take supplier payment ' + (j + 1) + ' off the batch'">
+              <mat-icon>delete</mat-icon>
+            </button>
+          </div>
+        </section>
+      }
+
       <div class="toolbar actions">
         <button mat-stroked-button (click)="addBlock()"><mat-icon>add</mat-icon> Add another invoice <span class="inline-ar">فاتورة أخرى</span></button>
+        <button mat-stroked-button (click)="addPayment()" [disabled]="paymentMethod === 'Credit'">
+          <mat-icon>payments</mat-icon> Add supplier payment <span class="inline-ar">سداد مورد</span>
+        </button>
         <span class="spacer"></span>
-        <span class="batch-total">{{ blocks().length }} {{ blocks().length === 1 ? 'invoice' : 'invoices' }} · <strong>{{ total() | money }}</strong></span>
+        <span class="batch-total">{{ countLabel() }} · <strong>{{ total() | money }}</strong></span>
         <button mat-button (click)="startAgain()" [disabled]="saving()">Start again</button>
         <button mat-flat-button (click)="submit()" [disabled]="!ready() || saving()">
           <mat-icon>inventory</mat-icon> Submit batch <span class="inline-ar">ترحيل اليومية</span>
@@ -221,6 +309,15 @@ const storageKey = 'otantik-till.purchase-batch';
     }
     .supplier {
       min-width: 240px;
+    }
+    .payment-block {
+      border-style: dashed;
+    }
+    .amount {
+      width: 170px;
+    }
+    .notes {
+      min-width: 200px;
     }
     .block-total,
     .batch-total strong {
@@ -268,11 +365,15 @@ export class PurchaseBatchPage {
   protected readonly loading = signal(true);
   protected readonly saving = signal(false);
   protected readonly error = signal<string | null>(null);
-  // What stopped the batch, each problem by its invoice; nothing was saved.
+  // What stopped the batch, each problem by its invoice or payment; nothing was saved.
   protected readonly problems = signal<string | null>(null);
-  // The invoices the last batch made.
-  protected readonly posted = signal<PurchaseInvoice[] | null>(null);
+  // The invoices and payments the last batch made.
+  protected readonly posted = signal<PurchaseBatchResult | null>(null);
   protected readonly blocks = signal<BatchBlock[]>([this.block()]);
+  protected readonly payments = signal<PaymentBlock[]>([]);
+  // What each supplier is owed, for paying them: only those owed something can be paid.
+  private readonly balances = signal<SupplierBalance[]>([]);
+  protected readonly owedSuppliers = computed(() => this.balances().filter((b) => b.balance > 0));
 
   protected invoiceDate = PurchaseBatchPage.today();
   protected paymentMethod: PurchasePaymentMethod | null = null;
@@ -285,21 +386,35 @@ export class PurchaseBatchPage {
   // The header's fields are plain; this bumps so what reads them follows.
   private readonly headerVersion = signal(0);
 
-  protected readonly total = computed(() => this.blocks().reduce((sum, b) => sum + b.editor.total(), 0));
+  protected readonly total = computed(() => {
+    this.headerVersion();
+    return this.blocks().reduce((sum, b) => sum + b.editor.total(), 0) + this.payments().reduce((sum, p) => sum + (p.amount ?? 0), 0);
+  });
 
-  // Every invoice ready as on the invoice screen, each with its supplier on credit; the payment
-  // chosen, and from a day's takings, the day.
+  // "2 invoices, 1 payment".
+  protected readonly countLabel = computed(() => {
+    const [invoices, payments] = [this.blocks().length, this.payments().length];
+    const parts = [invoices ? `${invoices} ${invoices === 1 ? 'invoice' : 'invoices'}` : '', payments ? `${payments} ${payments === 1 ? 'payment' : 'payments'}` : ''];
+    return parts.filter(Boolean).join(', ') || 'Nothing yet';
+  });
+
+  // Every invoice ready as on the invoice screen, each with its supplier on credit; every payment
+  // to a supplier owed it, never on credit; the payment chosen, and from a day's takings, the day.
   protected readonly ready = computed(() => {
     this.headerVersion();
     const blocks = this.blocks();
+    const payments = this.payments();
     return (
       !!this.invoiceDate &&
       this.paymentMethod !== null &&
       (this.paymentMethod !== 'DayRevenue' || !!this.revenueDate) &&
+      blocks.length + payments.length > 0 &&
       blocks.every((b) => {
         b.supplier.version();
         return b.editor.ready() && !b.supplier.unresolved() && (this.paymentMethod !== 'Credit' || b.supplier.id !== null);
-      })
+      }) &&
+      (payments.length === 0 || this.paymentMethod !== 'Credit') &&
+      payments.every((p, j) => !!p.supplierId && (p.amount ?? 0) > 0 && !this.overOwed(j))
     );
   });
 
@@ -332,8 +447,60 @@ export class PurchaseBatchPage {
     this.blocks.update((blocks) => blocks.filter((_, i) => i !== index));
   }
 
+  // A supplier payment added: the empty invoice the batch starts with goes, so a batch of payments
+  // alone can be sent.
+  protected addPayment(): void {
+    const blocks = this.blocks();
+    if (blocks.length === 1 && this.untouched(blocks[0])) {
+      this.blocks.set([]);
+    }
+    this.payments.update((payments) => [...payments, { id: crypto.randomUUID(), supplierId: null, amount: null, notes: '' }]);
+    this.changed();
+  }
+
+  protected removePayment(index: number): void {
+    this.payments.update((payments) => payments.filter((_, i) => i !== index));
+    if (!this.payments().length && !this.blocks().length) {
+      this.blocks.set([this.block()]);
+    }
+    this.changed();
+  }
+
+  // What the supplier of payment `index` is owed, less what the payments above it pay them.
+  protected owedBefore(index: number): number | null {
+    const pay = this.payments()[index];
+    const owed = pay?.supplierId ? this.balances().find((b) => b.supplierId === pay.supplierId)?.balance : undefined;
+    return owed === undefined ? null : Math.round((owed - this.paidAbove(index)) * 100) / 100;
+  }
+
+  protected paidAbove(index: number): number {
+    const supplierId = this.payments()[index]?.supplierId;
+    return this.payments()
+      .slice(0, index)
+      .filter((p) => p.supplierId === supplierId)
+      .reduce((sum, p) => sum + (p.amount ?? 0), 0);
+  }
+
+  protected overOwed(index: number): boolean {
+    const owed = this.owedBefore(index);
+    const amount = this.payments()[index]?.amount ?? 0;
+    return owed !== null && amount > owed + 0.001;
+  }
+
+  // "2 invoices posted, 1 supplier paid".
+  protected sentLabel(result: PurchaseBatchResult): string {
+    const [invoices, payments] = [result.invoices.length, result.payments.length];
+    return [
+      invoices ? `${invoices === 1 ? '1 invoice' : `${invoices} invoices`} posted` : '',
+      payments ? `${payments === 1 ? '1 supplier' : `${payments} suppliers`} paid` : '',
+    ]
+      .filter(Boolean)
+      .join(', ');
+  }
+
   protected startAgain(): void {
     this.blocks.set([this.block()]);
+    this.payments.set([]);
     this.paymentMethod = null;
     this.invoiceDate = this.today;
     this.revenueDate = this.today;
@@ -361,18 +528,20 @@ export class PurchaseBatchPage {
             supplierInvoiceNumber: b.number.trim() || null,
             lines: b.editor.toSave(),
           })),
+          payments: this.payments().map((p) => ({ transactionId: p.id, supplierId: p.supplierId!, amount: p.amount!, notes: p.notes.trim() || null })),
         }),
       );
       this.posted.set(made);
-      const pending = made.filter((i) => i.paymentStatus === 'Pending').length;
+      const pending =
+        made.invoices.filter((i) => i.paymentStatus === 'Pending').length + made.payments.filter((p) => p.outcome === 'Requested').length;
       this.notify.info(
-        `${made.length === 1 ? '1 invoice' : `${made.length} invoices`} posted.` +
-          (pending ? ` ${pending === 1 ? 'Its payment waits' : `${pending} payments wait`} for a manager's approval.` : ''),
+        `${this.sentLabel(made)}.` + (pending ? ` ${pending === 1 ? '1 payment waits' : `${pending} payments wait`} for a manager's approval.` : ''),
       );
       this.blocks.set([this.block()]);
+      this.payments.set([]);
       this.changed();
       void this.approvals.refresh();
-      await this.catalog.loadMaterials();
+      await Promise.all([this.catalog.loadMaterials(), this.loadBalances()]);
     } catch (error) {
       this.problems.set(errorMessage(error, 'The batch could not be posted.'));
     } finally {
@@ -382,6 +551,20 @@ export class PurchaseBatchPage {
 
   private block(): BatchBlock {
     return { id: crypto.randomUUID(), supplier: new InvoiceSupplier(this.catalog), number: '', editor: new InvoiceLines(this.catalog) };
+  }
+
+  // Nothing entered on it yet.
+  private untouched(block: BatchBlock): boolean {
+    return (
+      !block.supplier.id &&
+      !(typeof block.supplier.entry === 'string' && block.supplier.entry.trim()) &&
+      !block.number.trim() &&
+      block.editor.lines().every((l) => !l.rawMaterialId && !l.expenseItemId)
+    );
+  }
+
+  private async loadBalances(): Promise<void> {
+    this.balances.set(await firstValueFrom(this.api.supplierBalances()));
   }
 
   private store(): void {
@@ -396,9 +579,14 @@ export class PurchaseBatchPage {
         number: b.number,
         lines: b.editor.lines().map(({ entry, ...line }) => ({ ...line, ...(typeof entry === 'string' ? { typed: entry } : {}) })),
       })),
+      payments: this.payments().map((p) => ({ ...p })),
     };
     try {
-      const empty = batch.blocks.length === 1 && !batch.blocks[0].supplierId && batch.blocks[0].lines.every((l) => !l.rawMaterialId && !l.expenseItemId);
+      const empty =
+        !batch.payments?.length &&
+        batch.blocks.length === 1 &&
+        !batch.blocks[0].supplierId &&
+        batch.blocks[0].lines.every((l) => !l.rawMaterialId && !l.expenseItemId);
       if (empty && !batch.paymentMethod) {
         localStorage.removeItem(storageKey);
       } else {
@@ -417,14 +605,15 @@ export class PurchaseBatchPage {
     } catch {
       stored = null;
     }
-    if (!stored?.blocks?.length) {
+    if (!stored?.blocks?.length && !stored?.payments?.length) {
       return;
     }
+    this.payments.set((stored.payments ?? []).map((p) => ({ id: p.id, supplierId: p.supplierId ?? null, amount: p.amount ?? null, notes: p.notes ?? '' })));
     this.invoiceDate = stored.invoiceDate || this.today;
     this.paymentMethod = stored.paymentMethod;
     this.revenueDate = stored.revenueDate || this.today;
     this.blocks.set(
-      stored.blocks.map((b) => {
+      (stored.blocks ?? []).map((b) => {
         const block = this.block();
         block.id = b.id;
         block.number = b.number ?? '';
@@ -462,7 +651,7 @@ export class PurchaseBatchPage {
       this.changed();
     });
     try {
-      await this.catalog.load();
+      await Promise.all([this.catalog.load(), this.loadBalances()]);
       this.restore();
     } catch (error) {
       this.error.set(errorMessage(error, 'The purchases could not be loaded.'));

@@ -558,10 +558,22 @@ public class ApiTests
 
         // The accountant's from the safe: both posted, each payment waiting for a manager.
         var made = (await Json(await accountant.PostAsJsonAsync("/api/inventory/purchase-invoices/batch",
-            Batch("Safe", Invoice(nile, 100), Invoice(null, 60)), Cancel))).EnumerateArray().ToList();
+            Batch("Safe", Invoice(nile, 100), Invoice(null, 60)), Cancel))).GetProperty("invoices").EnumerateArray().ToList();
         Assert.Equal([("Posted", "Pending"), ("Posted", "Pending")], made.Select(i => (i.GetProperty("status").GetString(), i.GetProperty("paymentStatus").GetString())));
         var pending = (await Json(await manager.GetAsync("/api/inventory/approval-requests", Cancel))).GetProperty("pending").EnumerateArray().ToList();
         Assert.Equal(2, pending.Count(r => r.GetProperty("module").GetString() == "Treasury"));
+
+        // Bought on credit, then 50 of it paid in a batch of its own: no invoice, off Nile Farms' account.
+        await Json(await manager.PostAsJsonAsync("/api/inventory/purchase-invoices/batch", Batch("Credit", Invoice(nile, 80)), Cancel));
+        var paid = (await Json(await manager.PostAsJsonAsync("/api/inventory/purchase-invoices/batch", new
+        {
+            invoiceDate = "2026-10-13", paymentMethod = "Safe", invoices = Array.Empty<object>(),
+            payments = new[] { new { transactionId = Guid.NewGuid(), supplierId = nile, amount = 50, notes = "Receipt R-1" } },
+        }, Cancel))).GetProperty("payments").EnumerateArray().Single();
+        Assert.Equal(("Nile Farms", 50m, "Receipt R-1", "Applied"), (paid.GetProperty("supplier").GetString(), paid.GetProperty("amount").GetDecimal(),
+            paid.GetProperty("notes").GetString(), paid.GetProperty("outcome").GetString()));
+        var account = await Json(await manager.GetAsync($"/api/financials/suppliers/{nile}", Cancel));
+        Assert.Equal(30m, account.GetProperty("balance").GetDecimal());
     }
 
     // A sheet of batch recipes (المصنعات), as kitchens write them: a prep item's name on its own row,

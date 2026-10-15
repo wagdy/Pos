@@ -838,11 +838,29 @@ export interface SavePurchaseInvoice {
 // A stock line names its material; an expense line its expense item, in units of 1, with its cost.
 // A day's purchases entered together (يومية المشتريات المجمعة): the date and how they were paid,
 // chosen once, and an invoice for each supplier, each its own invoice. InvoiceId is made here.
+// A day's purchases sent together: an invoice for each supplier, and suppliers paid against what they
+// are owed (سداد مورد), no invoice and no stock. A payment's transactionId is made here, once.
 export interface PurchaseBatch {
   invoiceDate: string;
   paymentMethod: PurchasePaymentMethod;
   revenueDate: string | null;
   invoices: { invoiceId: string; supplierId: string | null; supplierInvoiceNumber: string | null; lines: SavePurchaseLine[] }[];
+  payments: { transactionId: string; supplierId: string; amount: number; notes: string | null }[];
+}
+
+// A supplier paid in a batch: at once (Applied), or asked of a manager (Requested).
+export interface BatchPaymentMade {
+  transactionId: string;
+  supplierId: string;
+  supplier: string;
+  amount: number;
+  notes: string | null;
+  outcome: ApprovalOutcome;
+}
+
+export interface PurchaseBatchResult {
+  invoices: PurchaseInvoice[];
+  payments: BatchPaymentMade[];
 }
 
 export interface SavePurchaseLine {
@@ -1148,8 +1166,8 @@ export class CostingApi {
 
   // Step one: kept as a draft. The id is made here, once per invoice.
   // A day's purchases entered together: each invoice made, posted and paid as chosen, or none.
-  postPurchaseBatch(batch: PurchaseBatch): Observable<PurchaseInvoice[]> {
-    return this.http.post<PurchaseInvoice[]>('/api/inventory/purchase-invoices/batch', batch);
+  postPurchaseBatch(batch: PurchaseBatch): Observable<PurchaseBatchResult> {
+    return this.http.post<PurchaseBatchResult>('/api/inventory/purchase-invoices/batch', batch);
   }
 
   savePurchaseInvoice(id: string, invoice: SavePurchaseInvoice): Observable<PurchaseInvoice> {
@@ -1647,6 +1665,7 @@ export interface TakingsPreview {
   entered: number | null;
   paidOut: number;
   invoices: number;
+  supplierPayments: number;
 }
 
 export interface ExpenseVoucherRow {
@@ -1731,6 +1750,8 @@ export interface SupplierPaymentRow {
   approvedBy: string | null;
   voidedAtUtc: string | null;
   voidedBy: string | null;
+  // Paid straight out of that day's takings, not the safe.
+  fromTakingsOf: string | null;
 }
 
 // A safe entry as entered. requestId and transactionId are made here, once per entry.

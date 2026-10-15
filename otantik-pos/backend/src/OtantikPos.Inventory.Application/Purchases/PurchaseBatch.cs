@@ -1,6 +1,9 @@
+using System.Globalization;
 using MediatR;
 using Otantik.BuildingBlocks;
+using OtantikPos.Inventory.Application.Approvals;
 using OtantikPos.Inventory.Application.Common;
+using OtantikPos.Inventory.Application.Treasury;
 using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.Expenses;
@@ -17,10 +20,22 @@ namespace OtantikPos.Inventory.Application.Purchases;
 // in cash it is paid for a manager, and asked of one, a request each, for anyone else. Never one
 // invoice for the lot, so each supplier's account and the safe stay exact.
 //
-// All or nothing: every invoice is checked before any is saved, and each problem is said by the
-// invoice it is on. InvoiceId is made by the till: a batch sent again does not post an invoice twice.
+// A supplier can be paid in it too (سداد مورد), an old debt settled with no invoice and no stock:
+// from the safe or the day's takings, as the batch is paid, never on credit; against what is owed
+// to them, never more, and taken off it on their account.
+//
+// All or nothing: every invoice and payment is checked before any is saved, and each problem is
+// said by the invoice or payment it is on. InvoiceId and a payment's TransactionId are made by the
+// till: a batch sent again does not post an invoice, or pay a supplier, twice.
 
 public sealed record BatchInvoice(Guid InvoiceId, Guid? SupplierId, string? SupplierInvoiceNumber, IReadOnlyList<PurchaseInvoiceLineEntry> Lines);
+
+public sealed record BatchPayment(Guid TransactionId, Guid SupplierId, decimal Amount, string? Notes = null);
+
+// A payment the batch made (Applied), or asked of a manager (Requested): no cash moves until then.
+public sealed record BatchPaymentDto(Guid TransactionId, Guid SupplierId, string Supplier, decimal Amount, string? Notes, ApprovalOutcome Outcome);
+
+public sealed record PurchaseBatchResult(IReadOnlyList<PurchaseInvoiceDto> Invoices, IReadOnlyList<BatchPaymentDto> Payments);
 
 public sealed record PostPurchaseBatchCommand(
     DateOnly InvoiceDate,
@@ -29,7 +44,8 @@ public sealed record PostPurchaseBatchCommand(
     IReadOnlyList<BatchInvoice> Invoices,
     string StaffName = "",
     string StaffId = "",
-    bool CanApprove = true) : IRequest<IReadOnlyList<PurchaseInvoiceDto>>, IRetryOnConflict;
+    bool CanApprove = true,
+    IReadOnlyList<BatchPayment>? Payments = null) : IRequest<PurchaseBatchResult>, IRetryOnConflict;
 
 internal sealed class PostPurchaseBatchHandler(
     IPurchaseInvoiceRepository invoices,
@@ -41,20 +57,32 @@ internal sealed class PostPurchaseBatchHandler(
     ISupplierRepository suppliers,
     ISafeTransactionRepository safe,
     IApprovalRequestRepository requests,
-    IUnitOfWork unitOfWork) : IRequestHandler<PostPurchaseBatchCommand, IReadOnlyList<PurchaseInvoiceDto>>
+    ISupplierLedgerRepository suppliersLedger,
+    TreasuryWriter treasury,
+    IUnitOfWork unitOfWork) : IRequestHandler<PostPurchaseBatchCommand, PurchaseBatchResult>
 {
     public const int MaxInvoices = 50;
 
-    public async Task<IReadOnlyList<PurchaseInvoiceDto>> Handle(PostPurchaseBatchCommand request, CancellationToken cancellationToken)
+    public async Task<PurchaseBatchResult> Handle(PostPurchaseBatchCommand request, CancellationToken cancellationToken)
     {
-        if (request.Invoices.Count == 0)
-            throw new DomainException("Add an invoice to the batch.");
-        if (request.Invoices.Count > MaxInvoices)
-            throw new DomainException($"A batch holds at most {MaxInvoices} invoices: send the rest as another.");
+        var payments = request.Payments ?? [];
+        if (request.Invoices.Count == 0 && payments.Count == 0)
+            throw new DomainException("Add an invoice or a supplier payment to the batch.");
+        if (request.Invoices.Count + payments.Count > MaxInvoices)
+            throw new DomainException($"A batch holds at most {MaxInvoices} invoices and payments: send the rest as another.");
         if (request.PaymentMethod == PurchasePaymentMethod.BeforeTreasury)
             throw new DomainException("Before the treasury is for the invoices from before it, not for new ones.");
         if (request.Invoices.Select(i => i.InvoiceId).Distinct().Count() != request.Invoices.Count)
             throw new DomainException("The same invoice is in the batch twice.");
+        if (payments.Count > 0)
+        {
+            if (request.PaymentMethod == PurchasePaymentMethod.Credit)
+                throw new DomainException("A supplier payment is cash: pay the batch from the safe or a day's takings, or send the payments apart.");
+            if (request.PaymentMethod == PurchasePaymentMethod.DayRevenue && request.RevenueDate is null)
+                throw new DomainException("Choose the day whose takings pay them.");
+            if (payments.Select(p => p.TransactionId).Concat(request.Invoices.Select(i => i.InvoiceId)).Distinct().Count() != payments.Count + request.Invoices.Count)
+                throw new DomainException("The same payment is in the batch twice.");
+        }
 
         var made = new List<PurchaseInvoice>();
         var problems = new List<string>();
@@ -87,6 +115,61 @@ internal sealed class PostPurchaseBatchHandler(
             }
         }
 
+        var paid = new List<BatchPaymentDto>();
+        // What each supplier is still owed as the payments above it are taken off.
+        var owedLeft = new Dictionary<Guid, decimal>();
+        for (var i = 0; i < payments.Count; i++)
+        {
+            var entry = payments[i];
+            var name = (await suppliers.GetByIdAsync(entry.SupplierId, cancellationToken))?.Name;
+            try
+            {
+                // Sent again after an answer was lost: paid, or asked, already.
+                var paidAlready = await safe.GetByIdAsync(entry.TransactionId, cancellationToken) is not null;
+                if (paidAlready || await requests.GetByIdAsync(entry.TransactionId, cancellationToken) is not null)
+                {
+                    var outcome = paidAlready ? ApprovalOutcome.Applied : ApprovalOutcome.Requested;
+                    paid.Add(new BatchPaymentDto(entry.TransactionId, entry.SupplierId, name ?? "", entry.Amount, entry.Notes, outcome));
+                    continue;
+                }
+
+                if (name is null)
+                    throw new NotFoundException("Supplier", entry.SupplierId);
+                if (entry.Amount <= 0)
+                    throw new DomainException("Enter an amount more than nothing.");
+                var after = owedLeft.ContainsKey(entry.SupplierId);
+                var owed = after ? owedLeft[entry.SupplierId] : await suppliersLedger.BalanceAsync(entry.SupplierId, cancellationToken);
+                if (entry.Amount > owed)
+                    throw new DomainException(owed > 0
+                        ? $"{name} is owed {Money(owed)}{(after ? " after the payments above" : "")}: pay that much or less."
+                        : $"Nothing is owed to {name}{(after ? " after the payments above" : "")}.");
+                owedLeft[entry.SupplierId] = owed - entry.Amount;
+
+                var voucher = new SafeVoucher(
+                    entry.TransactionId, SafeTransactionKind.SupplierPayment, entry.Amount, request.InvoiceDate,
+                    RevenueDate: request.PaymentMethod == PurchasePaymentMethod.DayRevenue ? request.RevenueDate : null,
+                    SupplierId: entry.SupplierId, Notes: entry.Notes);
+                if (request.CanApprove)
+                {
+                    await treasury.ApplyAsync(voucher, request.StaffName, null, cancellationToken);
+                    paid.Add(new BatchPaymentDto(entry.TransactionId, entry.SupplierId, name, entry.Amount, voucher.Notes?.Trim(), ApprovalOutcome.Applied));
+                }
+                else
+                {
+                    await treasury.CheckAsync(voucher, cancellationToken);
+                    var (summary, changes) = await treasury.DescribeAsync(voucher, cancellationToken);
+                    requests.Add(ApprovalRequest.AskToChange(
+                        entry.TransactionId, ApprovalModule.Treasury, ApprovalAction.Create, entry.TransactionId, summary, changes,
+                        ApprovalPayload.Write(voucher), null, request.StaffId, request.StaffName));
+                    paid.Add(new BatchPaymentDto(entry.TransactionId, entry.SupplierId, name, entry.Amount, voucher.Notes?.Trim(), ApprovalOutcome.Requested));
+                }
+            }
+            catch (Exception error) when (error is DomainException or NotFoundException)
+            {
+                problems.Add($"Payment {i + 1}{(name is null ? "" : $" · {name}")}: {error.Message}");
+            }
+        }
+
         if (problems.Count > 0)
             throw new DomainException(string.Join("\n", problems));
 
@@ -95,6 +178,8 @@ internal sealed class PostPurchaseBatchHandler(
         var dtos = new List<PurchaseInvoiceDto>();
         foreach (var invoice in made)
             dtos.Add(await reading.DtoAsync(invoice, cancellationToken));
-        return dtos;
+        return new PurchaseBatchResult(dtos, paid);
     }
+
+    private static string Money(decimal value) => $"L.E {value.ToString("N2", CultureInfo.InvariantCulture)}";
 }

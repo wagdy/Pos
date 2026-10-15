@@ -113,13 +113,15 @@ public sealed class InventoryController(ISender sender) : ControllerBase
         sender.Send(new PostPurchaseInvoiceCommand(invoiceId, StaffName, StaffId, CanApprove), cancellationToken);
 
     // A day's purchases entered together: the date and payment chosen once, an invoice for each
-    // supplier. Each becomes its own posted invoice, paid as chosen (a manager's at once, anyone
-    // else's asked of one); none is saved unless all can be (422, each problem by its invoice).
+    // supplier, and suppliers paid against what they are owed. Each becomes its own posted invoice
+    // or payment, paid as chosen (a manager's at once, anyone else's asked of one); none is saved
+    // unless all can be (422, each problem by its invoice or payment).
     [HttpPost("purchase-invoices/batch")]
     [Authorize(Policy = Permissions.InventoryManage)]
-    public Task<IReadOnlyList<PurchaseInvoiceDto>> PostPurchaseBatch(PurchaseBatchRequest request, CancellationToken cancellationToken) =>
+    public Task<PurchaseBatchResult> PostPurchaseBatch(PurchaseBatchRequest request, CancellationToken cancellationToken) =>
         sender.Send(new PostPurchaseBatchCommand(
-            request.InvoiceDate, request.PaymentMethod, request.RevenueDate, request.Invoices, StaffName, StaffId, CanApprove), cancellationToken);
+            request.InvoiceDate, request.PaymentMethod, request.RevenueDate, request.Invoices, StaffName, StaffId, CanApprove, request.Payments ?? []),
+            cancellationToken);
 
     // Pays a posted cash invoice that is not paid (its payment was rejected or voided), or puts it
     // on credit. RequestId is made by the till.
@@ -494,7 +496,8 @@ public sealed record SavePurchaseInvoiceRequest(
 public sealed record PayPurchaseInvoiceRequest(Guid RequestId, PurchasePaymentMethod Method, DateOnly? RevenueDate = null);
 
 public sealed record PurchaseBatchRequest(
-    DateOnly InvoiceDate, PurchasePaymentMethod PaymentMethod, IReadOnlyList<BatchInvoice> Invoices, DateOnly? RevenueDate = null);
+    DateOnly InvoiceDate, PurchasePaymentMethod PaymentMethod, IReadOnlyList<BatchInvoice> Invoices, DateOnly? RevenueDate = null,
+    IReadOnlyList<BatchPayment>? Payments = null);
 
 public sealed record SavePrepItemRequest(
     string Name,

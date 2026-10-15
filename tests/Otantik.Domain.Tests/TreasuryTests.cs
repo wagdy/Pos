@@ -117,6 +117,15 @@ public class TreasuryTests
         Assert.Equal((CashFund.Safe, 50m), (drawer.Void(Guid.NewGuid(), Today, "Omar", takingsInSafe: true).Fund, 50m));
         var early = SafeTransaction.InvoicePayment(Guid.NewGuid(), 50, Today, Guid.NewGuid(), null, Today, "Omar");
         Assert.Equal(CashFund.DayRevenue, early.Void(Guid.NewGuid(), Today, "Omar").Fund);
+
+        // A supplier paid out of a day's takings, as an invoice is: the drawer's, then the safe's.
+        var supplier = Guid.NewGuid();
+        Assert.Equal((CashFund.DayRevenue, (DateOnly?)Today, -600m),
+            Fund(SafeTransaction.SupplierPayment(Guid.NewGuid(), 600, Today, supplier, "Receipt R-12", "Omar", revenueDate: Today)));
+        Assert.Equal(CashFund.Safe, SafeTransaction.SupplierPayment(Guid.NewGuid(), 600, Today, supplier, null, "Omar", revenueDate: Today, takingsInSafe: true).Fund);
+        Assert.Equal(CashFund.Safe, SafeTransaction.SupplierPayment(Guid.NewGuid(), 600, Today, supplier, null, "Omar").Fund);
+        Assert.Throws<DomainException>(() => SafeTransaction.SupplierPayment(Guid.NewGuid(), 600, Today, supplier, null, "Omar", revenueDate: Today.AddDays(1)));
+        static (CashFund, DateOnly?, decimal) Fund(SafeTransaction t) => (t.Fund, t.RevenueDate, t.Amount);
     }
 
     [Fact]

@@ -3,7 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { MatDialog } from '@angular/material/dialog';
 import { provideRouter } from '@angular/router';
 import { of, throwError } from 'rxjs';
-import { CostingApi, MaterialCost, PurchaseBatch, PurchaseInvoice, Supplier } from '../../core/costing/costing.api';
+import { CostingApi, MaterialCost, PurchaseBatch, PurchaseInvoice, Supplier, SupplierBalance } from '../../core/costing/costing.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from './approvals';
 import { PurchaseBatchPage } from './purchase-batch-page';
@@ -12,6 +12,11 @@ const tomatoes = { id: 'tomatoes', name: 'Tomatoes', unit: 'Gram', purchaseUnit:
 const milk = { id: 'milk', name: 'Milk', unit: 'Millilitre', purchaseUnit: 'L', purchaseUnitSize: 1000, kind: 'Purchased' } as MaterialCost;
 const nile = { id: 'nile', name: 'Nile Farms' } as Supplier;
 const delta = { id: 'delta', name: 'Delta Dairy' } as Supplier;
+// Nile Farms is owed 1,000 from before; Delta Dairy nothing.
+const balances = [
+  { supplierId: 'nile', supplier: 'Nile Farms', balance: 1_000 },
+  { supplierId: 'delta', supplier: 'Delta Dairy', balance: 0 },
+] as SupplierBalance[];
 
 function posted(id: string, supplier: Supplier, total: number, paymentStatus: PurchaseInvoice['paymentStatus']): PurchaseInvoice {
   return { id, supplierId: supplier.id, supplierName: supplier.name, supplierInvoiceNumber: null, total, paymentStatus } as PurchaseInvoice;
@@ -35,6 +40,7 @@ describe('a day’s purchases entered together', () => {
             suppliers: () => of([nile, delta]),
             expenseItems: () => of([]),
             businessToday: () => of({ today: '2026-10-13' }),
+            supplierBalances: () => of(balances),
             postPurchaseBatch,
           },
         },
@@ -95,7 +101,7 @@ describe('a day’s purchases entered together', () => {
     fill(page['blocks']()[1], delta, milk, 10, 420);
     page['changed']();
     const ids = page['blocks']().map((b: Record<string, any>) => b['id']);
-    postPurchaseBatch.mockReturnValue(of([posted(ids[0], nile, 100, 'Pending'), posted(ids[1], delta, 420, 'Pending')]));
+    postPurchaseBatch.mockReturnValue(of({ invoices: [posted(ids[0], nile, 100, 'Pending'), posted(ids[1], delta, 420, 'Pending')], payments: [] }));
 
     await page['submit']();
 
@@ -145,5 +151,98 @@ describe('a day’s purchases entered together', () => {
     expect([block['id'], block['supplier'].id, block['editor'].lines()[0].rawMaterialId, block['editor'].lines()[0].entry]).toEqual([
       id, 'nile', 'tomatoes', tomatoes,
     ]);
+  });
+
+  it('pays a supplier in the batch: no lines, only the supplier owed, the amount and notes; never more than owed', async () => {
+    const { fixture, el, page } = await render();
+    page['paymentMethod'] = 'DayRevenue';
+    page['changed']();
+
+    // The empty invoice the batch starts with goes: a batch of payments alone.
+    page['addPayment']();
+    fixture.detectChanges();
+    expect(page['blocks']().length).toBe(0);
+    const block = el.querySelector('.payment-block')!;
+    expect(block.querySelector('app-invoice-lines')).toBeNull();
+    expect([...block.querySelectorAll('mat-label')].map(text)).toEqual(['Supplier · المورد', 'Payment amount · قيمة السداد', 'Notes / receipt no. · ملاحظات']);
+    // Only those owed something can be paid.
+    expect(page['owedSuppliers']().map((b: SupplierBalance) => b.supplier)).toEqual(['Nile Farms']);
+
+    const pay = page['payments']()[0];
+    pay.supplierId = 'nile';
+    pay.amount = 600;
+    pay.notes = ' Receipt R-12 ';
+    page['changed']();
+    expect([page['owedBefore'](0), page['ready']()]).toEqual([1_000, true]);
+    // Two together more than owed: the second is over.
+    page['addPayment']();
+    Object.assign(page['payments']()[1], { supplierId: 'nile', amount: 500 });
+    page['changed']();
+    fixture.detectChanges();
+    expect([page['owedBefore'](1), page['overOwed'](1), page['ready']()]).toEqual([400, true, false]);
+    expect(text(el.querySelectorAll('.payment-block')[1])).toContain('Owed L.E 400.00 after the payments above');
+    page['payments']()[1].amount = 400;
+    page['changed']();
+    expect(page['ready']()).toBe(true);
+    expect(page['countLabel']()).toBe('2 payments');
+  });
+
+  it('sends the payments with the batch, from the day’s takings, and shows what was paid', async () => {
+    const { fixture, el, page } = await render();
+    page['paymentMethod'] = 'DayRevenue';
+    fill(page['blocks']()[0], nile, tomatoes, 5, 100);
+    page['addPayment']();
+    Object.assign(page['payments']()[0], { supplierId: 'nile', amount: 600, notes: ' Receipt R-12 ' });
+    page['changed']();
+    const id = page['payments']()[0].id;
+    postPurchaseBatch.mockReturnValue(of({
+      invoices: [posted(page['blocks']()[0].id, nile, 100, 'Paid')],
+      payments: [{ transactionId: id, supplierId: 'nile', supplier: 'Nile Farms', amount: 600, notes: 'Receipt R-12', outcome: 'Applied' }],
+    }));
+
+    await page['submit']();
+    fixture.detectChanges();
+
+    const sent = postPurchaseBatch.mock.lastCall![0] as PurchaseBatch;
+    expect(sent).toMatchObject({ paymentMethod: 'DayRevenue', revenueDate: '2026-10-13' });
+    expect(sent.payments).toEqual([{ transactionId: id, supplierId: 'nile', amount: 600, notes: 'Receipt R-12' }]);
+    expect(sent.invoices.length).toBe(1);
+    expect(notify.info).toHaveBeenCalledWith('1 invoice posted, 1 supplier paid.');
+    expect([...el.querySelectorAll('.payments-made tbody td')].map(text)).toEqual(['Nile Farms', 'Receipt R-12', 'L.E 600.00', 'Paidتم السداد']);
+    expect(page['payments']()).toEqual([]);
+  });
+
+  it('pays no supplier on credit', async () => {
+    const { fixture, el, page } = await render();
+    // As choosing it in the list does: the page marked for a fresh look.
+    page['paymentMethod'] = 'Credit';
+    page['changed']();
+    fixture.componentRef.changeDetectorRef.markForCheck();
+    await fixture.whenStable();
+
+    const add = [...el.querySelectorAll<HTMLButtonElement>('button')].find((b) => text(b).startsWith('payments Add supplier payment'))!;
+    expect(add.disabled).toBe(true);
+    // Once there are payments, the batch cannot be put on credit either.
+    page['paymentMethod'] = 'Safe';
+    page['addPayment']();
+    page['paymentMethod'] = 'Credit';
+    page['changed']();
+    Object.assign(page['payments']()[0], { supplierId: 'nile', amount: 100 });
+    expect(page['ready']()).toBe(false);
+  });
+
+  it('keeps the payments after a reload, until they are sent', async () => {
+    const first = await render();
+    first.page['paymentMethod'] = 'Safe';
+    first.page['addPayment']();
+    Object.assign(first.page['payments']()[0], { supplierId: 'nile', amount: 250, notes: 'R-7' });
+    first.page['changed']();
+    first.fixture.detectChanges();
+    const id = first.page['payments']()[0].id;
+    TestBed.resetTestingModule();
+
+    const { page } = await render();
+    expect(page['payments']()).toEqual([{ id, supplierId: 'nile', amount: 250, notes: 'R-7' }]);
+    expect(page['blocks']().length).toBe(0);
   });
 });
