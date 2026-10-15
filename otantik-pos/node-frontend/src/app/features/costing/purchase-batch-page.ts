@@ -23,6 +23,7 @@ import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from './approvals';
 import { BusinessDay } from './financials';
 import { InvoiceLine, InvoiceLines, InvoiceLinesTable, InvoiceSupplier, PurchaseCatalog } from './invoice-lines';
+import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPayment } from './supplier-payment-fields';
 
 // One invoice of the batch: its id, made here; its supplier, number and lines, entered as on the
 // invoice screen.
@@ -33,14 +34,9 @@ interface BatchBlock {
   editor: InvoiceLines;
 }
 
-// A supplier paid in the batch (سداد مورد): an old debt settled, no invoice and no stock. Its id is
-// the payment's, made here.
-interface PaymentBlock {
-  id: string;
-  supplierId: string | null;
-  amount: number | null;
-  notes: string;
-}
+// A supplier paid in the batch (سداد مورد): an old debt settled, no invoice and no stock, entered as
+// on the new invoice screen.
+type PaymentBlock = SupplierPaymentEntry;
 
 // What is kept in the browser while a batch is being entered, so a reload does not lose it.
 interface StoredBatch {
@@ -74,6 +70,7 @@ const storageKey = 'otantik-till.purchase-batch';
     MatSelectModule,
     MoneyPipe,
     RouterLink,
+    SupplierPaymentFields,
   ],
   template: `
     @if (loading()) {
@@ -223,32 +220,8 @@ const storageKey = 'otantik-till.purchase-batch';
         <section class="block payment-block" [attr.aria-label]="'Supplier payment ' + (j + 1)">
           <div class="block-head">
             <h3>Supplier payment {{ j + 1 }} <span class="inline-ar">سداد مورد {{ j + 1 }}</span></h3>
-            <mat-form-field subscriptSizing="dynamic" class="supplier">
-              <mat-label>Supplier · المورد</mat-label>
-              <mat-select [(ngModel)]="pay.supplierId" (ngModelChange)="changed()" [attr.aria-label]="'Supplier payment ' + (j + 1) + ', supplier'">
-                @for (s of owedSuppliers(); track s.supplierId) {
-                  <mat-option [value]="s.supplierId">{{ s.supplier }} · owed {{ s.balance | money }}</mat-option>
-                } @empty {
-                  <mat-option disabled>No supplier is owed anything: enter an old debt on Financials · Supplier debts</mat-option>
-                }
-              </mat-select>
-              @if (owedBefore(j); as owed) {
-                <mat-hint>Owed {{ owed | money }}{{ paidAbove(j) ? ' after the payments above' : '' }}</mat-hint>
-              }
-            </mat-form-field>
-            <mat-form-field subscriptSizing="dynamic" class="amount">
-              <mat-label>Payment amount · قيمة السداد</mat-label>
-              <input matInput type="number" min="0" step="any" [(ngModel)]="pay.amount" (ngModelChange)="changed()"
-                [attr.aria-label]="'Supplier payment ' + (j + 1) + ', amount'" />
-              <span matTextSuffix>&nbsp;L.E</span>
-              @if (overOwed(j)) {
-                <mat-hint class="warn-text">More than they are owed.</mat-hint>
-              }
-            </mat-form-field>
-            <mat-form-field subscriptSizing="dynamic" class="notes">
-              <mat-label>Notes / receipt no. · ملاحظات</mat-label>
-              <input matInput [(ngModel)]="pay.notes" (ngModelChange)="changed()" maxlength="300" [attr.aria-label]="'Supplier payment ' + (j + 1) + ', notes'" />
-            </mat-form-field>
+            <app-supplier-payment-fields [payment]="pay" [suppliers]="owedSuppliers()" [owed]="owedBefore(j)" [afterAbove]="paidAbove(j) > 0"
+              [label]="'Supplier payment ' + (j + 1)" (changed)="changed()" />
             <span class="spacer"></span>
             <button mat-icon-button (click)="removePayment(j)" [attr.aria-label]="'Take supplier payment ' + (j + 1) + ' off the batch'">
               <mat-icon>delete</mat-icon>
@@ -312,12 +285,6 @@ const storageKey = 'otantik-till.purchase-batch';
     }
     .payment-block {
       border-style: dashed;
-    }
-    .amount {
-      width: 170px;
-    }
-    .notes {
-      min-width: 200px;
     }
     .block-total,
     .batch-total strong {
@@ -454,7 +421,7 @@ export class PurchaseBatchPage {
     if (blocks.length === 1 && this.untouched(blocks[0])) {
       this.blocks.set([]);
     }
-    this.payments.update((payments) => [...payments, { id: crypto.randomUUID(), supplierId: null, amount: null, notes: '' }]);
+    this.payments.update((payments) => [...payments, newSupplierPayment()]);
     this.changed();
   }
 
@@ -482,9 +449,8 @@ export class PurchaseBatchPage {
   }
 
   protected overOwed(index: number): boolean {
-    const owed = this.owedBefore(index);
-    const amount = this.payments()[index]?.amount ?? 0;
-    return owed !== null && amount > owed + 0.001;
+    const pay = this.payments()[index];
+    return !!pay && isOverOwed(pay, this.owedBefore(index));
   }
 
   // "2 invoices posted, 1 supplier paid".

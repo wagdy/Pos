@@ -9,10 +9,13 @@ import {
   PurchaseInvoice,
   PurchaseInvoiceSummary,
   SavePurchaseInvoice,
+  SafeVoucherInput,
   Supplier,
+  SupplierBalance,
   purchaseUnits,
 } from '../../core/costing/costing.api';
 import { NotifyService } from '../../core/ui/notify.service';
+import { Approvals } from './approvals';
 import { ExpenseItemDialog } from './expense-item-dialog';
 import { PurchasesPage } from './purchases-page';
 
@@ -99,6 +102,7 @@ describe('entering a supplier invoice', () => {
             postPurchaseInvoice,
             discardPurchaseInvoice,
             attachPurchaseInvoiceFile,
+            supplierBalances: () => of([]),
           },
         },
         { provide: MatDialog, useValue: { open } },
@@ -648,5 +652,134 @@ describe('entering a supplier invoice', () => {
 
       expect(page['lines']()[0]).toMatchObject({ entry: spray, itemType: 'Expense', expenseItemId: 'spray', quantity: 4, unitLabel: 'bottle', cost: 200 });
     });
+  });
+});
+
+// A supplier paid with no invoice (سداد مورد), switched to at the top of the new invoice screen:
+// entered as in the daily batch, from the safe or a day's takings, never on credit.
+describe('paying a supplier from the new invoice screen', () => {
+  // Nile Farms is owed 1,000 from before; Delta Oils nothing.
+  const balances = [
+    { supplierId: 'nile', supplier: 'Nile Farms', balance: 1_000 },
+    { supplierId: 'delta', supplier: 'Delta Oils', balance: 0 },
+  ] as SupplierBalance[];
+  const supplierBalances = vi.fn();
+  const recordVoucher = vi.fn();
+  const notify = { info: vi.fn(), error: vi.fn() };
+  const approvals = { canApprove: vi.fn(() => true), requested: vi.fn(), refresh: vi.fn() };
+  const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
+
+  async function render() {
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([]),
+        {
+          provide: CostingApi,
+          useValue: {
+            materials: () => of([tomatoes]),
+            purchaseInvoices: () => of([]),
+            suppliers: () => of([nileFarms, deltaOils]),
+            expenseItems: () => of([]),
+            businessToday: () => of({ today: '2026-10-15' }),
+            supplierBalances,
+            recordVoucher,
+          },
+        },
+        { provide: Approvals, useValue: approvals },
+        { provide: MatDialog, useValue: { open: vi.fn() } },
+        { provide: NotifyService, useValue: notify },
+      ],
+    });
+    const fixture = TestBed.createComponent(PurchasesPage);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return { fixture, el: fixture.nativeElement as HTMLElement, page: fixture.componentInstance as unknown as Record<string, any> };
+  }
+
+  async function switchToPayment(fixture: { whenStable(): Promise<unknown>; detectChanges(): void }, page: Record<string, any>) {
+    page['mode'].set('payment');
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+
+  beforeEach(() => {
+    supplierBalances.mockReset().mockReturnValue(of(balances));
+    recordVoucher.mockReset();
+    notify.info.mockReset();
+    approvals.canApprove.mockReturnValue(true);
+    approvals.requested.mockReset();
+  });
+
+  it('shows only the supplier owed, the amount, how it is paid and the notes: no lines, never on credit', async () => {
+    const { fixture, el, page } = await render();
+    await switchToPayment(fixture, page);
+
+    expect(el.querySelector('app-invoice-lines')).toBeNull();
+    expect([...el.querySelectorAll('mat-label')].map(text)).toEqual([
+      'Supplier · المورد', 'Payment amount · قيمة السداد', 'Notes / receipt no. · ملاحظات', 'Paid · طريقة الدفع',
+    ]);
+    expect(page['owedSuppliers']().map((b: SupplierBalance) => b.supplier)).toEqual(['Nile Farms']);
+    expect(page['cashMethods']).toEqual(['Safe', 'DayRevenue']);
+
+    const pay = page['payment']();
+    pay.supplierId = 'nile';
+    pay.amount = 1_200;
+    page['paymentEdited']();
+    page['payMethod'] = 'Safe';
+    page['paymentEdited']();
+    // More than owed.
+    expect([page['owedNow'](), page['supplierPaymentReady']()]).toEqual([1_000, false]);
+    pay.amount = 600;
+    page['paymentEdited']();
+    expect(page['supplierPaymentReady']()).toBe(true);
+  });
+
+  it('pays from a day’s takings, once, and starts a new payment', async () => {
+    const { fixture, page } = await render();
+    await switchToPayment(fixture, page);
+    const pay = page['payment']();
+    Object.assign(pay, { supplierId: 'nile', amount: 600, notes: ' Receipt R-12 ' });
+    page['payMethod'] = 'DayRevenue';
+    page['paymentEdited']();
+    recordVoucher.mockReturnValue(of({ id: pay.id, kind: 'SupplierPayment', amount: -600 }));
+
+    await page['payNow']();
+
+    const sent = recordVoucher.mock.lastCall![0] as SafeVoucherInput;
+    expect(sent).toMatchObject({
+      requestId: pay.id, transactionId: pay.id, kind: 'SupplierPayment', amount: 600, supplierId: 'nile', notes: 'Receipt R-12',
+      revenueDate: '2026-10-15', date: '2026-10-15',
+    });
+    expect(notify.info).toHaveBeenCalledWith('Nile Farms paid L.E 600.00.');
+    // A new payment, with a new id; what suppliers are owed read again.
+    expect(page['payment']().id).not.toBe(pay.id);
+    expect([page['payMethod'], supplierBalances.mock.calls.length]).toEqual([null, 2]);
+  });
+
+  it('sends an accountant’s payment to a manager', async () => {
+    approvals.canApprove.mockReturnValue(false);
+    const { fixture, el, page } = await render();
+    await switchToPayment(fixture, page);
+    expect(text(el)).toContain('A manager approves supplier payments: no cash moves until then.');
+    Object.assign(page['payment'](), { supplierId: 'nile', amount: 100 });
+    page['payMethod'] = 'Safe';
+    page['paymentEdited']();
+    const asked = { outcome: 'Requested', request: { id: 'r' } };
+    recordVoucher.mockReturnValue(of(asked));
+
+    await page['payNow']();
+
+    expect(recordVoucher.mock.lastCall![0]).toMatchObject({ revenueDate: null });
+    expect(approvals.requested).toHaveBeenCalledWith(asked);
+  });
+
+  it('keeps the invoice being entered while a payment is on screen', async () => {
+    const { fixture, page } = await render();
+    page['lines'].set([{ itemType: 'Inventory', rawMaterialId: 'tomatoes', expenseItemId: null, quantity: 5, unitSize: 1000, unitLabel: 'kg', cost: 100 }]);
+    await switchToPayment(fixture, page);
+    page['mode'].set('invoice');
+    await fixture.whenStable();
+
+    expect(page['lines']()[0]).toMatchObject({ rawMaterialId: 'tomatoes', cost: 100 });
   });
 });

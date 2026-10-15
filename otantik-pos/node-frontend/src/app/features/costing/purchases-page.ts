@@ -3,6 +3,7 @@ import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { MatButtonModule } from '@angular/material/button';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatDialog } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
@@ -18,7 +19,9 @@ import {
   PurchaseInvoiceSummary,
   SavePurchaseInvoice,
   Supplier,
+  SupplierBalance,
   PurchasePaymentMethod,
+  isRequested,
   paymentMethodLabels,
 } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
@@ -29,6 +32,7 @@ import { BusinessDay } from './financials';
 import { AddNew, InvoiceLine, InvoiceLines, InvoiceLinesTable, InvoiceSupplier, PurchaseCatalog } from './invoice-lines';
 import { paperIcon, viewInvoicePaper } from './invoice-paper';
 import { InvoiceView } from './invoice-view';
+import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPayment } from './supplier-payment-fields';
 
 // A supplier's invoice, in two steps. Entered as it is written (who from, their number and date,
 // each line in the unit billed, and a photo of the paper), then saved as a draft and reviewed;
@@ -36,6 +40,9 @@ import { InvoiceView } from './invoice-view';
 // reload, and can be finished on another tablet. A line is a raw material or an expense item
 // (cleaning, a repair, a bill), on the same invoice or one of its own: an expense is only its
 // cost, under its category, and never goes into stock.
+//
+// Or, switched at the top, a supplier paid with no invoice (سداد مورد): entered as in the daily
+// batch, against what they are owed, from the safe or a day's takings, and no stock moves.
 @Component({
   selector: 'app-purchases-page',
   providers: [PurchaseCatalog],
@@ -46,12 +53,14 @@ import { InvoiceView } from './invoice-view';
     InvoiceView,
     MatAutocompleteModule,
     MatButtonModule,
+    MatButtonToggleModule,
     MatFormFieldModule,
     MatIconModule,
     MatInputModule,
     MatProgressBarModule,
     MatSelectModule,
     MoneyPipe,
+    SupplierPaymentFields,
   ],
   template: `
     @if (loading()) {
@@ -71,6 +80,11 @@ import { InvoiceView } from './invoice-view';
         </div>
       </section>
     } @else {
+      <mat-button-toggle-group class="mode" [value]="mode()" (change)="mode.set($event.value)" aria-label="What to enter" hideSingleSelectionIndicator>
+        <mat-button-toggle value="invoice"><mat-icon>receipt_long</mat-icon> Purchase invoice · فاتورة مشتريات</mat-button-toggle>
+        <mat-button-toggle value="payment"><mat-icon>payments</mat-icon> Supplier payment · سداد مورد</mat-button-toggle>
+      </mat-button-toggle-group>
+      @if (mode() === 'invoice') {
       <!-- Step one: the invoice as written. -->
       @if (drafts().length) {
         <div class="drafts">
@@ -162,6 +176,41 @@ import { InvoiceView } from './invoice-view';
           <mat-icon>fact_check</mat-icon> Save &amp; review
         </button>
       </div>
+      } @else {
+        <!-- A supplier paid with no invoice: no lines, no stock. -->
+        <p class="note">
+          A supplier paid against what they are owed, with no invoice: from the safe or a day's takings. What they are owed goes down
+          by it, and no stock moves. <span class="inline-ar">سداد مورد بدون فاتورة.</span>
+        </p>
+        <div class="header">
+          <app-supplier-payment-fields [payment]="payment()" [suppliers]="owedSuppliers()" [owed]="owedNow()" (changed)="paymentEdited()" />
+          <mat-form-field subscriptSizing="dynamic" class="payment">
+            <mat-label>Paid · طريقة الدفع</mat-label>
+            <mat-select [(ngModel)]="payMethod" (ngModelChange)="paymentEdited()" aria-label="How the supplier is paid" required>
+              @for (m of cashMethods; track m) {
+                <mat-option [value]="m">{{ paymentLabels[m].en }} · {{ paymentLabels[m].ar }}</mat-option>
+              }
+            </mat-select>
+            <mat-hint>A payment is cash: never on credit.</mat-hint>
+          </mat-form-field>
+          @if (payMethod === 'DayRevenue') {
+            <mat-form-field subscriptSizing="dynamic">
+              <mat-label>Takings of · إيراد يوم</mat-label>
+              <input matInput type="date" [(ngModel)]="payRevenueDate" (ngModelChange)="paymentEdited()" [max]="today" aria-label="Paid from the takings of" />
+            </mat-form-field>
+          }
+        </div>
+        @if (!approvals.canApprove()) {
+          <p class="ask">A manager approves supplier payments: no cash moves until then. <span class="inline-ar">يُرسل للمدير للموافقة.</span></p>
+        }
+        <div class="toolbar actions">
+          <span class="spacer"></span>
+          <button mat-button (click)="newPayment()" [disabled]="saving()">Start again</button>
+          <button mat-flat-button (click)="payNow()" [disabled]="!supplierPaymentReady() || saving()">
+            <mat-icon>payments</mat-icon> Pay the supplier <span class="inline-ar">سداد</span>
+          </button>
+        </div>
+      }
     }
   `,
   styleUrl: './costing.scss',
@@ -231,6 +280,14 @@ import { InvoiceView } from './invoice-view';
     .warn-text {
       color: var(--mat-sys-error);
     }
+    .mode {
+      margin-bottom: 12px;
+    }
+    .ask {
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--till-warn) 14%, transparent);
+    }
     .badge.expense {
       margin: 4px 0 0;
       display: inline-block;
@@ -251,7 +308,7 @@ export class PurchasesPage {
   private readonly api = inject(CostingApi);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
-  private readonly approvals = inject(Approvals);
+  protected readonly approvals = inject(Approvals);
   private readonly businessDay = inject(BusinessDay);
   private readonly catalog = inject(PurchaseCatalog);
 
@@ -322,8 +379,96 @@ export class PurchasesPage {
     return this.editor.ready() && !this.supplierUnresolved() && this.paymentReady();
   });
 
+  // What is entered: a purchase invoice, or a supplier paid with no invoice (سداد مورد). Each keeps
+  // what was typed into it while the other is on screen.
+  protected readonly mode = signal<'invoice' | 'payment'>('invoice');
+  protected readonly payment = signal<SupplierPaymentEntry>(newSupplierPayment());
+  // How the supplier is paid: cash, from the safe or a day's takings, never on credit.
+  protected payMethod: PurchasePaymentMethod | null = null;
+  protected payRevenueDate: string = PurchasesPage.today();
+  protected readonly cashMethods: PurchasePaymentMethod[] = ['Safe', 'DayRevenue'];
+  // What each supplier is owed: only those owed something can be paid.
+  private readonly balances = signal<SupplierBalance[]>([]);
+  protected readonly owedSuppliers = computed(() => this.balances().filter((b) => b.balance > 0));
+  // The payment's fields are plain; this bumps so what reads them follows.
+  private readonly paymentVersion = signal(0);
+
+  // A supplier owed, an amount no more than that, and how it is paid.
+  protected readonly supplierPaymentReady = computed(() => {
+    this.paymentVersion();
+    const p = this.payment();
+    return (
+      !!p.supplierId &&
+      (p.amount ?? 0) > 0 &&
+      !isOverOwed(p, this.owedNow()) &&
+      this.payMethod !== null &&
+      (this.payMethod !== 'DayRevenue' || !!this.payRevenueDate)
+    );
+  });
+
   constructor() {
     void this.load();
+  }
+
+  // What the chosen supplier is owed now.
+  protected owedNow(): number | null {
+    const id = this.payment().supplierId;
+    return id ? (this.balances().find((b) => b.supplierId === id)?.balance ?? null) : null;
+  }
+
+  protected paymentEdited(): void {
+    this.paymentVersion.update((v) => v + 1);
+  }
+
+  protected newPayment(): void {
+    this.payment.set(newSupplierPayment());
+    this.payMethod = null;
+    this.payRevenueDate = this.today;
+    this.paymentEdited();
+  }
+
+  // Paid at once for a manager, asked of one for anyone else, as Pay a supplier is; its id made
+  // here, so a retry after a lost answer pays once.
+  protected async payNow(): Promise<void> {
+    const p = this.payment();
+    if (!this.supplierPaymentReady() || !p.supplierId || p.amount === null) {
+      return;
+    }
+    this.saving.set(true);
+    try {
+      const result = await firstValueFrom(
+        this.api.recordVoucher({
+          requestId: p.id,
+          transactionId: p.id,
+          kind: 'SupplierPayment',
+          amount: p.amount,
+          date: this.today,
+          source: null,
+          revenueDate: this.payMethod === 'DayRevenue' ? this.payRevenueDate : null,
+          supplierId: p.supplierId,
+          expenseItemId: null,
+          notes: p.notes.trim() || null,
+          reason: null,
+          includesTax: false,
+        }),
+      );
+      if (isRequested(result)) {
+        await this.approvals.requested(result);
+      } else {
+        const name = this.balances().find((b) => b.supplierId === p.supplierId)?.supplier ?? 'The supplier';
+        this.notify.info(`${name} paid ${new MoneyPipe().transform(p.amount)}.`);
+      }
+      this.newPayment();
+      await this.loadBalances();
+    } catch (error) {
+      this.notify.error(error, 'The payment could not be saved.');
+    } finally {
+      this.saving.set(false);
+    }
+  }
+
+  private async loadBalances(): Promise<void> {
+    this.balances.set(await firstValueFrom(this.api.supplierBalances()));
   }
 
   protected supplierMatches(): Supplier[] {
@@ -562,10 +707,13 @@ export class PurchasesPage {
       if (this.revenueDate === this.today) {
         this.revenueDate = today;
       }
+      if (this.payRevenueDate === this.today) {
+        this.payRevenueDate = today;
+      }
       this.today = today;
     });
     try {
-      const [drafts] = await Promise.all([firstValueFrom(this.api.purchaseInvoices('Draft')), this.catalog.load()]);
+      const [drafts] = await Promise.all([firstValueFrom(this.api.purchaseInvoices('Draft')), this.catalog.load(), this.loadBalances()]);
       this.unfinished.set(drafts);
     } catch (error) {
       this.error.set(errorMessage(error, 'The purchases could not be loaded.'));

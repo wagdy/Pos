@@ -574,6 +574,18 @@ public class ApiTests
             paid.GetProperty("notes").GetString(), paid.GetProperty("outcome").GetString()));
         var account = await Json(await manager.GetAsync($"/api/financials/suppliers/{nile}", Cancel));
         Assert.Equal(30m, account.GetProperty("balance").GetDecimal());
+
+        // The rest paid on its own, as the new invoice screen does, out of a day's takings: off the
+        // account, and paid out of those takings, not the safe.
+        var day = (await Json(await manager.GetAsync("/api/financials/today", Cancel))).GetProperty("today").GetString();
+        var payment = Guid.NewGuid();
+        await Json(await manager.PostAsJsonAsync("/api/financials/vouchers", new
+        {
+            requestId = payment, transactionId = payment, kind = "SupplierPayment", amount = 30, supplierId = nile, revenueDate = day, notes = "R-2",
+        }, Cancel));
+        Assert.Equal(0m, (await Json(await manager.GetAsync($"/api/financials/suppliers/{nile}", Cancel))).GetProperty("balance").GetDecimal());
+        var takings = await Json(await manager.GetAsync($"/api/financials/takings?day={day}", Cancel));
+        Assert.Equal((30m, 1), (takings.GetProperty("paidOut").GetDecimal(), takings.GetProperty("supplierPayments").GetInt32()));
     }
 
     // A sheet of batch recipes (المصنعات), as kitchens write them: a prep item's name on its own row,
