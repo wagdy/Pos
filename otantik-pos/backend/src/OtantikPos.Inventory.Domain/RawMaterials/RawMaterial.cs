@@ -26,13 +26,16 @@ public sealed class RawMaterial : AggregateRoot
         Unit = unit;
         Kind = kind;
         SetReorderLevel(reorderLevel);
-        (PurchaseUnit, PurchaseUnitSize) = unit switch
-        {
-            UnitOfMeasure.Gram => ("kg", 1000m),
-            UnitOfMeasure.Millilitre => ("L", 1000m),
-            _ => ("piece", 1m),
-        };
+        (PurchaseUnit, PurchaseUnitSize) = DefaultPurchaseUnit(unit);
     }
+
+    // How a unit is bought to begin with: grams by the kg, millilitres by the litre, pieces one by one.
+    public static (string Name, decimal Size) DefaultPurchaseUnit(UnitOfMeasure unit) => unit switch
+    {
+        UnitOfMeasure.Gram => ("kg", 1000m),
+        UnitOfMeasure.Millilitre => ("L", 1000m),
+        _ => ("piece", 1m),
+    };
 
     public string Name { get; private set; } = string.Empty;
     public UnitOfMeasure Unit { get; private set; }
@@ -107,6 +110,41 @@ public sealed class RawMaterial : AggregateRoot
     }
 
     public void SetDefaultYield(decimal percent) => DefaultYieldPercent = ValidYield(percent);
+
+    // Counted in another unit (عدّ بـ). While nothing records it, simply: it starts again in the new
+    // unit, bought as that unit is, its price and reorder level to be given again. Once something
+    // does, oneNewIsOld says how many of the old unit one of the new is (60 g a piece), and what it
+    // holds is restated in the new: on hand, the reorder level and the unit it is bought in divided
+    // by it, the average cost multiplied, so its value is as it was. Every record naming it (the
+    // ledger, invoices, recipes, counts, batches) is restated by the caller, in the same transaction.
+    public void ChangeUnit(UnitOfMeasure unit, decimal? oneNewIsOld)
+    {
+        if (!Enum.IsDefined(unit))
+            throw new DomainException("Choose the unit it is counted in.");
+        if (IsPrepItem)
+            throw new DomainException($"{Name} is a prep item, kept in its unit: add a new prep item for another unit.");
+        if (unit == Unit)
+            throw new DomainException($"{Name} is counted in that unit already.");
+        if (oneNewIsOld is { } ratio)
+        {
+            if (ratio <= 0)
+                throw new DomainException("Say how many of the old unit one of the new is: more than nothing.");
+            QuantityOnHand = Math.Round(QuantityOnHand / ratio, 3, MidpointRounding.AwayFromZero);
+            ReorderLevel = Math.Round(ReorderLevel / ratio, 3, MidpointRounding.AwayFromZero);
+            PurchaseUnitSize = Math.Round(PurchaseUnitSize / ratio, 3, MidpointRounding.AwayFromZero);
+            AverageCost = AverageCost is { } cost ? Math.Round(cost * ratio, 6, MidpointRounding.AwayFromZero) : null;
+        }
+        else
+        {
+            if (QuantityOnHand != 0)
+                throw new DomainException($"{Name} has stock: say how many of the old unit one of the new is.");
+            (PurchaseUnit, PurchaseUnitSize) = DefaultPurchaseUnit(unit);
+            AverageCost = null;
+            ReorderLevel = 0;
+        }
+
+        Unit = unit;
+    }
 
     // The price to start from, per purchase unit: for stock already on the shelf when costing
     // starts, or a price agreed before any delivery. Purchases with prices move it from there.

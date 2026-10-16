@@ -1730,6 +1730,124 @@ public class NodeTests
         Assert.Equal((10_000m, 150m), (await Safe(), (await treasury.GetSupplierStatementAsync(nile, ct))!.Balance));
     }
 
+    // A material created in the wrong unit (عدّ بـ): tomatoes in grams that the kitchen counts by
+    // the piece. While nothing records it, the unit simply changes, for anyone. Once something does,
+    // the change says how many grams a piece is, and every record naming it is restated with it, the
+    // money as it was: at once for a manager, on approval for anyone else, the material locked
+    // meanwhile. Without the conversion it is refused: archive it and create a new one.
+    [Fact]
+    public async Task A_materials_unit_changes_at_once_while_unused_and_once_used_restates_everything_on_a_managers_say()
+    {
+        await using var node = await TestNode.StartAsync();
+        Assert.True(await MenuSynced(node));
+        var ct = TestContext.Current.CancellationToken;
+        DateOnly today;
+        using (var scope = node.Scope())
+            today = node.Service<TreasuryService>(scope).Today;
+        async Task<Guid> Material(string name, UnitOfMeasure unit) => (await node.Send(new CreateRawMaterialCommand(name, unit))).Id;
+        Task<RawMaterial> Read(Guid id) => node.Db(db => db.RawMaterials.AsNoTracking().SingleAsync(m => m.Id == id));
+        Task<MaterialUnitChangeResult> Change(Guid id, MaterialUnitChange change, bool manager = true) => node.Send(new ChangeMaterialUnitCommand(
+            Guid.NewGuid(), id, change, manager ? null : "The kitchen counts them", manager ? "staff-omar" : "staff-mona", manager ? "Omar" : "Mona", manager));
+        async Task<decimal> BurgerCost()
+        {
+            using var scope = node.Scope();
+            return (await node.Service<CostingService>(scope).GetRecipeCardAsync(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, ct)).CostPerRecipe;
+        }
+
+        // Lemons, entered in grams and not bought yet: changed at once, even by the accountant, with
+        // their price and reorder level for the new unit.
+        var lemons = await Material("Lemons", UnitOfMeasure.Gram);
+        var unused = await Change(lemons, new MaterialUnitChange(UnitOfMeasure.Piece, null, "piece", 1, CostPerPurchaseUnit: 3, ReorderLevel: 20), manager: false);
+        Assert.Equal((ApprovalOutcome.Applied, (ApprovalRequestDto?)null), (unused.Outcome, unused.Request));
+        Assert.Equal((UnitOfMeasure.Piece, "piece", 1m, 20m), (unused.Material.Unit, unused.Material.PurchaseUnit, unused.Material.PurchaseUnitSize, unused.Material.ReorderLevel));
+        Assert.Equal(3m, (await Read(lemons)).AverageCost);
+
+        // Tomatoes, in grams: 6 kg bought at 180, 120 g in a burger, 3 kg in a batch of sauce, and
+        // 2.4 kg counted.
+        var tomatoes = await Material("Tomatoes", UnitOfMeasure.Gram);
+        var nile = (await node.Send(new SaveSupplierCommand(Guid.NewGuid(), "Nile Farms"))).Id;
+        var invoice = Guid.NewGuid();
+        await node.Send(new SavePurchaseInvoiceCommand(invoice, nile, "F-1", today, [new(tomatoes, 6, "kg", 1000, 180)], "Omar", PurchasePaymentMethod.Credit));
+        await node.Send(new PostPurchaseInvoiceCommand(invoice, "Omar"));
+        await node.Send(new SetRecipeCommand(RecipeTargetKind.MenuItem, FakeDeliverySystem.Burger, null, [new(tomatoes, 120)]));
+        var sauce = await node.Send(new SavePrepItemCommand(null, "Tomato sauce", UnitOfMeasure.Gram, 5_000, [new(tomatoes, 3_000)]));
+        await node.Send(new MakeProductionOrderCommand(Guid.NewGuid(), sauce.Id, 5_000, 5_000, null, "Omar"));
+        await node.Send(new RecordStockCountCommand(Guid.NewGuid(), [new(tomatoes, 2_400)], "Omar"));
+        Assert.Equal((2_400m, 0.03m), ((await Read(tomatoes)).QuantityOnHand, (await Read(tomatoes)).AverageCost));
+        Assert.Equal(3.6m, await BurgerCost());
+        Assert.Equal(new MaterialUsage(3, 1, 1, 1, 1, 1, 0), await node.Send(new GetMaterialUsageQuery(tomatoes)));
+
+        // Without the conversion, refused; nor to the unit it is in.
+        var crate = new MaterialUnitChange(UnitOfMeasure.Piece, null, "crate", 100);
+        Assert.Contains("archive it and create a new material", (await Assert.ThrowsAsync<DomainException>(() => Change(tomatoes, crate))).Message);
+        await Assert.ThrowsAsync<DomainException>(() => Change(tomatoes, new MaterialUnitChange(UnitOfMeasure.Gram, 1, "kg", 1000)));
+
+        // Nor while a request waiting for a manager holds them in grams: the sauce asked to take more.
+        var piece = crate with { OneNewIsOld = 60 };
+        var more = await node.Send(new RequestPrepItemChangeCommand(
+            Guid.NewGuid(), sauce.Id, new SavePrepItemCommand(sauce.Id, "Tomato sauce", UnitOfMeasure.Gram, 5_000, [new(tomatoes, 3_500)]).Change, null,
+            "staff-mona", "Mona"));
+        Assert.Contains("waiting for a manager", (await Assert.ThrowsAsync<DomainException>(() => Change(tomatoes, piece))).Message);
+        await node.Send(new RejectRequestCommand(more.Request.Id, null, "Omar"));
+
+        // The accountant's, 60 g a piece: asked, and said line by line; the tomatoes as they were,
+        // and locked until a manager decides.
+        var asked = await Change(tomatoes, piece, manager: false);
+        Assert.Equal(ApprovalOutcome.Requested, asked.Outcome);
+        Assert.Equal("Tomatoes counted in pieces, not g: 1 piece is 60 g", asked.Request!.Summary);
+        Assert.Equal(
+            [new ApprovalChange("Counted in", "g", "pieces"), new ApprovalChange("Conversion", null, "1 piece is 60 g"),
+                new ApprovalChange("On hand", "2,400 g", "40 pieces"), new ApprovalChange("Average cost", "L.E 0.03 a g", "L.E 1.80 a piece"),
+                new ApprovalChange("Bought by", "kg of 1,000 g", "crate of 100 pieces"),
+                new ApprovalChange("Restated in the new unit", null, "3 stock movements, 1 invoice line, 1 recipe, 1 prep recipe, 1 stock count, 1 batch")],
+            asked.Request.Changes);
+        Assert.Equal((UnitOfMeasure.Gram, 2_400m), ((await Read(tomatoes)).Unit, (await Read(tomatoes)).QuantityOnHand));
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new UpdateRawMaterialCommand(tomatoes, "Plum tomatoes", 0)));
+        await Assert.ThrowsAsync<DomainException>(() => Change(tomatoes, piece));
+
+        // Rejected: kept, and the tomatoes open again. Asked again, and approved: in pieces.
+        await node.Send(new RejectRequestCommand(asked.Request.Id, "Weigh them first", "Omar"));
+        Assert.Equal(UnitOfMeasure.Gram, (await Read(tomatoes)).Unit);
+        var again = await Change(tomatoes, piece, manager: false);
+        Assert.Equal(ApprovalStatus.Approved, (await node.Send(new ApproveRequestCommand(again.Request!.Id, "Omar"))).Status);
+        var now = await Read(tomatoes);
+        Assert.Equal((UnitOfMeasure.Piece, 40m, 1.8m, "crate", 100m), (now.Unit, now.QuantityOnHand, now.AverageCost, now.PurchaseUnit, now.PurchaseUnitSize));
+
+        // Every record restated, every amount of money as it was: the ledger, the invoice (6 kg, 180),
+        // the burger (2 pieces, 3.60), the sauce, the count (40 of 50 on the books) and the batch.
+        Assert.Equal([(-50m, (decimal?)1.8m), (-10m, 1.8m), (100m, 1.8m)], await node.Db(db => db.StockMovements.Where(m => m.RawMaterialId == tomatoes)
+            .OrderBy(m => m.Quantity).Select(m => new ValueTuple<decimal, decimal?>(m.Quantity, m.UnitCost)).ToListAsync()));
+        var line = await node.Db(db => db.Set<PurchaseInvoiceLine>().AsNoTracking().SingleAsync(l => l.RawMaterialId == tomatoes));
+        Assert.Equal((6m, 16.667m, 100m, (decimal?)180m), (line.EnteredQuantity, line.UnitSize, line.Quantity, line.Cost));
+        Assert.Equal(2m, await node.Db(db => db.Set<RecipeIngredient>().Where(i => i.RawMaterialId == tomatoes).Select(i => i.Quantity).SingleAsync()));
+        Assert.Equal(3.6m, await BurgerCost());
+        Assert.Equal(50m, await node.Db(db => db.Set<PrepIngredient>().Where(i => i.RawMaterialId == tomatoes).Select(i => i.Quantity).SingleAsync()));
+        var counted = await node.Db(db => db.Set<OtantikPos.Inventory.Domain.StockCounts.StockCountLine>().AsNoTracking().SingleAsync(l => l.RawMaterialId == tomatoes));
+        Assert.Equal((40m, (decimal?)50m, (decimal?)1.8m), (counted.CountedQuantity, counted.BookQuantity, counted.UnitCost));
+        var used = await node.Db(db => db.Set<ProductionOrderLine>().AsNoTracking().SingleAsync(l => l.RawMaterialId == tomatoes));
+        Assert.Equal((50m, 1.8m, 90m), (used.Quantity, used.UnitCost, used.Cost));
+
+        // A burger sold now takes two pieces.
+        var order = await node.Send(new OpenOrderCommand(OrderType.DineIn, TableNumber: "V1"));
+        await node.Send(new AddOrderItemCommand(order.PublicId, FakeDeliverySystem.Burger));
+        await node.Send(new SendToKitchenCommand(order.PublicId));
+        await node.Send(new CheckoutCommand(order.PublicId, PaymentMethod.Cash));
+        Assert.True(await TestNode.WaitFor(async () => (await Read(tomatoes)).QuantityOnHand == 38m));
+
+        // The manager's own, at once, recorded as decided by them: milk entered in grams, a gram to
+        // the millilitre.
+        var milk = await Material("Milk", UnitOfMeasure.Gram);
+        await node.Send(new ReceivePurchaseCommand(Guid.NewGuid(), [new(milk, 2_000, 60)]));
+        var done = await Change(milk, new MaterialUnitChange(UnitOfMeasure.Millilitre, 1, "L", 1000));
+        Assert.Equal((ApprovalOutcome.Applied, ApprovalStatus.Approved, "Omar"), (done.Outcome, done.Request!.Status, done.Request.DecidedBy));
+        Assert.Equal("Milk counted in ml, not g: 1 ml is 1 g", done.Request.Summary);
+        Assert.Equal((UnitOfMeasure.Millilitre, 2_000m, 0.03m), ((await Read(milk)).Unit, (await Read(milk)).QuantityOnHand, (await Read(milk)).AverageCost));
+
+        // A prep item keeps its unit.
+        Assert.Contains("prep item", (await Assert.ThrowsAsync<DomainException>(() =>
+            Change(sauce.Id, new MaterialUnitChange(UnitOfMeasure.Piece, 250, "jar", 1)))).Message);
+    }
+
     // A supplier paid in the daily batch (سداد مورد): an old debt settled with no invoice and no
     // stock, from the day's takings or the safe as the batch is paid, against what they are owed and
     // off it on their account; never on credit, never more than owed, and nothing saved unless all is.

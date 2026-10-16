@@ -10,13 +10,13 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { firstValueFrom } from 'rxjs';
-import { CostingApi, ApprovalRequest, MaterialCost, RawMaterialImportResult, SaveMaterial, unitLabels } from '../../core/costing/costing.api';
+import { CostingApi, ApprovalRequest, MaterialCost, RawMaterialImportResult, unitLabels } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals, pendingLabel } from './approvals';
 import { saveBlob } from './invoice-paper';
-import { MaterialDialog } from './material-dialog';
+import { MaterialDialog, MaterialDialogResult } from './material-dialog';
 import { MaterialImportDialog } from './material-import-dialog';
 
 // Raw materials and what they cost: AP$ per purchase unit (the weighted average of what was paid),
@@ -124,7 +124,7 @@ import { MaterialImportDialog } from './material-import-dialog';
                 <td class="num">{{ m.lastPurchaseCostPerPurchaseUnit === null ? '' : (m.lastPurchaseCostPerPurchaseUnit | money) }}</td>
                 <td class="num actions" (click)="$event.stopPropagation()">
                   @if (pendingOf(m)) {
-                    <mat-icon class="locked" matTooltip="Waiting for a manager's approval: locked until decided" aria-label="Locked: deletion requested">lock_clock</mat-icon>
+                    <mat-icon class="locked" matTooltip="Waiting for a manager's approval: locked until decided" aria-label="Locked: waiting for a manager">lock_clock</mat-icon>
                   } @else {
                     <button mat-icon-button class="danger" (click)="remove(m)" matTooltip="Delete" [attr.aria-label]="'Delete ' + m.name">
                       <mat-icon>delete</mat-icon>
@@ -221,25 +221,45 @@ export class MaterialsPage {
     }
   }
 
+  // Saved, then its unit changed when it was: at once, or asked of a manager. Its other changes
+  // stay saved when the unit cannot be.
   protected async edit(material: MaterialCost | null): Promise<void> {
-    // Locked while its deletion waits for a manager.
-    if (material && this.pendingOf(material)) {
-      this.notify.info(`${material.name} is waiting for a manager to decide its deletion; it can be changed after.`);
+    // Locked while a request about it waits for a manager.
+    const pending = material && this.pendingOf(material);
+    if (pending) {
+      this.notify.info(`${material.name}: ${pendingLabel(pending).en.toLowerCase()}, waiting for a manager. It can be changed once that is decided.`);
       return;
     }
     const saved = await firstValueFrom(
-      this.dialog.open<MaterialDialog, MaterialCost | null, SaveMaterial>(MaterialDialog, { data: material, width: '640px' }).afterClosed(),
+      this.dialog
+        .open<MaterialDialog, MaterialCost | null, MaterialDialogResult>(MaterialDialog, { data: material, width: '640px', maxWidth: '95vw' })
+        .afterClosed(),
     );
     if (!saved) {
       return;
     }
+    const { material: details, unitChange } = saved;
     try {
-      await firstValueFrom(this.api.saveMaterial(material?.id ?? null, saved));
-      this.notify.info(`${saved.name} saved.`);
-      await this.load();
+      await firstValueFrom(this.api.saveMaterial(material?.id ?? null, details));
     } catch (error) {
       this.notify.error(error, 'The material could not be saved.');
+      return;
     }
+    if (material && unitChange) {
+      try {
+        const result = await firstValueFrom(this.api.changeMaterialUnit(material.id, unitChange));
+        if (result.outcome === 'Requested' && result.request) {
+          await this.approvals.requested({ outcome: result.outcome, request: result.request });
+        } else {
+          this.notify.info(`${details.name} saved, counted in ${{ Gram: 'grams', Millilitre: 'millilitres', Piece: 'pieces' }[unitChange.unit]} now.`);
+        }
+      } catch (error) {
+        this.notify.error(null, `${details.name} was saved, but its unit was not changed: ${errorMessage(error, 'please try again.')}`);
+      }
+    } else {
+      this.notify.info(`${details.name} saved.`);
+    }
+    await this.load();
   }
 
   protected async downloadTemplate(): Promise<void> {

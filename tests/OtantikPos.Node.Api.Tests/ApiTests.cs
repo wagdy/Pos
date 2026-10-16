@@ -608,6 +608,69 @@ public class ApiTests
         Assert.Equal(HttpStatusCode.UnprocessableEntity, (await manager.PostAsJsonAsync(correct, Fix(), Cancel)).StatusCode);
     }
 
+    // The unit a material is counted in changed: at once while nothing records it, for whoever
+    // keeps stock; once something does, with the conversion, at once for a manager (200) and asked
+    // of one for an accountant (202), the material locked meanwhile. A cashier may not.
+    [Fact]
+    public async Task A_materials_unit_is_changed_with_its_records_restated()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var cashier = await api.CashierAsync(manager);
+        var accountant = await api.AccountantAsync(manager);
+
+        async Task<JsonElement> Json(HttpResponseMessage response)
+        {
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(Cancel));
+            return await response.Content.ReadFromJsonAsync<JsonElement>(Cancel);
+        }
+        async Task<Guid> Material(string name) =>
+            (await Json(await manager.PostAsJsonAsync("/api/inventory/raw-materials", new { name, unit = "Gram" }, Cancel))).GetProperty("id").GetGuid();
+        object Pieces(decimal? oneNewIsOld) => new { requestId = Guid.NewGuid(), unit = "Piece", oneNewIsOld, purchaseUnit = "crate", purchaseUnitSize = 100 };
+
+        // Not bought yet: the accountant's is done at once.
+        var lemons = await Material("Lemons");
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PostAsJsonAsync($"/api/inventory/raw-materials/{lemons}/unit", Pieces(null), Cancel)).StatusCode);
+        var unused = await accountant.PostAsJsonAsync($"/api/inventory/raw-materials/{lemons}/unit", Pieces(null), Cancel);
+        Assert.Equal(HttpStatusCode.OK, unused.StatusCode);
+        var applied = await unused.Content.ReadFromJsonAsync<JsonElement>(Cancel);
+        Assert.Equal(("Applied", "Piece"), (applied.GetProperty("outcome").GetString(), applied.GetProperty("material").GetProperty("unit").GetString()));
+
+        // Bought: what records it, and the conversion needed.
+        var tomatoes = await Material("Tomatoes");
+        await Json(await manager.PostAsJsonAsync("/api/inventory/purchase-invoices/batch", new
+        {
+            invoiceDate = "2026-10-13", paymentMethod = "Credit",
+            invoices = new[]
+            {
+                new
+                {
+                    invoiceId = Guid.NewGuid(), supplierId = (await Json(await manager.PutAsJsonAsync($"/api/inventory/suppliers/{Guid.NewGuid()}", new { name = "Nile Farms" }, Cancel))).GetProperty("id").GetGuid(),
+                    lines = new[] { new { rawMaterialId = tomatoes, enteredQuantity = 6, unitLabel = "kg", unitSize = 1000, cost = 180, itemType = "Inventory" } },
+                },
+            },
+        }, Cancel));
+        var usage = await Json(await accountant.GetAsync($"/api/inventory/raw-materials/{tomatoes}/usage", Cancel));
+        Assert.Equal((1, 1, true), (usage.GetProperty("stockMovements").GetInt32(), usage.GetProperty("invoiceLines").GetInt32(), usage.GetProperty("inUse").GetBoolean()));
+        var unit = $"/api/inventory/raw-materials/{tomatoes}/unit";
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await manager.PostAsJsonAsync(unit, Pieces(null), Cancel)).StatusCode);
+
+        // The accountant's waits (202), and locks it; approved, it is 100 pieces.
+        var asked = await accountant.PostAsJsonAsync(unit, Pieces(60), Cancel);
+        Assert.Equal(HttpStatusCode.Accepted, asked.StatusCode);
+        var request = (await asked.Content.ReadFromJsonAsync<JsonElement>(Cancel)).GetProperty("request");
+        Assert.Equal(("RawMaterial", "Update"), (request.GetProperty("module").GetString(), request.GetProperty("action").GetString()));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await manager.PostAsJsonAsync(unit, Pieces(60), Cancel)).StatusCode);
+        await Json(await manager.PostAsync($"/api/inventory/approval-requests/{request.GetProperty("id").GetGuid()}/approve", null, Cancel));
+        var now = (await Json(await manager.GetAsync("/api/inventory/raw-materials", Cancel))).EnumerateArray().Single(m => m.GetProperty("id").GetGuid() == tomatoes);
+        Assert.Equal(("Piece", 100m), (now.GetProperty("unit").GetString(), now.GetProperty("quantityOnHand").GetDecimal()));
+
+        // The manager's own, back to grams: at once.
+        var back = await manager.PostAsJsonAsync(unit, new { requestId = Guid.NewGuid(), unit = "Gram", oneNewIsOld = 1m / 60, purchaseUnit = "kg", purchaseUnitSize = 1000 }, Cancel);
+        Assert.Equal(HttpStatusCode.OK, back.StatusCode);
+        Assert.Equal(6_000m, (await back.Content.ReadFromJsonAsync<JsonElement>(Cancel)).GetProperty("material").GetProperty("quantityOnHand").GetDecimal());
+    }
+
     // A sheet of batch recipes (المصنعات), as kitchens write them: a prep item's name on its own row,
     // a heading row, then its ingredients. A manager's import makes them; an accountant's asks.
     [Fact]

@@ -75,7 +75,7 @@ internal sealed class CreateRawMaterialCommandHandler(IRawMaterialRepository mat
 }
 
 // No Unit here on purpose. Every recipe quantity and every ledger entry for a material is in
-// its unit, so changing it would silently rescale all of them.
+// its unit, so it is changed by ChangeMaterialUnitCommand, which restates them with it.
 // CostPerPurchaseUnit null leaves the average cost as it is; a value replaces it. No CategoryId: General.
 public sealed record UpdateRawMaterialCommand(
     Guid RawMaterialId,

@@ -89,6 +89,7 @@ public sealed class TestPos
         services.AddSingleton<OtantikPos.Inventory.Application.Approvals.IRecordDescriptions>(Dates);
         services.AddSingleton<IPrepRecipeRepository>(Inventory.PrepRecipes);
         services.AddSingleton<IProductionOrderRepository>(Inventory.Production);
+        services.AddSingleton<OtantikPos.Inventory.Application.RawMaterials.IMaterialUnits>(Inventory.Units);
 
         _services = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }
@@ -428,6 +429,8 @@ public sealed class InventoryStore : IRawMaterialRepository
     private PurchaseCategoryStore? _purchaseCategories;
     public PrepRecipeStore PrepRecipes { get; } = new();
     public ProductionStore Production { get; } = new();
+    public MaterialUnitStore Units => _units ??= new(Movements);
+    private MaterialUnitStore? _units;
 
     public RawMaterial Stock(string name, UnitOfMeasure unit, decimal onHand)
     {
@@ -442,6 +445,18 @@ public sealed class InventoryStore : IRawMaterialRepository
     public Task<IReadOnlyList<RawMaterial>> GetAllAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<RawMaterial>>(_materials.ToList());
     public Task<IReadOnlyList<RawMaterial>> GetByIdsAsync(IEnumerable<Guid> ids, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<RawMaterial>>(_materials.Where(m => ids.Contains(m.Id)).ToList());
     public Task<IReadOnlyList<RawMaterial>> GetNeedingReorderAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<RawMaterial>>(_materials.Where(m => m.NeedsReorder).ToList());
+}
+
+// What records a material, as far as these stores keep it: its ledger. Restating it is the
+// database's, and is tested against one (NodeTests).
+public sealed class MaterialUnitStore(MovementStore movements) : OtantikPos.Inventory.Application.RawMaterials.IMaterialUnits
+{
+    public Task<OtantikPos.Inventory.Application.RawMaterials.MaterialUsage> UsageAsync(
+        RawMaterial material, Guid? exceptRequestId, CancellationToken cancellationToken) =>
+        Task.FromResult(new OtantikPos.Inventory.Application.RawMaterials.MaterialUsage(movements.All.Count(m => m.RawMaterialId == material.Id), 0, 0, 0, 0, 0, 0));
+
+    public Task RestateAndSaveAsync(RawMaterial material, decimal oneNewIsOld, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Restated in the database: see NodeTests.");
 }
 
 public sealed class RecipeStore : IRecipeRepository

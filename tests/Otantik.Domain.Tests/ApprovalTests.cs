@@ -151,6 +151,11 @@ public class ApprovalTests
         // A posted invoice is corrected through one: a new invoice is not asked for.
         Assert.Equal(ApprovalStatus.Pending, ApprovalRequest.AskToChange(
             Guid.NewGuid(), ApprovalModule.PurchaseInvoice, ApprovalAction.Update, Guid.NewGuid(), "Invoice F-1 corrected", [], "{}", null, "staff-1", "Mona").Status);
+        // And a raw material's unit changed: a new material is not asked for either.
+        Assert.Equal(ApprovalStatus.Pending, ApprovalRequest.AskToChange(
+            Guid.NewGuid(), ApprovalModule.RawMaterial, ApprovalAction.Update, Guid.NewGuid(), "Tomatoes counted in pieces", [], "{}", null, "staff-1", "Mona").Status);
+        Assert.Throws<DomainException>(() => ApprovalRequest.AskToChange(
+            Guid.NewGuid(), ApprovalModule.RawMaterial, ApprovalAction.Create, Guid.NewGuid(), "Tomatoes", [], "{}", null, "staff-1", "Mona"));
     }
 
     [Fact]

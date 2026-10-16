@@ -121,4 +121,55 @@ public class CostingTests
     [Fact]
     public void A_recipe_makes_at_least_one_portion() =>
         Assert.Throws<DomainException>(() => new Recipe(RecipeTarget.ForMenuItem(Strata)).SetPortions(0));
+
+    // Tomatoes counted in grams that should have been pieces, 60 g a piece: what is on hand, the
+    // reorder level and the box they come in divided by 60, the cost multiplied, so their value is
+    // as it was. Movements already made keep the cost of their moment, in grams, for the caller to
+    // restate.
+    [Fact]
+    public void Changing_the_unit_with_a_conversion_restates_the_stock_and_its_cost()
+    {
+        var tomatoes = new RawMaterial("Tomatoes", UnitOfMeasure.Gram, reorderLevel: 1_200);
+        tomatoes.SetPurchaseUnit("box of 6 kg", 6_000);
+        tomatoes.ReceivePurchase(6_000, Guid.NewGuid(), lineCost: 180);
+        Assert.Equal((6_000m, 0.03m), (tomatoes.QuantityOnHand, tomatoes.AverageCost));
+
+        tomatoes.ChangeUnit(UnitOfMeasure.Piece, 60);
+
+        Assert.Equal(UnitOfMeasure.Piece, tomatoes.Unit);
+        Assert.Equal((100m, 20m, 100m), (tomatoes.QuantityOnHand, tomatoes.ReorderLevel, tomatoes.PurchaseUnitSize));
+        Assert.Equal((1.8m, 180m), (tomatoes.AverageCost, tomatoes.CostPerPurchaseUnit));
+        Assert.Equal(1.8m, tomatoes.RecordSale(1, Guid.NewGuid()).UnitCost);
+    }
+
+    // Eggs counted in pieces that should have been grams: the conversion is less than one.
+    [Fact]
+    public void A_conversion_can_go_to_a_smaller_unit()
+    {
+        var eggs = new RawMaterial("Eggs", UnitOfMeasure.Piece);
+        eggs.ReceivePurchase(30, Guid.NewGuid(), lineCost: 150);
+
+        eggs.ChangeUnit(UnitOfMeasure.Gram, 1m / 60);
+
+        Assert.Equal((1_800m, 0.083333m), (eggs.QuantityOnHand, eggs.AverageCost));
+    }
+
+    // Nothing on hand and no conversion: it starts again in the new unit, bought as that unit is.
+    // With stock, a conversion is needed; nor is it a change to the unit it has, nor a prep item's.
+    [Fact]
+    public void Without_a_conversion_only_a_material_with_nothing_on_hand_changes_its_unit()
+    {
+        var lemons = new RawMaterial("Lemons", UnitOfMeasure.Gram, reorderLevel: 500);
+        lemons.SetCost(40);
+        lemons.ChangeUnit(UnitOfMeasure.Piece, null);
+        Assert.Equal((UnitOfMeasure.Piece, "piece", 1m, (decimal?)null, 0m),
+            (lemons.Unit, lemons.PurchaseUnit, lemons.PurchaseUnitSize, lemons.AverageCost, lemons.ReorderLevel));
+
+        lemons.ReceivePurchase(10, Guid.NewGuid());
+        Assert.Contains("has stock", Assert.Throws<DomainException>(() => lemons.ChangeUnit(UnitOfMeasure.Gram, null)).Message);
+        Assert.Throws<DomainException>(() => lemons.ChangeUnit(UnitOfMeasure.Gram, 0));
+        Assert.Throws<DomainException>(() => lemons.ChangeUnit(UnitOfMeasure.Piece, 1));
+        Assert.Contains("prep item", Assert.Throws<DomainException>(() =>
+            new RawMaterial("Dough", UnitOfMeasure.Gram, kind: MaterialKind.Prep).ChangeUnit(UnitOfMeasure.Piece, 250)).Message);
+    }
 }

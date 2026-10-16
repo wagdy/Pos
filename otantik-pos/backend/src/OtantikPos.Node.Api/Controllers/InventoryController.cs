@@ -52,6 +52,30 @@ public sealed class InventoryController(ISender sender) : ControllerBase
             rawMaterialId, request.Name, request.ReorderLevel, request.Code, request.CategoryId,
             request.PurchaseUnit, request.PurchaseUnitSize, request.DefaultYieldPercent, request.CostPerPurchaseUnit), cancellationToken);
 
+    // What records a material (the ledger, invoices, recipes, prep recipes, counts, batches): a
+    // change of the unit it is counted in restates them all, and needs the conversion to.
+    [HttpGet("raw-materials/{rawMaterialId:guid}/usage")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public Task<MaterialUsage> GetMaterialUsage(Guid rawMaterialId, CancellationToken cancellationToken) =>
+        sender.Send(new GetMaterialUsageQuery(rawMaterialId), cancellationToken);
+
+    // The unit a material is counted in changed (عدّ بـ). Nothing recording it: changed at once for
+    // anyone (200). Otherwise, with how many of the old unit one of the new is, everything recorded
+    // is restated: at once for a manager (200, Applied), asked of one for anyone else (202,
+    // Requested). RequestId is made by the till.
+    [HttpPost("raw-materials/{rawMaterialId:guid}/unit")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public async Task<ActionResult<MaterialUnitChangeResult>> ChangeMaterialUnit(
+        Guid rawMaterialId, ChangeMaterialUnitRequest request, CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new ChangeMaterialUnitCommand(
+            request.RequestId, rawMaterialId,
+            new MaterialUnitChange(
+                request.Unit, request.OneNewIsOld, request.PurchaseUnit, request.PurchaseUnitSize, request.CostPerPurchaseUnit, request.ReorderLevel),
+            request.Reason, StaffId, StaffName, CanApprove), cancellationToken);
+        return result.Outcome == ApprovalOutcome.Requested ? Accepted(result) : Ok(result);
+    }
+
     // The spreadsheet to bring raw materials in from: the columns, the unit and category lists.
     [HttpGet("raw-materials/template")]
     [Authorize(Policy = Permissions.InventoryManage)]
@@ -591,6 +615,17 @@ public sealed record SaveSupplierRequest(string Name, string? ContactPerson = nu
 public sealed record SavePurchaseCategoryRequest(string Name, string? NameAr = null, ExpenseLine? ExpenseLine = null);
 
 public sealed record SaveExpenseItemRequest(string Name, Guid? CategoryId = null, string? NameAr = null, string? Unit = null);
+
+public sealed record ChangeMaterialUnitRequest(
+    Guid RequestId,
+    UnitOfMeasure Unit,
+    string PurchaseUnit,
+    decimal PurchaseUnitSize,
+    // How many of the old unit one of the new is: needed once anything records the material.
+    decimal? OneNewIsOld = null,
+    decimal? CostPerPurchaseUnit = null,
+    decimal? ReorderLevel = null,
+    string? Reason = null);
 
 public sealed record UpdateRawMaterialRequest(
     string Name,

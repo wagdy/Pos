@@ -1,7 +1,8 @@
 import { TestBed } from '@angular/core/testing';
+import { HttpErrorResponse } from '@angular/common/http';
 import { MAT_DIALOG_DATA, MatDialog } from '@angular/material/dialog';
 import { of, throwError } from 'rxjs';
-import { CostingApi, RawMaterialImportResult } from '../../core/costing/costing.api';
+import { CostingApi, MaterialCost, RawMaterialImportResult } from '../../core/costing/costing.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from './approvals';
 import { MaterialImportDialog } from './material-import-dialog';
@@ -111,6 +112,88 @@ describe('raw materials from Excel', () => {
     importRawMaterials.mockClear();
     await page['importFile'](picked(null));
     expect(importRawMaterials).not.toHaveBeenCalled();
+  });
+});
+
+describe('changing a material', () => {
+  const materials = vi.fn();
+  const saveMaterial = vi.fn();
+  const changeMaterialUnit = vi.fn();
+  const open = vi.fn();
+  const notify = { info: vi.fn(), error: vi.fn() };
+  const approvals = { refresh: vi.fn(), pendingFor: vi.fn(), requested: vi.fn() };
+  const tomatoes = { id: 'tomatoes', name: 'Tomatoes', unit: 'Gram' } as unknown as MaterialCost;
+  const details = { name: 'Tomatoes', code: null, categoryId: 'veg', defaultYieldPercent: 100, purchaseUnit: 'kg', purchaseUnitSize: 1000, costPerPurchaseUnit: null, reorderLevel: 1000 };
+  const unitChange = { requestId: 'r1', unit: 'Piece', oneNewIsOld: 60, purchaseUnit: 'crate', purchaseUnitSize: 100, costPerPurchaseUnit: null, reorderLevel: null, reason: null };
+
+  async function render(closedWith: unknown) {
+    open.mockReturnValue({ afterClosed: () => of(closedWith) });
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: CostingApi, useValue: { materials, saveMaterial, changeMaterialUnit } },
+        { provide: MatDialog, useValue: { open } },
+        { provide: NotifyService, useValue: notify },
+        { provide: Approvals, useValue: approvals },
+      ],
+    });
+    const fixture = TestBed.createComponent(MaterialsPage);
+    await fixture.whenStable();
+    return fixture.componentInstance as unknown as Record<string, any>;
+  }
+
+  beforeEach(() => {
+    materials.mockReset().mockReturnValue(of([]));
+    saveMaterial.mockReset().mockReturnValue(of({}));
+    changeMaterialUnit.mockReset();
+    notify.info.mockReset();
+    notify.error.mockReset();
+    approvals.pendingFor.mockReset();
+    approvals.requested.mockReset();
+  });
+
+  it('saves its details, then changes its unit: at once for a manager', async () => {
+    changeMaterialUnit.mockReturnValue(of({ outcome: 'Applied', request: { id: 'r1' } }));
+    const page = await render({ material: details, unitChange });
+
+    await page['edit'](tomatoes);
+
+    expect(saveMaterial).toHaveBeenCalledWith('tomatoes', details);
+    expect(changeMaterialUnit).toHaveBeenCalledWith('tomatoes', unitChange);
+    expect(saveMaterial.mock.invocationCallOrder[0]).toBeLessThan(changeMaterialUnit.mock.invocationCallOrder[0]);
+    expect(notify.info).toHaveBeenCalledWith('Tomatoes saved, counted in pieces now.');
+  });
+
+  it('says an accountant’s change went to a manager', async () => {
+    const request = { id: 'r1', module: 'RawMaterial', action: 'Update' };
+    changeMaterialUnit.mockReturnValue(of({ outcome: 'Requested', request }));
+    const page = await render({ material: details, unitChange });
+
+    await page['edit'](tomatoes);
+
+    expect(approvals.requested).toHaveBeenCalledWith({ outcome: 'Requested', request });
+  });
+
+  it('keeps the details saved and says why when the unit is refused', async () => {
+    changeMaterialUnit.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 422, error: { errors: ['Tomatoes is counted in pieces already.'] } })));
+    const page = await render({ material: details, unitChange });
+
+    await page['edit'](tomatoes);
+
+    expect(saveMaterial).toHaveBeenCalled();
+    expect(notify.error).toHaveBeenCalledWith(null, 'Tomatoes was saved, but its unit was not changed: Tomatoes is counted in pieces already.');
+  });
+
+  it('sends no unit change when the unit stayed, and nothing while a request about it waits', async () => {
+    const page = await render({ material: details, unitChange: null });
+    await page['edit'](tomatoes);
+    expect(changeMaterialUnit).not.toHaveBeenCalled();
+    expect(notify.info).toHaveBeenCalledWith('Tomatoes saved.');
+
+    approvals.pendingFor.mockReturnValue({ action: 'Update', module: 'RawMaterial' });
+    open.mockClear();
+    await page['edit'](tomatoes);
+    expect(open).not.toHaveBeenCalled();
+    expect(notify.info).toHaveBeenCalledWith('Tomatoes: change requested, waiting for a manager. It can be changed once that is decided.');
   });
 });
 

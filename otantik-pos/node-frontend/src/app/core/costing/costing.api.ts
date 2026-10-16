@@ -497,6 +497,40 @@ export interface SaveMaterial {
   costPerPurchaseUnit: number | null;
 }
 
+// What records a material, in the unit it is counted in: a change of that unit restates them all,
+// and needs the conversion to. pendingRequests: requests waiting for a manager that name it.
+export interface MaterialUsage {
+  stockMovements: number;
+  invoiceLines: number;
+  recipes: number;
+  prepRecipes: number;
+  counts: number;
+  batches: number;
+  pendingRequests: number;
+  inUse: boolean;
+}
+
+// A material counted in another unit (عدّ بـ). oneNewIsOld: how many of the old unit one of the new
+// is, needed once anything records it, when its stock and cost are restated by it; the cost and
+// reorder level are only given while nothing does. requestId is made here: a retry asks once.
+export interface MaterialUnitChangeInput {
+  requestId: string;
+  unit: UnitOfMeasure;
+  oneNewIsOld: number | null;
+  purchaseUnit: string;
+  purchaseUnitSize: number;
+  costPerPurchaseUnit: number | null;
+  reorderLevel: number | null;
+  reason: string | null;
+}
+
+// Applied, or Requested of a manager (the request); a change made at once by a manager is kept
+// with the decisions too.
+export interface MaterialUnitChangeResult {
+  outcome: ApprovalOutcome;
+  request: ApprovalRequest | null;
+}
+
 export interface RecipeLine {
   rawMaterialId: string;
   quantity: number;
@@ -1143,6 +1177,15 @@ export class CostingApi {
     const form = new FormData();
     form.append('file', file, file.name);
     return this.http.post<RawMaterialImportResult>('/api/inventory/raw-materials/import', form);
+  }
+
+  materialUsage(id: string): Observable<MaterialUsage> {
+    return this.http.get<MaterialUsage>(`/api/inventory/raw-materials/${id}/usage`);
+  }
+
+  // At once while nothing records it, or for a manager; asked of one for anyone else.
+  changeMaterialUnit(id: string, change: MaterialUnitChangeInput): Observable<MaterialUnitChangeResult> {
+    return this.http.post<MaterialUnitChangeResult>(`/api/inventory/raw-materials/${id}/unit`, change);
   }
 
   saveMaterial(id: string | null, material: SaveMaterial): Observable<unknown> {

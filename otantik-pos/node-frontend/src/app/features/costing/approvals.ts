@@ -37,6 +37,9 @@ export function approvalEffect(module: ApprovalModule, action: ApprovalAction): 
   if (module === 'PurchaseInvoice') {
     return 'The invoice is voided and the corrected one posted in its place: its stock, cash and supplier’s account are redone, at the average costs at this moment.';
   }
+  if (module === 'RawMaterial') {
+    return 'The material is counted in the new unit from now: its stock, average cost, invoices, recipes, counts and batches are restated by the conversion, every amount of money as it was.';
+  }
   if (module === 'ProductionOrder') {
     return action === 'Create'
       ? 'The batch is made now: its ingredients leave stock and the prep item comes in, at the average costs at this moment.'

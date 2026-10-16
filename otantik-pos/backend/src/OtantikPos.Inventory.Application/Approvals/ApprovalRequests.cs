@@ -5,6 +5,7 @@ using Otantik.BuildingBlocks;
 using OtantikPos.Inventory.Application.Common;
 using OtantikPos.Inventory.Application.Production;
 using OtantikPos.Inventory.Application.Purchases;
+using OtantikPos.Inventory.Application.RawMaterials;
 using OtantikPos.Inventory.Application.Treasury;
 using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.RawMaterials;
@@ -114,6 +115,8 @@ internal sealed class ApproveRequestHandler(
     ProductionWriter production,
     TreasuryWriter treasury,
     InvoiceCorrector invoices,
+    MaterialUnitWriter units,
+    IRawMaterialRepository materials,
     IStockMovementRepository movements,
     IUnitOfWork unitOfWork) : IRequestHandler<ApproveRequestCommand, ApprovalRequestDto>
 {
@@ -151,6 +154,13 @@ internal sealed class ApproveRequestHandler(
                 await invoices.ApplyAsync(
                     await invoices.OriginalAsync(approval.RecordId, cancellationToken), ApprovalPayload.Read<InvoiceCorrection>(approval),
                     approval.RequestedBy, request.StaffName, cancellationToken);
+                break;
+
+            // A material counted in another unit: everything recorded restated, and saved with it.
+            case (ApprovalAction.Update, ApprovalModule.RawMaterial):
+                await units.ApplyAsync(
+                    await materials.GetRequiredAsync(approval.RecordId, cancellationToken), ApprovalPayload.Read<MaterialUnitChange>(approval), approval.Id,
+                    cancellationToken);
                 break;
 
             case (ApprovalAction.Update, ApprovalModule.ProductionOrder):

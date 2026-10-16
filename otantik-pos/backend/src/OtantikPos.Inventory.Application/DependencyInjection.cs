@@ -17,6 +17,7 @@ public static class DependencyInjection
         services.AddScoped<Purchases.InvoiceRecorder>();
         services.AddScoped<Purchases.InvoicePoster>();
         services.AddScoped<Purchases.InvoiceCorrector>();
+        services.AddScoped<RawMaterials.MaterialUnitWriter>();
         return services;
     }
 }
