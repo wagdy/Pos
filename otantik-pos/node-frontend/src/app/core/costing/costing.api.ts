@@ -558,6 +558,29 @@ export interface PurchaseInvoice {
   paymentMethod: PurchasePaymentMethod | null;
   revenueDate: string | null;
   paymentStatus: InvoicePaymentStatus;
+  // A correction (تعديل فاتورة): the invoice it corrects; and on that one, the invoice that corrected it.
+  revisionOf?: string | null;
+  replacedBy?: string | null;
+}
+
+// A posted invoice as it should have been: a new invoice (newInvoiceId, made here) that replaces
+// it. requestId is made here too: a retry finds what was done.
+export interface InvoiceCorrectionInput {
+  requestId: string;
+  newInvoiceId: string;
+  supplierId: string | null;
+  supplierInvoiceNumber: string | null;
+  invoiceDate: string | null;
+  lines: SavePurchaseLine[];
+  paymentMethod: PurchasePaymentMethod | null;
+  revenueDate: string | null;
+  reason: string | null;
+}
+
+// What a correction would change, line by line: what the manager sees on the request.
+export interface InvoiceCorrectionPreview {
+  summary: string;
+  changes: ApprovalChange[];
 }
 
 export interface PurchaseInvoiceSummary {
@@ -1158,6 +1181,15 @@ export class CostingApi {
   }
 
   // Null for an invoice not saved yet (404, and only 404).
+  previewInvoiceCorrection(id: string, correction: InvoiceCorrectionInput): Observable<InvoiceCorrectionPreview> {
+    return this.http.post<InvoiceCorrectionPreview>(`/api/inventory/purchase-invoices/${id}/correct/preview`, correction);
+  }
+
+  // Done at once for a manager (Applied); asked of one for anyone else (Requested).
+  correctPurchaseInvoice(id: string, correction: InvoiceCorrectionInput): Observable<ApprovalResult> {
+    return this.http.post<ApprovalResult>(`/api/inventory/purchase-invoices/${id}/correct`, correction);
+  }
+
   purchaseInvoice(id: string): Observable<PurchaseInvoice | null> {
     return this.http.get<PurchaseInvoice>(`/api/inventory/purchase-invoices/${id}`).pipe(
       catchError((error: unknown) => (error instanceof HttpErrorResponse && error.status === 404 ? of(null) : throwError(() => error))),

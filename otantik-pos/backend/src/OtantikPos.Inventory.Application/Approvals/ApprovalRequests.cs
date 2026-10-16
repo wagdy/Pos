@@ -4,6 +4,7 @@ using MediatR;
 using Otantik.BuildingBlocks;
 using OtantikPos.Inventory.Application.Common;
 using OtantikPos.Inventory.Application.Production;
+using OtantikPos.Inventory.Application.Purchases;
 using OtantikPos.Inventory.Application.Treasury;
 using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.RawMaterials;
@@ -112,6 +113,7 @@ internal sealed class ApproveRequestHandler(
     PrepItemWriter prepItems,
     ProductionWriter production,
     TreasuryWriter treasury,
+    InvoiceCorrector invoices,
     IStockMovementRepository movements,
     IUnitOfWork unitOfWork) : IRequestHandler<ApproveRequestCommand, ApprovalRequestDto>
 {
@@ -142,6 +144,13 @@ internal sealed class ApproveRequestHandler(
 
             case (ApprovalAction.Create, ApprovalModule.Treasury):
                 await treasury.ApplyAsync(ApprovalPayload.Read<SafeVoucher>(approval), approval.RequestedBy, request.StaffName, cancellationToken);
+                break;
+
+            // An invoice corrected: the original voided, the correction posted in its place.
+            case (ApprovalAction.Update, ApprovalModule.PurchaseInvoice):
+                await invoices.ApplyAsync(
+                    await invoices.OriginalAsync(approval.RecordId, cancellationToken), ApprovalPayload.Read<InvoiceCorrection>(approval),
+                    approval.RequestedBy, request.StaffName, cancellationToken);
                 break;
 
             case (ApprovalAction.Update, ApprovalModule.ProductionOrder):

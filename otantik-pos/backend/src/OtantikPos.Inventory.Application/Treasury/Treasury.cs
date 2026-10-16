@@ -243,7 +243,9 @@ internal sealed class TreasuryWriter(
         PurchaseInvoice invoice, Guid requestId, string staffId, string staffName, bool canApprove, IApprovalRequestRepository requests,
         CancellationToken cancellationToken)
     {
-        if (invoice.Total <= 0)
+        // Nothing to pay; or a correction of an invoice from before the treasury, which touches
+        // neither the safe nor a supplier's account.
+        if (invoice.Total <= 0 || invoice.PaymentMethod == PurchasePaymentMethod.BeforeTreasury)
             return null;
         _posting[invoice.Id] = invoice;
         if (invoice.PaymentMethod == PurchasePaymentMethod.Credit)

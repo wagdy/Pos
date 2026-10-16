@@ -59,7 +59,10 @@ public sealed record PurchaseInvoiceDto(
     string? VoidedBy = null,
     PurchasePaymentMethod? PaymentMethod = null,
     DateOnly? RevenueDate = null,
-    InvoicePaymentStatus PaymentStatus = InvoicePaymentStatus.NotPosted);
+    InvoicePaymentStatus PaymentStatus = InvoicePaymentStatus.NotPosted,
+    // A correction: the invoice it corrects; and on that one, the invoice that corrected it.
+    Guid? RevisionOf = null,
+    Guid? ReplacedBy = null);
 
 // What an invoice's lines are named and filed under, read together for a DTO.
 internal sealed record InvoiceReading(
@@ -107,7 +110,9 @@ internal sealed record InvoiceReading(
         invoice.VoidedAtUtc,
         invoice.VoidedBy,
         invoice.PaymentMethod,
-        invoice.RevenueDate);
+        invoice.RevenueDate,
+        RevisionOf: invoice.RevisionOf,
+        ReplacedBy: invoice.ReplacedBy);
 
     private static PurchaseInvoiceLineDto Line(
         PurchaseInvoiceLine l,
@@ -215,6 +220,32 @@ internal sealed class InvoiceRecorder(
 {
     public async Task<PurchaseInvoice> RecordAsync(SavePurchaseInvoiceCommand request, CancellationToken cancellationToken)
     {
+        var invoice = await invoices.GetByIdAsync(request.InvoiceId, cancellationToken);
+        if (invoice is null)
+            invoices.Add(invoice = new PurchaseInvoice(request.InvoiceId, request.StaffName));
+        await FillAsync(invoice, request, invoice, cancellationToken);
+        return invoice;
+    }
+
+    // A posted invoice's correction, as a new invoice: tracked to be posted (track), or only built
+    // and checked, for a request that waits for a manager. What the original had (a material,
+    // expense or supplier archived since) stays allowed on it.
+    public async Task<PurchaseInvoice> CorrectionAsync(
+        PurchaseInvoice original, SavePurchaseInvoiceCommand request, bool track, CancellationToken cancellationToken)
+    {
+        if (await invoices.GetByIdAsync(request.InvoiceId, cancellationToken) is not null)
+            throw new DomainException("That correction has been entered already.");
+        var invoice = new PurchaseInvoice(request.InvoiceId, request.StaffName);
+        invoice.Corrects(original);
+        await FillAsync(invoice, request, original, cancellationToken);
+        if (track)
+            invoices.Add(invoice);
+        return invoice;
+    }
+
+    // keep: the invoice whose materials, expenses and supplier may stay although archived since.
+    private async Task FillAsync(PurchaseInvoice invoice, SavePurchaseInvoiceCommand request, PurchaseInvoice keep, CancellationToken cancellationToken)
+    {
         // A draft can be saved before its lines, to attach its paper first.
         var materialIds = request.Lines
             .Where(l => l.ItemType == PurchaseItemType.Inventory && l.RawMaterialId is not null)
@@ -226,12 +257,8 @@ internal sealed class InvoiceRecorder(
         if (onInvoice.Values.FirstOrDefault(m => m.IsPrepItem) is { } made)
             throw new DomainException($"{made.Name} is made in the kitchen, not bought: make it with a production order.");
 
-        var invoice = await invoices.GetByIdAsync(request.InvoiceId, cancellationToken);
-        if (invoice is null)
-            invoices.Add(invoice = new PurchaseInvoice(request.InvoiceId, request.StaffName));
-
         // A material deleted since stays on a draft that already had it, but goes on no other.
-        var drafted = invoice.Lines.Select(l => l.RawMaterialId).ToHashSet();
+        var drafted = keep.Lines.Select(l => l.RawMaterialId).ToHashSet();
         if (onInvoice.Values.FirstOrDefault(m => m.IsArchived && !drafted.Contains(m.Id)) is { } archivedMaterial)
             throw new DomainException($"{archivedMaterial.Name} has been deleted from the raw materials.");
 
@@ -243,13 +270,13 @@ internal sealed class InvoiceRecorder(
             var found = (await expenses.GetByIdsAsync(expenseIds, cancellationToken)).ToDictionary(e => e.Id);
             if (expenseIds.Any(id => !found.ContainsKey(id)))
                 throw new DomainException("An expense on this invoice is no longer on the list. Choose it again, or add it.");
-            var already = invoice.Lines.Select(l => l.ExpenseItemId).ToHashSet();
+            var already = keep.Lines.Select(l => l.ExpenseItemId).ToHashSet();
             if (found.Values.FirstOrDefault(e => e.IsArchived && !already.Contains(e.Id)) is { } archived)
                 throw new DomainException($"{archived.Name} is archived. Restore it on the Expense items tab to put it on an invoice again.");
         }
 
         // An archived supplier stays on a draft that already had it, but is not put on another.
-        if (request.SupplierId is { } supplierId && supplierId != invoice.SupplierId)
+        if (request.SupplierId is { } supplierId && supplierId != keep.SupplierId)
         {
             var supplier = await suppliers.GetByIdAsync(supplierId, cancellationToken)
                 ?? throw new DomainException("That supplier is no longer on the list. Choose it again, or add it.");
@@ -258,7 +285,6 @@ internal sealed class InvoiceRecorder(
         }
 
         invoice.Record(request.SupplierId, request.SupplierInvoiceNumber, request.InvoiceDate, request.Lines, request.PaymentMethod, request.RevenueDate);
-        return invoice;
     }
 }
 

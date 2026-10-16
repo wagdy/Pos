@@ -34,6 +34,9 @@ export interface InvoiceViewData {
       }
     </mat-dialog-content>
     <mat-dialog-actions align="end">
+      @if (invoice()?.status === 'Posted') {
+        <a mat-button [routerLink]="['/costing/purchases/new']" [queryParams]="{ correct: data.invoiceId }" mat-dialog-close><mat-icon>edit</mat-icon> Edit</a>
+      }
       <a mat-button [routerLink]="['/costing/purchases/invoices', data.invoiceId]" mat-dialog-close><mat-icon>open_in_full</mat-icon> Open as a page</a>
       <button mat-flat-button mat-dialog-close>Close</button>
     </mat-dialog-actions>

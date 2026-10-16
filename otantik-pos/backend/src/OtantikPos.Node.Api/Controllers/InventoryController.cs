@@ -123,6 +123,35 @@ public sealed class InventoryController(ISender sender) : ControllerBase
             request.InvoiceDate, request.PaymentMethod, request.RevenueDate, request.Invoices, StaffName, StaffId, CanApprove, request.Payments ?? []),
             cancellationToken);
 
+    // A posted invoice corrected (تعديل فاتورة): voided and posted again as it should have been, as a
+    // new invoice naming it. Done at once for a manager (200, Applied); asked of one for anyone else
+    // (202, Requested), the invoice as it was, and locked, until then. RequestId and NewInvoiceId are
+    // made by the till.
+    [HttpPost("purchase-invoices/{invoiceId:guid}/correct")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public async Task<ActionResult<ApprovalResultDto>> CorrectPurchaseInvoice(
+        Guid invoiceId, CorrectPurchaseInvoiceRequest request, CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new CorrectPurchaseInvoiceCommand(
+            request.RequestId, invoiceId,
+            new InvoiceCorrection(
+                request.NewInvoiceId, request.SupplierId, request.SupplierInvoiceNumber, request.InvoiceDate, request.Lines, request.PaymentMethod,
+                request.RevenueDate),
+            request.Reason, StaffId, StaffName, CanApprove), cancellationToken);
+        return result.Outcome == ApprovalOutcome.Requested ? Accepted(result) : Ok(result);
+    }
+
+    // What a correction would change, checked as it will be when sent; nothing is saved.
+    [HttpPost("purchase-invoices/{invoiceId:guid}/correct/preview")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public Task<InvoiceCorrectionPreview> PreviewInvoiceCorrection(Guid invoiceId, CorrectPurchaseInvoiceRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new PreviewInvoiceCorrectionQuery(
+            invoiceId,
+            new InvoiceCorrection(
+                request.NewInvoiceId, request.SupplierId, request.SupplierInvoiceNumber, request.InvoiceDate, request.Lines, request.PaymentMethod,
+                request.RevenueDate),
+            StaffName), cancellationToken);
+
     // Pays a posted cash invoice that is not paid (its payment was rejected or voided), or puts it
     // on credit. RequestId is made by the till.
     [HttpPost("purchase-invoices/{invoiceId:guid}/pay")]
@@ -484,6 +513,17 @@ public sealed class InventoryController(ISender sender) : ControllerBase
 }
 
 public sealed record SaveStockCountRequest(IReadOnlyList<StockCountLine> Lines);
+
+public sealed record CorrectPurchaseInvoiceRequest(
+    Guid RequestId,
+    Guid NewInvoiceId,
+    Guid? SupplierId,
+    string? SupplierInvoiceNumber,
+    DateOnly? InvoiceDate,
+    IReadOnlyList<PurchaseInvoiceLineEntry> Lines,
+    PurchasePaymentMethod? PaymentMethod,
+    DateOnly? RevenueDate = null,
+    string? Reason = null);
 
 public sealed record SavePurchaseInvoiceRequest(
     Guid? SupplierId,

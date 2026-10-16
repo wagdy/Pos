@@ -564,7 +564,8 @@ public class ApiTests
         Assert.Equal(2, pending.Count(r => r.GetProperty("module").GetString() == "Treasury"));
 
         // Bought on credit, then 50 of it paid in a batch of its own: no invoice, off Nile Farms' account.
-        await Json(await manager.PostAsJsonAsync("/api/inventory/purchase-invoices/batch", Batch("Credit", Invoice(nile, 80)), Cancel));
+        var bought = (await Json(await manager.PostAsJsonAsync("/api/inventory/purchase-invoices/batch", Batch("Credit", Invoice(nile, 80)), Cancel)))
+            .GetProperty("invoices")[0].GetProperty("id").GetGuid();
         var paid = (await Json(await manager.PostAsJsonAsync("/api/inventory/purchase-invoices/batch", new
         {
             invoiceDate = "2026-10-13", paymentMethod = "Safe", invoices = Array.Empty<object>(),
@@ -586,6 +587,25 @@ public class ApiTests
         Assert.Equal(0m, (await Json(await manager.GetAsync($"/api/financials/suppliers/{nile}", Cancel))).GetProperty("balance").GetDecimal());
         var takings = await Json(await manager.GetAsync($"/api/financials/takings?day={day}", Cancel));
         Assert.Equal((30m, 1), (takings.GetProperty("paidOut").GetDecimal(), takings.GetProperty("supplierPayments").GetInt32()));
+
+        // The credit invoice corrected, 5 kg costing 90 not 80: a cashier may not; the accountant's
+        // waits for a manager (202), the invoice locked meanwhile.
+        object Fix() => new
+        {
+            requestId = Guid.NewGuid(), newInvoiceId = Guid.NewGuid(), supplierId = nile, supplierInvoiceNumber = (string?)null, invoiceDate = "2026-10-13",
+            paymentMethod = "Credit",
+            lines = new[] { new { rawMaterialId = tomatoes, enteredQuantity = 5, unitLabel = "kg", unitSize = 1000, cost = 90, itemType = "Inventory" } },
+        };
+        var correct = $"/api/inventory/purchase-invoices/{bought}/correct";
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PostAsJsonAsync(correct, Fix(), Cancel)).StatusCode);
+        // Reviewed first: what changes, as the manager will see it, and nothing saved.
+        var preview = await Json(await accountant.PostAsJsonAsync($"{correct}/preview", Fix(), Cancel));
+        Assert.Equal("Invoice of 13 Oct 2026 · Nile Farms corrected · L.E 80.00 → L.E 90.00", preview.GetProperty("summary").GetString());
+        Assert.Equal("5 kg · L.E 90.00", preview.GetProperty("changes")[0].GetProperty("after").GetString());
+        var asked = await accountant.PostAsJsonAsync(correct, Fix(), Cancel);
+        Assert.Equal(HttpStatusCode.Accepted, asked.StatusCode);
+        Assert.Equal("Requested", (await asked.Content.ReadFromJsonAsync<JsonElement>(Cancel)).GetProperty("outcome").GetString());
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await manager.PostAsJsonAsync(correct, Fix(), Cancel)).StatusCode);
     }
 
     // A sheet of batch recipes (المصنعات), as kitchens write them: a prep item's name on its own row,

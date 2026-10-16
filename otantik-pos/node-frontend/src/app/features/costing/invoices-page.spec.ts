@@ -225,11 +225,12 @@ describe('the invoices history', () => {
       expect(purchaseInvoiceFile).toHaveBeenCalledWith('farms');
     });
 
-    it('changes nothing: no field to type in, no save', async () => {
+    it('changes nothing itself: no field to type in, no save; Edit opens a correction on the new invoice screen', async () => {
       const el = await show();
 
       expect(el.querySelectorAll('input, textarea, select')).toHaveLength(0);
-      expect([...el.querySelectorAll('button, a')].map(text)).toEqual(['download Download', 'open_in_full Open as a page', 'Close']);
+      expect([...el.querySelectorAll('button, a')].map(text)).toEqual(['download Download', 'edit Edit', 'open_in_full Open as a page', 'Close']);
+      expect([...el.querySelectorAll('a')].find((a) => text(a) === 'edit Edit')!.getAttribute('href')).toContain('/costing/purchases/new?correct=');
     });
 
     it('says so for an invoice that is not there', async () => {

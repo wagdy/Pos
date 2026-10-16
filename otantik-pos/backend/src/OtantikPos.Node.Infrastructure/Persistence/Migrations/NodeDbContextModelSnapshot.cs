@@ -908,8 +908,14 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<Guid?>("ReplacedBy")
+                        .HasColumnType("uuid");
+
                     b.Property<DateOnly?>("RevenueDate")
                         .HasColumnType("date");
+
+                    b.Property<Guid?>("RevisionOf")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("Status")
                         .IsRequired()

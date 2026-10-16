@@ -1638,6 +1638,98 @@ public class NodeTests
         Assert.Equal(count, await node.Db(db => db.PurchaseInvoices.CountAsync()));
     }
 
+    // A posted invoice corrected (تعديل فاتورة): voided and posted again as it should have been, as a
+    // new invoice naming it, nothing posted rewritten. A manager's at once; an accountant's a request,
+    // the invoice as it was and locked until a manager rejects it (with a reason, kept) or approves it.
+    [Fact]
+    public async Task A_posted_invoice_is_corrected_by_a_new_one_a_managers_at_once_an_accountants_on_approval()
+    {
+        await using var node = await TestNode.StartAsync();
+        var ct = TestContext.Current.CancellationToken;
+        using var scope = node.Scope();
+        var treasury = node.Service<TreasuryService>(scope);
+        var today = treasury.Today;
+        var tomatoes = (await node.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram))).Id;
+        var onions = (await node.Send(new CreateRawMaterialCommand("Onions", UnitOfMeasure.Gram))).Id;
+        var nile = (await node.Send(new SaveSupplierCommand(Guid.NewGuid(), "Nile Farms"))).Id;
+        await node.Send(new RecordSafeVoucherCommand(
+            Guid.NewGuid(), new SafeVoucher(Guid.NewGuid(), SafeTransactionKind.OpeningBalance, 10_000, today, FundingSource.CarriedOver),
+            null, "staff-omar", "Omar", CanApprove: true));
+        async Task<decimal> Safe() => (await treasury.GetSafeAsync(today.Year, today.Month, ct)).BalanceNow;
+        Task<decimal> OnHand(Guid id) => node.Db(db => db.RawMaterials.Where(m => m.Id == id).Select(m => m.QuantityOnHand).SingleAsync());
+        Task<PurchaseInvoiceDto> Invoice(Guid id) => node.Send(new GetPurchaseInvoiceQuery(id))!;
+        InvoiceCorrection Correction(PurchasePaymentMethod method, string? number, IReadOnlyList<PurchaseInvoiceLineEntry> lines) =>
+            new(Guid.NewGuid(), nile, number, today, lines, method, null);
+        Task<ApprovalResultDto> Correct(Guid id, InvoiceCorrection change, bool manager = true) => node.Send(new CorrectPurchaseInvoiceCommand(
+            Guid.NewGuid(), id, change, manager ? null : "Typed 5 for 6", manager ? "staff-omar" : "staff-mona", manager ? "Omar" : "Mona", manager));
+
+        // Five kilos of tomatoes from Nile Farms, paid from the safe.
+        var first = Guid.NewGuid();
+        await node.Send(new SavePurchaseInvoiceCommand(first, nile, "F-1", today, [new(tomatoes, 5, "kg", 1000, 100)], "Omar", PurchasePaymentMethod.Safe));
+        await node.Send(new PostPurchaseInvoiceCommand(first, "Omar"));
+        Assert.Equal((9_900m, 5_000m), (await Safe(), await OnHand(tomatoes)));
+
+        // The manager's correction: six kilos, and the onions forgotten. Done at once: the first
+        // voided, replaced; its cash back, the correction's paid; the stock as it should have been.
+        var fix = Correction(PurchasePaymentMethod.Safe, "F-1", [new(tomatoes, 6, "kg", 1000, 120), new(onions, 2, "kg", 1000, 30)]);
+        var done = await Correct(first, fix);
+        Assert.Equal(ApprovalOutcome.Applied, done.Outcome);
+        Assert.Equal("Invoice F-1 · Nile Farms corrected · L.E 100.00 → L.E 150.00", done.Request.Summary);
+        Assert.Equal(
+            [new ApprovalChange("Tomatoes", "5 kg · L.E 100.00", "6 kg · L.E 120.00"), new ApprovalChange("Onions", null, "2 kg · L.E 30.00"),
+                new ApprovalChange("Total", "L.E 100.00", "L.E 150.00")],
+            done.Request.Changes);
+        var (was, now) = (await Invoice(first), await Invoice(fix.NewInvoiceId));
+        Assert.Equal((PurchaseInvoiceStatus.Voided, (Guid?)fix.NewInvoiceId), (was.Status, was.ReplacedBy));
+        Assert.Equal((PurchaseInvoiceStatus.Posted, (Guid?)first, InvoicePaymentStatus.Paid, 150m), (now.Status, now.RevisionOf, now.PaymentStatus, now.Total));
+        Assert.Equal((9_850m, 6_000m, 2_000m), (await Safe(), await OnHand(tomatoes), await OnHand(onions)));
+
+        // Corrected already, or nothing changed: refused.
+        Assert.Contains("already been corrected", (await Assert.ThrowsAsync<DomainException>(() => Correct(first, fix with { NewInvoiceId = Guid.NewGuid() }))).Message);
+        Assert.Contains("Nothing has changed",
+            (await Assert.ThrowsAsync<DomainException>(() => Correct(fix.NewInvoiceId, fix with { NewInvoiceId = Guid.NewGuid() }))).Message);
+
+        // The accountant's: on credit, numbered F-2. A request; the invoice, stock and safe as they
+        // were, and the invoice locked: neither corrected nor voided again meanwhile.
+        var credit = Correction(PurchasePaymentMethod.Credit, "F-2", [new(tomatoes, 6, "kg", 1000, 120), new(onions, 2, "kg", 1000, 30)]);
+        var asked = await Correct(fix.NewInvoiceId, credit, manager: false);
+        Assert.Equal(ApprovalOutcome.Requested, asked.Outcome);
+        Assert.Equal(
+            [new ApprovalChange("Invoice no.", "F-1", "F-2"), new ApprovalChange("Paid", "From the safe", "On credit"),
+                new ApprovalChange("Total", "L.E 150.00", "L.E 150.00")],
+            asked.Request.Changes);
+        Assert.Equal((PurchaseInvoiceStatus.Posted, 9_850m), ((await Invoice(fix.NewInvoiceId)).Status, await Safe()));
+        await Assert.ThrowsAsync<DomainException>(() => Correct(fix.NewInvoiceId, credit with { NewInvoiceId = Guid.NewGuid() }));
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(new RequestDeletionCommand(
+            Guid.NewGuid(), ApprovalModule.PurchaseInvoice, fix.NewInvoiceId, null, "staff-omar", "Omar", CanApprove: true)));
+
+        // Rejected, with the reason: kept, and the invoice as it was, open to correction again.
+        var rejected = await node.Send(new RejectRequestCommand(asked.Request.Id, "F-1 is right", "Omar"));
+        Assert.Equal((ApprovalStatus.Rejected, "F-1 is right"), (rejected.Status, rejected.DecisionNote));
+        Assert.Equal(PurchaseInvoiceStatus.Posted, (await Invoice(fix.NewInvoiceId)).Status);
+
+        // Asked again, and approved: the correction is on credit, owed to Nile Farms; the safe has
+        // the 150 back. Entered by the accountant, posted by the manager who approved it.
+        var again = credit with { NewInvoiceId = Guid.NewGuid() };
+        await node.Send(new ApproveRequestCommand((await Correct(fix.NewInvoiceId, again, manager: false)).Request.Id, "Omar"));
+        var onCredit = await Invoice(again.NewInvoiceId);
+        Assert.Equal((InvoicePaymentStatus.OnCredit, "Mona", "Omar", (Guid?)fix.NewInvoiceId), (onCredit.PaymentStatus, onCredit.CreatedBy, onCredit.PostedBy, onCredit.RevisionOf));
+        Assert.Equal((10_000m, 150m), (await Safe(), (await treasury.GetSupplierStatementAsync(nile, ct))!.Balance));
+        Assert.Equal((6_000m, 2_000m), (await OnHand(tomatoes), await OnHand(onions)));
+
+        // An invoice from before the treasury is corrected as one: no cash, no supplier's line.
+        var old = Guid.NewGuid();
+        await node.Send(new SavePurchaseInvoiceCommand(old, nile, "OLD-1", today.AddDays(-30), [new(onions, 1, "kg", 1000, 10)], "Omar"));
+        await node.Db(db => db.PurchaseInvoices.Where(i => i.Id == old)
+            .ExecuteUpdateAsync(u => u.SetProperty(i => i.Status, PurchaseInvoiceStatus.Posted).SetProperty(i => i.PaymentMethod, PurchasePaymentMethod.BeforeTreasury)));
+        Assert.Contains("before the treasury", (await Assert.ThrowsAsync<DomainException>(() =>
+            Correct(old, Correction(PurchasePaymentMethod.Safe, "OLD-1", [new(onions, 1, "kg", 1000, 12)])))).Message);
+        var oldFix = Correction(PurchasePaymentMethod.BeforeTreasury, "OLD-1", [new(onions, 1, "kg", 1000, 12)]);
+        await Correct(old, oldFix);
+        Assert.Equal(PurchasePaymentMethod.BeforeTreasury, (await Invoice(oldFix.NewInvoiceId)).PaymentMethod);
+        Assert.Equal((10_000m, 150m), (await Safe(), (await treasury.GetSupplierStatementAsync(nile, ct))!.Balance));
+    }
+
     // A supplier paid in the daily batch (سداد مورد): an old debt settled with no invoice and no
     // stock, from the day's takings or the safe as the batch is paid, against what they are owed and
     // off it on their account; never on credit, never more than owed, and nothing saved unless all is.

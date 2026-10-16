@@ -63,14 +63,7 @@ internal sealed class DeletionTargets(
                 return [];
 
             case ApprovalModule.PurchaseInvoice:
-            {
-                var invoice = await InvoiceAsync(recordId, cancellationToken);
-                var reversals = await ReverseAsync(invoice.Id, StockMovementReason.Purchase, by, cancellationToken);
-                // Its cash comes back, and what it put on its supplier's account comes off.
-                await treasury.UndoInvoiceAsync(invoice, by, cancellationToken);
-                invoice.Void(by);
-                return reversals;
-            }
+                return await VoidInvoiceAsync(await InvoiceAsync(recordId, cancellationToken), by, null, cancellationToken);
 
             case ApprovalModule.Waste:
                 await WasteAsync(recordId, cancellationToken);
@@ -251,6 +244,16 @@ internal sealed class DeletionTargets(
         $"{(material.IsPrepItem ? "Prep item" : "Raw material")} {(material.Code is { } code ? $"{code} · " : "")}{material.Name}";
 
     // The reversing entries for what a source put in or took out, each material moved back.
+    // A posted invoice voided: its goods back out of stock, its cash back where it came from, and
+    // what it put on its supplier's account off it. replacedBy, the invoice correcting it.
+    public async Task<IReadOnlyList<StockMovement>> VoidInvoiceAsync(PurchaseInvoice invoice, string by, Guid? replacedBy, CancellationToken cancellationToken)
+    {
+        var reversals = await ReverseAsync(invoice.Id, StockMovementReason.Purchase, by, cancellationToken);
+        await treasury.UndoInvoiceAsync(invoice, by, cancellationToken);
+        invoice.Void(by, replacedBy);
+        return reversals;
+    }
+
     private async Task<IReadOnlyList<StockMovement>> ReverseAsync(Guid sourceId, StockMovementReason reason, string by, CancellationToken cancellationToken)
     {
         var originals = (await movements.GetBySourceAsync(sourceId, reason, cancellationToken)).Where(m => !m.IsReversal).ToList();

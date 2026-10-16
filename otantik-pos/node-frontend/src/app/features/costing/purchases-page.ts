@@ -1,5 +1,5 @@
 import { DatePipe } from '@angular/common';
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { MatButtonModule } from '@angular/material/button';
@@ -10,10 +10,13 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
+import { Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import {
   CostingApi,
   ExpenseItem,
+  InvoiceCorrectionInput,
+  InvoiceCorrectionPreview,
   MaterialCost,
   PurchaseInvoice,
   PurchaseInvoiceSummary,
@@ -43,6 +46,10 @@ import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPay
 //
 // Or, switched at the top, a supplier paid with no invoice (سداد مورد): entered as in the daily
 // batch, against what they are owed, from the safe or a day's takings, and no stock moves.
+//
+// With ?correct=, a posted invoice corrected (تعديل فاتورة): it opens here as entered, and once its
+// changes are reviewed, it is voided and posted again as it should have been, a new invoice in its
+// place. A manager's at once; anyone else's waits for a manager's approval, the invoice as it was.
 @Component({
   selector: 'app-purchases-page',
   providers: [PurchaseCatalog],
@@ -60,6 +67,7 @@ import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPay
     MatProgressBarModule,
     MatSelectModule,
     MoneyPipe,
+    RouterLink,
     SupplierPaymentFields,
   ],
   template: `
@@ -79,14 +87,70 @@ import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPay
           <button mat-flat-button (click)="confirm()" [disabled]="saving()"><mat-icon>inventory</mat-icon> Confirm &amp; post</button>
         </div>
       </section>
+    } @else if (correctionPreview(); as cp) {
+      <!-- A correction, reviewed: what changes, as the manager will see it. -->
+      <section class="review">
+        <h2>Review the changes <span class="inline-ar">مراجعة التعديل</span></h2>
+        <p class="note">{{ cp.summary }}</p>
+        <div class="table-wrap">
+          <table class="grid changes">
+            <thead>
+              <tr>
+                <th>What<span class="ar">البند</span></th>
+                <th>Was<span class="ar">قبل</span></th>
+                <th>Now<span class="ar">بعد</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (c of cp.changes; track c.label) {
+                <tr>
+                  <td>{{ c.label }}</td>
+                  <td [class.muted]="!c.before">{{ c.before ?? 'Not on it' }}</td>
+                  <td [class.muted]="!c.after">{{ c.after ?? 'Taken off' }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+        <p class="note">
+          {{ approvals.canApprove() ? 'Saved, the invoice is voided and this one posted in its place: its stock, cash and supplier’s account are redone.'
+            : 'A manager approves it first: until then the invoice stays as it is.' }}
+        </p>
+        @if (!approvals.canApprove()) {
+          <mat-form-field class="reason" subscriptSizing="dynamic">
+            <mat-label>Why · السبب</mat-label>
+            <input matInput [(ngModel)]="reason" maxlength="300" placeholder="Typed 5 for 6" aria-label="Why it is corrected" />
+          </mat-form-field>
+        }
+        <div class="toolbar actions">
+          <button mat-button (click)="correctionPreview.set(null)" [disabled]="saving()"><mat-icon>edit</mat-icon> Back to edit</button>
+          <span class="spacer"></span>
+          <button mat-flat-button (click)="sendCorrection()" [disabled]="saving()">
+            <mat-icon>{{ approvals.canApprove() ? 'published_with_changes' : 'send' }}</mat-icon>
+            {{ approvals.canApprove() ? 'Save correction' : 'Send for approval' }}
+            <span class="inline-ar">{{ approvals.canApprove() ? 'حفظ التعديل' : 'إرسال للموافقة' }}</span>
+          </button>
+        </div>
+      </section>
     } @else {
+      @if (correcting(); as original) {
+        <div class="correcting" role="status">
+          <mat-icon>edit_note</mat-icon>
+          <span>
+            Correcting <a [routerLink]="['/costing/purchases/invoices', original.id]">{{ invoiceName(original) }}</a>,
+            {{ original.total | money }}. Saved, it is voided and this one posted in its place.
+            <span class="inline-ar">تعديل فاتورة</span>
+          </span>
+        </div>
+      } @else {
       <mat-button-toggle-group class="mode" [value]="mode()" (change)="mode.set($event.value)" aria-label="What to enter" hideSingleSelectionIndicator>
         <mat-button-toggle value="invoice"><mat-icon>receipt_long</mat-icon> Purchase invoice · فاتورة مشتريات</mat-button-toggle>
         <mat-button-toggle value="payment"><mat-icon>payments</mat-icon> Supplier payment · سداد مورد</mat-button-toggle>
       </mat-button-toggle-group>
-      @if (mode() === 'invoice') {
+      }
+      @if (mode() === 'invoice' || correcting()) {
       <!-- Step one: the invoice as written. -->
-      @if (drafts().length) {
+      @if (drafts().length && !correcting()) {
         <div class="drafts">
           <strong>Unfinished invoices · فواتير لم تكتمل</strong>
           @for (d of drafts(); track d.id) {
@@ -134,6 +198,9 @@ import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPay
           <mat-label>Invoice date · تاريخ الفاتورة</mat-label>
           <input matInput type="date" [(ngModel)]="invoiceDate" />
         </mat-form-field>
+        @if (paymentMethod === 'BeforeTreasury') {
+          <span class="muted before-treasury">Before the treasury · قبل الخزنة: no cash, no supplier's account</span>
+        } @else {
         <mat-form-field subscriptSizing="dynamic" class="payment">
           <mat-label>Paid · طريقة الدفع</mat-label>
           <mat-select [(ngModel)]="paymentMethod" (ngModelChange)="touch()" aria-label="How it is paid" required>
@@ -149,13 +216,14 @@ import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPay
             <mat-hint>Required to post it.</mat-hint>
           }
         </mat-form-field>
+        }
         @if (paymentMethod === 'DayRevenue') {
           <mat-form-field subscriptSizing="dynamic">
             <mat-label>Takings of · إيراد يوم</mat-label>
             <input matInput type="date" [(ngModel)]="revenueDate" (ngModelChange)="touch()" [max]="today" aria-label="Takings of" />
           </mat-form-field>
         }
-        <div class="paper">
+        <div class="paper" [hidden]="!!correcting()">
           <input #file type="file" accept="image/jpeg,image/png,image/webp,application/pdf" hidden (change)="attach(file)" />
           @if (paper(); as p) {
             <button mat-button (click)="viewPaper(invoiceId, p)"><mat-icon>{{ icon(p) }}</mat-icon> {{ p }}</button>
@@ -171,10 +239,17 @@ import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPay
       <app-invoice-lines [editor]="editor" />
       <div class="toolbar actions">
         <span class="spacer"></span>
-        <button mat-button (click)="reset()" [disabled]="saving()">Start again</button>
-        <button mat-flat-button (click)="save()" [disabled]="!ready() || saving()">
-          <mat-icon>fact_check</mat-icon> Save &amp; review
-        </button>
+        @if (correcting(); as original) {
+          <a mat-button [routerLink]="['/costing/purchases/invoices', original.id]">Cancel</a>
+          <button mat-flat-button (click)="reviewCorrection()" [disabled]="!ready() || saving()">
+            <mat-icon>fact_check</mat-icon> Review changes <span class="inline-ar">مراجعة التعديل</span>
+          </button>
+        } @else {
+          <button mat-button (click)="reset()" [disabled]="saving()">Start again</button>
+          <button mat-flat-button (click)="save()" [disabled]="!ready() || saving()">
+            <mat-icon>fact_check</mat-icon> Save &amp; review
+          </button>
+        }
       </div>
       } @else {
         <!-- A supplier paid with no invoice: no lines, no stock. -->
@@ -283,6 +358,24 @@ import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPay
     .mode {
       margin-bottom: 12px;
     }
+    .correcting {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--till-warn) 14%, transparent);
+    }
+    .before-treasury {
+      align-self: center;
+    }
+    .reason {
+      width: min(100%, 420px);
+    }
+    .changes td:first-child {
+      font-weight: 500;
+    }
     .ask {
       padding: 8px 10px;
       border-radius: 8px;
@@ -308,6 +401,7 @@ export class PurchasesPage {
   private readonly api = inject(CostingApi);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
+  private readonly router = inject(Router);
   protected readonly approvals = inject(Approvals);
   private readonly businessDay = inject(BusinessDay);
   private readonly catalog = inject(PurchaseCatalog);
@@ -379,6 +473,16 @@ export class PurchasesPage {
     return this.editor.ready() && !this.supplierUnresolved() && this.paymentReady();
   });
 
+  // ?correct=: the posted invoice to correct.
+  readonly correct = input<string>();
+  // The posted invoice being corrected, opened here as it was entered; null for a new invoice.
+  protected readonly correcting = signal<PurchaseInvoice | null>(null);
+  // Its changes, reviewed before they are sent: the same lines the manager sees.
+  protected readonly correctionPreview = signal<InvoiceCorrectionPreview | null>(null);
+  // Why, for the manager who approves it.
+  protected reason = '';
+  private correctionRequestId = crypto.randomUUID();
+
   // What is entered: a purchase invoice, or a supplier paid with no invoice (سداد مورد). Each keeps
   // what was typed into it while the other is on screen.
   protected readonly mode = signal<'invoice' | 'payment'>('invoice');
@@ -408,6 +512,97 @@ export class PurchasesPage {
 
   constructor() {
     void this.load();
+    effect(() => {
+      const id = this.correct();
+      untracked(() => void this.openCorrection(id));
+    });
+  }
+
+  // "Invoice F-1 · Nile Farms of 12 Oct".
+  protected invoiceName(invoice: PurchaseInvoice): string {
+    const date = invoice.invoiceDate ? new Date(`${invoice.invoiceDate}T00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : null;
+    return (
+      (invoice.supplierInvoiceNumber ? `Invoice ${invoice.supplierInvoiceNumber}` : 'The invoice') +
+      (invoice.supplierName ? ` · ${invoice.supplierName}` : '') +
+      (date ? ` of ${date}` : '')
+    );
+  }
+
+  // The changes, checked by the server as they will be when sent.
+  protected async reviewCorrection(): Promise<void> {
+    const original = this.correcting();
+    if (!original || !this.ready()) {
+      return;
+    }
+    this.saving.set(true);
+    try {
+      this.correctionPreview.set(await firstValueFrom(this.api.previewInvoiceCorrection(original.id, this.correction())));
+    } catch (error) {
+      this.notify.error(error, 'The changes could not be checked.');
+    } finally {
+      this.saving.set(false);
+    }
+  }
+
+  // Done at once for a manager, to the corrected invoice; asked of one for anyone else, back to the
+  // invoice as it is.
+  protected async sendCorrection(): Promise<void> {
+    const original = this.correcting();
+    if (!original) {
+      return;
+    }
+    this.saving.set(true);
+    try {
+      const result = await firstValueFrom(this.api.correctPurchaseInvoice(original.id, this.correction()));
+      if (result.outcome === 'Requested') {
+        await this.approvals.requested(result);
+        await this.router.navigate(['/costing/purchases/invoices', original.id]);
+      } else {
+        this.notify.info(`Corrected: ${result.request.summary}.`);
+        await this.router.navigate(['/costing/purchases/invoices', this.invoiceId]);
+      }
+    } catch (error) {
+      this.notify.error(error, 'The correction could not be saved.');
+    } finally {
+      this.saving.set(false);
+    }
+  }
+
+  // The invoice as entered, opened to be corrected, with a new id for the invoice replacing it.
+  private async openCorrection(id: string | undefined): Promise<void> {
+    if (!id) {
+      // Left for a new invoice: an empty one.
+      if (this.correcting()) {
+        this.correcting.set(null);
+        this.correctionPreview.set(null);
+        this.reset();
+      }
+      return;
+    }
+    try {
+      const invoice = await firstValueFrom(this.api.purchaseInvoice(id));
+      if (!invoice || invoice.status !== 'Posted') {
+        this.notify.error(null, invoice?.replacedBy ? 'This invoice has already been corrected: correct the invoice that replaced it.' : 'Only a posted invoice is corrected.');
+        await this.router.navigate(['/costing/purchases/new']);
+        return;
+      }
+      this.reset();
+      this.supplier.set(invoice.supplierId, invoice.supplierName);
+      this.supplierInvoiceNumber = invoice.supplierInvoiceNumber ?? '';
+      this.invoiceDate = invoice.invoiceDate ?? PurchasesPage.today();
+      this.paymentMethod = invoice.paymentMethod ?? 'BeforeTreasury';
+      this.revenueDate = invoice.revenueDate ?? this.today;
+      this.editor.fill(invoice.lines);
+      this.correctionRequestId = crypto.randomUUID();
+      this.correcting.set(invoice);
+      this.touch();
+    } catch (error) {
+      this.notify.error(error, 'The invoice could not be opened.');
+    }
+  }
+
+  private correction(): InvoiceCorrectionInput {
+    return { requestId: this.correctionRequestId, newInvoiceId: this.invoiceId, ...this.draft(), reason: this.reason.trim() || null };
   }
 
   // What the chosen supplier is owed now.
@@ -552,6 +747,7 @@ export class PurchasesPage {
   protected paymentReady(): boolean {
     return (
       this.paymentMethod !== null &&
+      (this.paymentMethod !== 'BeforeTreasury' || !!this.correcting()) &&
       (this.paymentMethod !== 'Credit' || this.supplierId !== null) &&
       (this.paymentMethod !== 'DayRevenue' || !!this.revenueDate)
     );

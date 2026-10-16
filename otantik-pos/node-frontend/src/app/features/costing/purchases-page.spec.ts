@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { MatDialog } from '@angular/material/dialog';
-import { provideRouter } from '@angular/router';
+import { Router, provideRouter } from '@angular/router';
 import { of, throwError } from 'rxjs';
 import {
   CostingApi,
@@ -781,5 +781,135 @@ describe('paying a supplier from the new invoice screen', () => {
     await fixture.whenStable();
 
     expect(page['lines']()[0]).toMatchObject({ rawMaterialId: 'tomatoes', cost: 100 });
+  });
+});
+
+// A posted invoice corrected (تعديل فاتورة): opened on the new invoice screen as entered, its
+// changes reviewed as the server sees them, then saved for a manager or sent for approval.
+describe('correcting a posted invoice', () => {
+  const posted = asInvoice(
+    'inv-1',
+    {
+      supplierId: 'nile', supplierInvoiceNumber: 'F-1', invoiceDate: '2026-10-12', paymentMethod: 'Safe',
+      lines: [{ itemType: 'Inventory', rawMaterialId: 'tomatoes', expenseItemId: null, enteredQuantity: 5, unitLabel: 'kg', unitSize: 1000, cost: 100 }],
+    },
+    'Posted',
+  );
+  const purchaseInvoice = vi.fn();
+  const previewInvoiceCorrection = vi.fn();
+  const correctPurchaseInvoice = vi.fn();
+  const notify = { info: vi.fn(), error: vi.fn() };
+  const approvals = { canApprove: vi.fn(() => true), requested: vi.fn(), refresh: vi.fn() };
+  const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
+  const preview = {
+    summary: 'Invoice F-1 · Nile Farms corrected · L.E 100.00 → L.E 120.00',
+    changes: [
+      { label: 'Tomatoes', before: '5 kg · L.E 100.00', after: '6 kg · L.E 120.00' },
+      { label: 'Total', before: 'L.E 100.00', after: 'L.E 120.00' },
+    ],
+  };
+
+  async function render(invoice: PurchaseInvoice = posted) {
+    purchaseInvoice.mockReturnValue(of(invoice));
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([]),
+        {
+          provide: CostingApi,
+          useValue: {
+            materials: () => of(all),
+            purchaseInvoices: () => of([]),
+            purchaseInvoice,
+            suppliers: () => of([nileFarms, deltaOils]),
+            expenseItems: () => of([]),
+            businessToday: () => of({ today: '2026-10-15' }),
+            supplierBalances: () => of([]),
+            previewInvoiceCorrection,
+            correctPurchaseInvoice,
+          },
+        },
+        { provide: Approvals, useValue: approvals },
+        { provide: MatDialog, useValue: { open: vi.fn() } },
+        { provide: NotifyService, useValue: notify },
+      ],
+    });
+    const fixture = TestBed.createComponent(PurchasesPage);
+    fixture.componentRef.setInput('correct', invoice.id);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    return { fixture, el: fixture.nativeElement as HTMLElement, page: fixture.componentInstance as unknown as Record<string, any>, navigate };
+  }
+
+  beforeEach(() => {
+    previewInvoiceCorrection.mockReset().mockReturnValue(of(preview));
+    correctPurchaseInvoice.mockReset();
+    notify.info.mockReset();
+    approvals.canApprove.mockReturnValue(true);
+    approvals.requested.mockReset();
+  });
+
+  it('opens the invoice as it was entered, as a correction: no drafts, no paper, no switching to a payment', async () => {
+    const { el, page } = await render();
+
+    expect(purchaseInvoice).toHaveBeenCalledWith('inv-1');
+    expect([page['supplierId'], page['supplierInvoiceNumber'], page['invoiceDate'], page['paymentMethod']]).toEqual(['nile', 'F-1', '2026-10-12', 'Safe']);
+    expect(page['lines']()[0]).toMatchObject({ rawMaterialId: 'tomatoes', quantity: 5, cost: 100 });
+    // A new invoice replaces it: a new id.
+    expect(page['invoiceId']).not.toBe('inv-1');
+    expect(text(el.querySelector('.correcting')!)).toContain('Correcting Invoice F-1 · Nile Farms of 12 Oct, L.E 100.00.');
+    expect(el.querySelector('mat-button-toggle-group')).toBeNull();
+    expect((el.querySelector('.paper') as HTMLElement).hidden).toBe(true);
+  });
+
+  it('reviews the changes as the server sees them, then saves the correction and goes to the new invoice', async () => {
+    const { fixture, el, page, navigate } = await render();
+    page['lines'].update((lines: Record<string, unknown>[]) => [{ ...lines[0], quantity: 6, cost: 120 }]);
+    page['touch']();
+
+    await page['reviewCorrection']();
+    fixture.detectChanges();
+    const sent = previewInvoiceCorrection.mock.lastCall!;
+    expect(sent[0]).toBe('inv-1');
+    expect(sent[1]).toMatchObject({ newInvoiceId: page['invoiceId'], supplierId: 'nile', paymentMethod: 'Safe', reason: null });
+    expect(sent[1].lines[0]).toMatchObject({ rawMaterialId: 'tomatoes', enteredQuantity: 6, cost: 120 });
+    expect([...el.querySelectorAll('.changes tbody tr')].map((r) => [...r.querySelectorAll('td')].map(text))).toEqual([
+      ['Tomatoes', '5 kg · L.E 100.00', '6 kg · L.E 120.00'],
+      ['Total', 'L.E 100.00', 'L.E 120.00'],
+    ]);
+
+    correctPurchaseInvoice.mockReturnValue(of({ outcome: 'Applied', request: { summary: preview.summary } }));
+    await page['sendCorrection']();
+
+    expect(correctPurchaseInvoice.mock.lastCall![1].requestId).toBe(sent[1].requestId);
+    expect(notify.info).toHaveBeenCalledWith(`Corrected: ${preview.summary}.`);
+    expect(navigate).toHaveBeenCalledWith(['/costing/purchases/invoices', page['invoiceId']]);
+  });
+
+  it('sends an accountant’s correction for approval, with the reason, and goes back to the invoice as it is', async () => {
+    approvals.canApprove.mockReturnValue(false);
+    const { fixture, el, page, navigate } = await render();
+    page['invoiceDate'] = '2026-10-11';
+    page['touch']();
+    await page['reviewCorrection']();
+    fixture.detectChanges();
+    expect([...el.querySelectorAll('button')].map(text)).toContain('send Send for approval إرسال للموافقة');
+    page['reason'] = ' Wrong day ';
+    const asked = { outcome: 'Requested', request: { id: 'r' } };
+    correctPurchaseInvoice.mockReturnValue(of(asked));
+
+    await page['sendCorrection']();
+
+    expect(correctPurchaseInvoice.mock.lastCall![1]).toMatchObject({ invoiceDate: '2026-10-11', reason: 'Wrong day' });
+    expect(approvals.requested).toHaveBeenCalledWith(asked);
+    expect(navigate).toHaveBeenCalledWith(['/costing/purchases/invoices', 'inv-1']);
+  });
+
+  it('keeps an invoice from before the treasury so', async () => {
+    const { el, page } = await render({ ...posted, id: 'old', paymentMethod: 'BeforeTreasury' });
+
+    expect(page['paymentMethod']).toBe('BeforeTreasury');
+    expect(text(el.querySelector('.before-treasury')!)).toContain('Before the treasury');
+    expect(page['ready']()).toBe(true);
   });
 });

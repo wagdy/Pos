@@ -26,13 +26,16 @@ export const consequences: Record<ApprovalModule, string> = {
 // The posted records, which are voided rather than deleted.
 export const voids: ReadonlySet<ApprovalModule> = new Set(['PurchaseInvoice', 'Waste', 'StockCount', 'ProductionOrder', 'Treasury']);
 
-// What approving a new or changed prep item or batch does, for the manager deciding it.
+// What approving a new or changed record does, for the manager deciding it.
 export function approvalEffect(module: ApprovalModule, action: ApprovalAction): string {
   if (action === 'Delete') {
     return consequences[module];
   }
   if (module === 'Treasury') {
     return 'The cash moves now: into the safe, or out of it (or out of a day’s takings), as entered.';
+  }
+  if (module === 'PurchaseInvoice') {
+    return 'The invoice is voided and the corrected one posted in its place: its stock, cash and supplier’s account are redone, at the average costs at this moment.';
   }
   if (module === 'ProductionOrder') {
     return action === 'Create'

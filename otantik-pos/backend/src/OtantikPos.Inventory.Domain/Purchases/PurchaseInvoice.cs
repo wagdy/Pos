@@ -88,6 +88,11 @@ public sealed class PurchaseInvoice : AggregateRoot
     public DateTime? VoidedAtUtc { get; private set; }
     public string? VoidedBy { get; private set; }
 
+    // A correction (تعديل فاتورة): the posted invoice it corrects (RevisionOf), voided and replaced
+    // by it; and on that one, the invoice that replaced it (ReplacedBy). Nothing posted is rewritten.
+    public Guid? RevisionOf { get; private set; }
+    public Guid? ReplacedBy { get; private set; }
+
     // The attached photo or scan, described; its bytes are kept apart.
     public string? AttachmentFileName { get; private set; }
     public string? AttachmentContentType { get; private set; }
@@ -102,6 +107,19 @@ public sealed class PurchaseInvoice : AggregateRoot
     public decimal Total => _lines.Sum(l => l.Cost ?? 0);
     public decimal InventoryTotal => _lines.Where(l => l.ItemType == PurchaseItemType.Inventory).Sum(l => l.Cost ?? 0);
     public decimal ExpenseTotal => _lines.Where(l => l.ItemType == PurchaseItemType.Expense).Sum(l => l.Cost ?? 0);
+
+    // This draft corrects a posted invoice. An invoice from before the treasury is corrected as one
+    // too: the caller keeps it so, and it touches neither the safe nor a supplier's account.
+    public void Corrects(PurchaseInvoice original)
+    {
+        if (Status != PurchaseInvoiceStatus.Draft)
+            throw new DomainException("Only a new invoice corrects another.");
+        if (original.Status != PurchaseInvoiceStatus.Posted)
+            throw new DomainException(original.ReplacedBy is null
+                ? "Only a posted invoice is corrected."
+                : "This invoice has already been corrected: correct the invoice that replaced it.");
+        RevisionOf = original.Id;
+    }
 
     // Replaces the draft's details and lines. Each line is as written on the invoice: a quantity
     // in a unit that holds UnitSize of the material's own (5 in kg of 1000 g), or of an expense.
@@ -126,7 +144,7 @@ public sealed class PurchaseInvoice : AggregateRoot
         if (supplierInvoiceNumber?.Trim().Length > 64)
             throw new DomainException("Keep the supplier's invoice number under 64 characters.");
 
-        if (paymentMethod is { } method && (!Enum.IsDefined(method) || method == PurchasePaymentMethod.BeforeTreasury))
+        if (paymentMethod is { } method && (!Enum.IsDefined(method) || (method == PurchasePaymentMethod.BeforeTreasury && RevisionOf is null)))
             throw new DomainException("Choose how the invoice is paid: from the safe, from a day's takings, or on credit.");
 
         SupplierId = supplierId;
@@ -143,11 +161,7 @@ public sealed class PurchaseInvoice : AggregateRoot
     // average. Expense lines take nothing in: posted, what they cost is the record.
     public IReadOnlyList<StockMovement> Post(IReadOnlyDictionary<Guid, RawMaterial> materials, string postedBy)
     {
-        if (Status != PurchaseInvoiceStatus.Draft)
-            throw new DomainException($"This invoice has already been {Status.ToString().ToLowerInvariant()}.");
-        if (_lines.Count == 0)
-            throw new DomainException("Put at least one line on the invoice before posting it.");
-        EnsurePayable(PaymentMethod, RevenueDate);
+        EnsurePostable();
 
         var movements = _lines
             .Where(l => l.ItemType == PurchaseItemType.Inventory)
@@ -158,6 +172,18 @@ public sealed class PurchaseInvoice : AggregateRoot
         PostedAtUtc = DateTime.UtcNow;
         PostedBy = postedBy;
         return movements;
+    }
+
+    // What would stop it being posted: checked again as it is.
+    public void EnsurePostable()
+    {
+        if (Status != PurchaseInvoiceStatus.Draft)
+            throw new DomainException($"This invoice has already been {Status.ToString().ToLowerInvariant()}.");
+        if (_lines.Count == 0)
+            throw new DomainException("Put at least one line on the invoice before posting it.");
+        if (PaymentMethod == PurchasePaymentMethod.BeforeTreasury && RevisionOf is not null)
+            return;
+        EnsurePayable(PaymentMethod, RevenueDate);
     }
 
     // How a posted invoice is paid now: after a cash payment was rejected or voided, it is paid
@@ -187,8 +213,9 @@ public sealed class PurchaseInvoice : AggregateRoot
         }
     }
 
-    // Marks a posted invoice void. The caller reverses its stock entries in the same unit of work.
-    public void Void(string voidedBy)
+    // Marks a posted invoice void; replacedBy, the invoice that corrects it. The caller reverses
+    // its stock entries in the same unit of work.
+    public void Void(string voidedBy, Guid? replacedBy = null)
     {
         if (Status == PurchaseInvoiceStatus.Voided)
             return;
@@ -197,6 +224,7 @@ public sealed class PurchaseInvoice : AggregateRoot
         Status = PurchaseInvoiceStatus.Voided;
         VoidedAtUtc = DateTime.UtcNow;
         VoidedBy = voidedBy;
+        ReplacedBy = replacedBy;
     }
 
     // The paper, photographed or scanned. On a draft it can be replaced; once the invoice is

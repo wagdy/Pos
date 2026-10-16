@@ -148,6 +148,9 @@ public class ApprovalTests
         Assert.Equal((ApprovalAction.Update, ApprovalStatus.Pending, "12 kg"), (asked.Action, asked.Status, asked.Changes.Single().After));
         // A deletion holds no change.
         Assert.Null(ApprovalRequest.Ask(Guid.NewGuid(), ApprovalModule.PrepItem, Guid.NewGuid(), "Prep item Dough", null, "staff-1", "Mona").Payload);
+        // A posted invoice is corrected through one: a new invoice is not asked for.
+        Assert.Equal(ApprovalStatus.Pending, ApprovalRequest.AskToChange(
+            Guid.NewGuid(), ApprovalModule.PurchaseInvoice, ApprovalAction.Update, Guid.NewGuid(), "Invoice F-1 corrected", [], "{}", null, "staff-1", "Mona").Status);
     }
 
     [Fact]

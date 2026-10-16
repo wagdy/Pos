@@ -86,10 +86,14 @@ public sealed class ApprovalRequest : AggregateRoot
     {
         if (!Enum.IsDefined(module) || !Enum.IsDefined(action))
             throw new DomainException("Say what is to be done.");
-        if (action != ApprovalAction.Delete && module is not (ApprovalModule.PrepItem or ApprovalModule.ProductionOrder or ApprovalModule.Treasury))
-            throw new DomainException("Only prep items, production orders and safe entries are added or changed through an approval.");
+        if (action != ApprovalAction.Delete
+            && module is not (ApprovalModule.PrepItem or ApprovalModule.ProductionOrder or ApprovalModule.Treasury or ApprovalModule.PurchaseInvoice))
+            throw new DomainException("Only prep items, production orders, safe entries and invoices are added or changed through an approval.");
         if (action == ApprovalAction.Update && module == ApprovalModule.Treasury)
             throw new DomainException("A safe entry is not changed: void it and enter it again.");
+        // An invoice is only corrected through one: a new one is entered as it is.
+        if (action == ApprovalAction.Create && module == ApprovalModule.PurchaseInvoice)
+            throw new DomainException("A new one is entered as it is, not asked for.");
         if (action != ApprovalAction.Delete && string.IsNullOrWhiteSpace(payload))
             throw new DomainException("Say what the change is.");
         if (string.IsNullOrWhiteSpace(summary))
