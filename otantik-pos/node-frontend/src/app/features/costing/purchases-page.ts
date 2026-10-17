@@ -1,5 +1,5 @@
 import { DatePipe } from '@angular/common';
-import { Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { Component, ElementRef, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { MatButtonModule } from '@angular/material/button';
@@ -32,10 +32,11 @@ import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from './approvals';
 import { BusinessDay } from './financials';
+import { FormChecks, FormProblem } from './form-checks';
 import { AddNew, InvoiceLine, InvoiceLines, InvoiceLinesTable, InvoiceSupplier, PurchaseCatalog } from './invoice-lines';
 import { paperIcon, viewInvoicePaper } from './invoice-paper';
 import { InvoiceView } from './invoice-view';
-import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPayment } from './supplier-payment-fields';
+import { SupplierPaymentEntry, SupplierPaymentFields, newSupplierPayment, paymentProblems } from './supplier-payment-fields';
 
 // A supplier's invoice, in two steps. Entered as it is written (who from, their number and date,
 // each line in the unit billed, and a photo of the paper), then saved as a draft and reviewed;
@@ -174,7 +175,7 @@ import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPay
         <mat-form-field subscriptSizing="dynamic" class="supplier">
           <mat-label>Supplier · المورد</mat-label>
           <input matInput [(ngModel)]="supplierEntry" (ngModelChange)="supplierEntered($event)" [matAutocomplete]="suppliersList"
-            placeholder="Choose or type a name" aria-label="Supplier" />
+            placeholder="Choose or type a name" aria-label="Supplier" [errorStateMatcher]="checks.field('Supplier')" />
           <mat-icon matSuffix>arrow_drop_down</mat-icon>
           <mat-autocomplete #suppliersList="matAutocomplete" [displayWith]="supplierLabel">
             @for (s of supplierMatches(); track s.id) {
@@ -189,6 +190,7 @@ import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPay
           @if (supplierUnresolved()) {
             <mat-hint class="warn-text">Choose the supplier from the list, or add it.</mat-hint>
           }
+          <mat-error>{{ checks.message('Supplier') }}</mat-error>
         </mat-form-field>
         <mat-form-field subscriptSizing="dynamic">
           <mat-label>Invoice no. · رقم الفاتورة</mat-label>
@@ -203,7 +205,7 @@ import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPay
         } @else {
         <mat-form-field subscriptSizing="dynamic" class="payment">
           <mat-label>Paid · طريقة الدفع</mat-label>
-          <mat-select [(ngModel)]="paymentMethod" (ngModelChange)="touch()" aria-label="How it is paid" required>
+          <mat-select [(ngModel)]="paymentMethod" (ngModelChange)="touch()" aria-label="How it is paid" required [errorStateMatcher]="checks.field('How it is paid')">
             @for (m of paymentMethods; track m) {
               <mat-option [value]="m">{{ paymentLabels[m].en }} · {{ paymentLabels[m].ar }}</mat-option>
             }
@@ -215,12 +217,15 @@ import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPay
           } @else if (!paymentMethod) {
             <mat-hint>Required to post it.</mat-hint>
           }
+          <mat-error>{{ checks.message('How it is paid') }}</mat-error>
         </mat-form-field>
         }
         @if (paymentMethod === 'DayRevenue') {
           <mat-form-field subscriptSizing="dynamic">
             <mat-label>Takings of · إيراد يوم</mat-label>
-            <input matInput type="date" [(ngModel)]="revenueDate" (ngModelChange)="touch()" [max]="today" aria-label="Takings of" />
+            <input matInput type="date" [(ngModel)]="revenueDate" (ngModelChange)="touch()" [max]="today" aria-label="Takings of"
+              [errorStateMatcher]="checks.field('Takings of')" />
+            <mat-error>{{ checks.message('Takings of') }}</mat-error>
           </mat-form-field>
         }
         <div class="paper" [hidden]="!!correcting()">
@@ -236,17 +241,17 @@ import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPay
       @if (materials().length === 0 && expenses().length === 0) {
         <p class="note">No raw materials or expense items yet: type one's name on a line to add it.</p>
       }
-      <app-invoice-lines [editor]="editor" />
+      <app-invoice-lines [editor]="editor" [checks]="checks" />
       <div class="toolbar actions">
         <span class="spacer"></span>
         @if (correcting(); as original) {
           <a mat-button [routerLink]="['/costing/purchases/invoices', original.id]">Cancel</a>
-          <button mat-flat-button (click)="reviewCorrection()" [disabled]="!ready() || saving()">
+          <button mat-flat-button (click)="reviewCorrection()" [disabled]="saving()">
             <mat-icon>fact_check</mat-icon> Review changes <span class="inline-ar">مراجعة التعديل</span>
           </button>
         } @else {
           <button mat-button (click)="reset()" [disabled]="saving()">Start again</button>
-          <button mat-flat-button (click)="save()" [disabled]="!ready() || saving()">
+          <button mat-flat-button (click)="save()" [disabled]="saving()">
             <mat-icon>fact_check</mat-icon> Save &amp; review
           </button>
         }
@@ -258,20 +263,25 @@ import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPay
           by it, and no stock moves. <span class="inline-ar">سداد مورد بدون فاتورة.</span>
         </p>
         <div class="header">
-          <app-supplier-payment-fields [payment]="payment()" [suppliers]="owedSuppliers()" [owed]="owedNow()" (changed)="paymentEdited()" />
+          <app-supplier-payment-fields [payment]="payment()" [suppliers]="owedSuppliers()" [owed]="owedNow()" [checks]="paymentChecks"
+            (changed)="paymentEdited()" />
           <mat-form-field subscriptSizing="dynamic" class="payment">
             <mat-label>Paid · طريقة الدفع</mat-label>
-            <mat-select [(ngModel)]="payMethod" (ngModelChange)="paymentEdited()" aria-label="How the supplier is paid" required>
+            <mat-select [(ngModel)]="payMethod" (ngModelChange)="paymentEdited()" aria-label="How the supplier is paid" required
+              [errorStateMatcher]="paymentChecks.field('How the supplier is paid')">
               @for (m of cashMethods; track m) {
                 <mat-option [value]="m">{{ paymentLabels[m].en }} · {{ paymentLabels[m].ar }}</mat-option>
               }
             </mat-select>
             <mat-hint>A payment is cash: never on credit.</mat-hint>
+            <mat-error>{{ paymentChecks.message('How the supplier is paid') }}</mat-error>
           </mat-form-field>
           @if (payMethod === 'DayRevenue') {
             <mat-form-field subscriptSizing="dynamic">
               <mat-label>Takings of · إيراد يوم</mat-label>
-              <input matInput type="date" [(ngModel)]="payRevenueDate" (ngModelChange)="paymentEdited()" [max]="today" aria-label="Paid from the takings of" />
+              <input matInput type="date" [(ngModel)]="payRevenueDate" (ngModelChange)="paymentEdited()" [max]="today" aria-label="Paid from the takings of"
+                [errorStateMatcher]="paymentChecks.field('Paid from the takings of')" />
+              <mat-error>{{ paymentChecks.message('Paid from the takings of') }}</mat-error>
             </mat-form-field>
           }
         </div>
@@ -281,7 +291,7 @@ import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPay
         <div class="toolbar actions">
           <span class="spacer"></span>
           <button mat-button (click)="newPayment()" [disabled]="saving()">Start again</button>
-          <button mat-flat-button (click)="payNow()" [disabled]="!supplierPaymentReady() || saving()">
+          <button mat-flat-button (click)="payNow()" [disabled]="saving()">
             <mat-icon>payments</mat-icon> Pay the supplier <span class="inline-ar">سداد</span>
           </button>
         </div>
@@ -405,6 +415,7 @@ export class PurchasesPage {
   protected readonly approvals = inject(Approvals);
   private readonly businessDay = inject(BusinessDay);
   private readonly catalog = inject(PurchaseCatalog);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
   // The invoice's lines and its supplier, as entered: shared with the daily batch's invoices.
   protected readonly editor = new InvoiceLines(this.catalog);
@@ -467,11 +478,25 @@ export class PurchasesPage {
   protected readonly totals = this.editor.totals;
 
   // The lines ready; a supplier name typed but not chosen or added would be lost, so it holds the
-  // save too; and the payment chosen with what it needs.
-  protected readonly ready = computed(() => {
+  // save too; and the payment chosen with what it needs. Each said by its field.
+  protected readonly problems = computed((): FormProblem[] => {
     this.supplier.version();
-    return this.editor.ready() && !this.supplierUnresolved() && this.paymentReady();
+    const found: FormProblem[] = [];
+    if (this.supplierUnresolved()) {
+      found.push({ where: 'Supplier', what: 'choose it from the list, or add it', field: 'Supplier' });
+    } else if (this.paymentMethod === 'Credit' && this.supplierId === null) {
+      found.push({ where: 'Supplier', what: 'on credit, choose who it is owed to', field: 'Supplier' });
+    }
+    if (this.paymentMethod === null || (this.paymentMethod === 'BeforeTreasury' && !this.correcting())) {
+      found.push({ where: 'Paid', what: 'choose how it is paid', field: 'How it is paid' });
+    } else if (this.paymentMethod === 'DayRevenue' && !this.revenueDate) {
+      found.push({ where: 'Takings of', what: 'choose the day', field: 'Takings of' });
+    }
+    return [...found, ...this.editor.problems()];
   });
+  protected readonly ready = computed(() => this.problems().length === 0);
+  // Save and Review changes are never greyed out: clicked with something missing, they say what.
+  protected readonly checks = new FormChecks(() => this.problems());
 
   // ?correct=: the posted invoice to correct.
   readonly correct = input<string>();
@@ -498,17 +523,18 @@ export class PurchasesPage {
   private readonly paymentVersion = signal(0);
 
   // A supplier owed, an amount no more than that, and how it is paid.
-  protected readonly supplierPaymentReady = computed(() => {
+  protected readonly payProblems = computed((): FormProblem[] => {
     this.paymentVersion();
-    const p = this.payment();
-    return (
-      !!p.supplierId &&
-      (p.amount ?? 0) > 0 &&
-      !isOverOwed(p, this.owedNow()) &&
-      this.payMethod !== null &&
-      (this.payMethod !== 'DayRevenue' || !!this.payRevenueDate)
-    );
+    const found = paymentProblems(this.payment(), this.owedNow(), 'Supplier payment');
+    if (this.payMethod === null) {
+      found.push({ where: 'Paid', what: 'choose how the supplier is paid', field: 'How the supplier is paid' });
+    } else if (this.payMethod === 'DayRevenue' && !this.payRevenueDate) {
+      found.push({ where: 'Takings of', what: 'choose the day', field: 'Paid from the takings of' });
+    }
+    return found;
   });
+  protected readonly supplierPaymentReady = computed(() => this.payProblems().length === 0);
+  protected readonly paymentChecks = new FormChecks(() => this.payProblems());
 
   constructor() {
     void this.load();
@@ -531,7 +557,7 @@ export class PurchasesPage {
   // The changes, checked by the server as they will be when sent.
   protected async reviewCorrection(): Promise<void> {
     const original = this.correcting();
-    if (!original || !this.ready()) {
+    if (!original || this.saving() || !this.checks.passed(this.notify, this.host.nativeElement)) {
       return;
     }
     this.saving.set(true);
@@ -616,6 +642,7 @@ export class PurchasesPage {
   }
 
   protected newPayment(): void {
+    this.paymentChecks.clear();
     this.payment.set(newSupplierPayment());
     this.payMethod = null;
     this.payRevenueDate = this.today;
@@ -626,7 +653,7 @@ export class PurchasesPage {
   // here, so a retry after a lost answer pays once.
   protected async payNow(): Promise<void> {
     const p = this.payment();
-    if (!this.supplierPaymentReady() || !p.supplierId || p.amount === null) {
+    if (this.saving() || !this.paymentChecks.passed(this.notify, this.host.nativeElement) || !p.supplierId || p.amount === null) {
       return;
     }
     this.saving.set(true);
@@ -743,18 +770,9 @@ export class PurchasesPage {
     this.editor.remove(index);
   }
 
-  // Chosen, and what it needs: on credit, a supplier; from a day's takings, the day.
-  protected paymentReady(): boolean {
-    return (
-      this.paymentMethod !== null &&
-      (this.paymentMethod !== 'BeforeTreasury' || !!this.correcting()) &&
-      (this.paymentMethod !== 'Credit' || this.supplierId !== null) &&
-      (this.paymentMethod !== 'DayRevenue' || !!this.revenueDate)
-    );
-  }
-
   // A new, empty invoice. The one on screen stays a draft if it was saved.
   protected reset(): void {
+    this.checks.clear();
     this.editor.reset();
     this.supplier.set(null);
     this.supplierInvoiceNumber = '';
@@ -768,7 +786,7 @@ export class PurchasesPage {
 
   // Step one done: saved as a draft, and shown for review. No stock moves.
   protected async save(): Promise<void> {
-    if (!this.ready()) {
+    if (this.saving() || !this.checks.passed(this.notify, this.host.nativeElement)) {
       return;
     }
     this.saving.set(true);

@@ -69,6 +69,62 @@ describe('a day’s purchases entered together', () => {
     approvals.canApprove.mockReturnValue(true);
   });
 
+  it('never greys out Submit batch: clicked with something missing, it sends nothing, marks each field and says what', async () => {
+    const { fixture, el, page } = await render();
+    notify.error.mockReset();
+    // Invoice 1 has its supplier but no quantity; invoice 2 nothing; a payment with no amount.
+    fill(page['blocks']()[0], nile, tomatoes, 5, 100);
+    page['blocks']()[0].editor.lines()[0].quantity = null;
+    page['addBlock']();
+    page['addPayment']();
+    page['payments']()[0].supplierId = 'nile';
+    page['changed']();
+    fixture.detectChanges();
+    const submit = [...el.querySelectorAll<HTMLButtonElement>('button')].find((b) => text(b).includes('Submit batch'))!;
+    expect(submit.disabled).toBe(false);
+
+    submit.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(postPurchaseBatch).not.toHaveBeenCalled();
+    expect(notify.error).toHaveBeenCalledWith(
+      null,
+      'Cannot submit. Paid: choose how they were paid. Invoice 1, line 1: enter the quantity. Invoice 2, line 1: choose the item. ' +
+        'And 2 more, marked in red.',
+    );
+    expect([...el.querySelectorAll('mat-error')].map(text)).toEqual([
+      'Choose how they were paid', 'Enter the quantity', 'Choose the item', 'Enter the quantity', 'Enter the amount',
+    ]);
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('How they are paid');
+    expect(el.querySelector('[aria-label="Supplier payment 1, amount"]')!.closest('mat-form-field')!.classList).toContain('mat-form-field-invalid');
+
+    // Put right, it goes.
+    page['blocks']()[0].editor.lines()[0].quantity = 5;
+    page['blocks']()[0].editor.touch();
+    page['removeBlock'](1);
+    page['payments']()[0].amount = 300;
+    page['paymentMethod'] = 'Safe';
+    page['changed']();
+    fixture.detectChanges();
+    expect(el.querySelectorAll('mat-error').length).toBe(0);
+    postPurchaseBatch.mockReturnValue(of({ invoices: [posted('i1', nile, 100, 'Paid')], payments: [] }));
+    submit.click();
+    await fixture.whenStable();
+    expect(postPurchaseBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('unmarks everything when the batch is started again', async () => {
+    const { fixture, el, page } = await render();
+    await page['submit']();
+    fixture.detectChanges();
+    expect(el.querySelectorAll('mat-error').length).toBeGreaterThan(0);
+
+    page['startAgain']();
+    fixture.detectChanges();
+    expect(el.querySelectorAll('mat-error').length).toBe(0);
+  });
+
   it('is sent only once each invoice is ready and the payment chosen, every one with its supplier on credit', async () => {
     const { page } = await render();
 
@@ -179,7 +235,10 @@ describe('a day’s purchases entered together', () => {
     Object.assign(page['payments']()[1], { supplierId: 'nile', amount: 500 });
     page['changed']();
     fixture.detectChanges();
-    expect([page['owedBefore'](1), page['overOwed'](1), page['ready']()]).toEqual([400, true, false]);
+    expect([page['owedBefore'](1), page['ready']()]).toEqual([400, false]);
+    expect(page['missing']()).toEqual([
+      { where: 'Supplier payment 2', what: 'it is more than they are owed', field: 'Supplier payment 2, amount' },
+    ]);
     expect(text(el.querySelectorAll('.payment-block')[1])).toContain('Owed L.E 400.00 after the payments above');
     page['payments']()[1].amount = 400;
     page['changed']();

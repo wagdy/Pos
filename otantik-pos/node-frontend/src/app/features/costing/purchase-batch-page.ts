@@ -1,4 +1,4 @@
-import { Component, computed, effect, inject, signal } from '@angular/core';
+import { Component, ElementRef, computed, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { MatButtonModule } from '@angular/material/button';
@@ -22,8 +22,9 @@ import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from './approvals';
 import { BusinessDay } from './financials';
+import { FormChecks, FormProblem } from './form-checks';
 import { InvoiceLine, InvoiceLines, InvoiceLinesTable, InvoiceSupplier, PurchaseCatalog } from './invoice-lines';
-import { SupplierPaymentEntry, SupplierPaymentFields, isOverOwed, newSupplierPayment } from './supplier-payment-fields';
+import { SupplierPaymentEntry, SupplierPaymentFields, newSupplierPayment, paymentProblems } from './supplier-payment-fields';
 
 // One invoice of the batch: its id, made here; its supplier, number and lines, entered as on the
 // invoice screen.
@@ -151,11 +152,14 @@ const storageKey = 'otantik-till.purchase-batch';
       <div class="header">
         <mat-form-field subscriptSizing="dynamic">
           <mat-label>Invoice date · تاريخ الفواتير</mat-label>
-          <input matInput type="date" [(ngModel)]="invoiceDate" (ngModelChange)="changed()" aria-label="Invoice date" />
+          <input matInput type="date" [(ngModel)]="invoiceDate" (ngModelChange)="changed()" aria-label="Invoice date"
+            [errorStateMatcher]="checks.field('Invoice date')" />
+          <mat-error>{{ checks.message('Invoice date') }}</mat-error>
         </mat-form-field>
         <mat-form-field subscriptSizing="dynamic" class="payment">
           <mat-label>Paid · طريقة الدفع</mat-label>
-          <mat-select [(ngModel)]="paymentMethod" (ngModelChange)="changed()" aria-label="How they are paid" required>
+          <mat-select [(ngModel)]="paymentMethod" (ngModelChange)="changed()" aria-label="How they are paid" required
+            [errorStateMatcher]="checks.field('How they are paid')">
             @for (m of paymentMethods; track m) {
               <mat-option [value]="m" [disabled]="m === 'Credit' && payments().length > 0">{{ paymentLabels[m].en }} · {{ paymentLabels[m].ar }}</mat-option>
             }
@@ -167,11 +171,14 @@ const storageKey = 'otantik-till.purchase-batch';
           } @else if (!paymentMethod) {
             <mat-hint>Required to post them.</mat-hint>
           }
+          <mat-error>{{ checks.message('How they are paid') }}</mat-error>
         </mat-form-field>
         @if (paymentMethod === 'DayRevenue') {
           <mat-form-field subscriptSizing="dynamic">
             <mat-label>Takings of · إيراد يوم</mat-label>
-            <input matInput type="date" [(ngModel)]="revenueDate" (ngModelChange)="changed()" [max]="today" aria-label="Takings of" />
+            <input matInput type="date" [(ngModel)]="revenueDate" (ngModelChange)="changed()" [max]="today" aria-label="Takings of"
+              [errorStateMatcher]="checks.field('Takings of')" />
+            <mat-error>{{ checks.message('Takings of') }}</mat-error>
           </mat-form-field>
         }
       </div>
@@ -186,7 +193,8 @@ const storageKey = 'otantik-till.purchase-batch';
             <mat-form-field subscriptSizing="dynamic" class="supplier">
               <mat-label>Supplier · المورد</mat-label>
               <input matInput [(ngModel)]="block.supplier.entry" (ngModelChange)="block.supplier.entered($event); changed()" [matAutocomplete]="suppliersList"
-                placeholder="Choose or type a name" [attr.aria-label]="'Invoice ' + (i + 1) + ', supplier'" />
+                placeholder="Choose or type a name" [attr.aria-label]="'Invoice ' + (i + 1) + ', supplier'"
+                [errorStateMatcher]="checks.field('Invoice ' + (i + 1) + ', supplier')" />
               <mat-icon matSuffix>arrow_drop_down</mat-icon>
               <mat-autocomplete #suppliersList="matAutocomplete" [displayWith]="block.supplier.label">
                 @for (s of block.supplier.matches(); track s.id) {
@@ -201,6 +209,7 @@ const storageKey = 'otantik-till.purchase-batch';
               } @else if (paymentMethod === 'Credit' && !block.supplier.id) {
                 <mat-hint class="warn-text">On credit, it is owed to a supplier: choose one.</mat-hint>
               }
+              <mat-error>{{ checks.message('Invoice ' + (i + 1) + ', supplier') }}</mat-error>
             </mat-form-field>
             <mat-form-field subscriptSizing="dynamic">
               <mat-label>Invoice no. · رقم الفاتورة</mat-label>
@@ -212,7 +221,7 @@ const storageKey = 'otantik-till.purchase-batch';
               <mat-icon>delete</mat-icon>
             </button>
           </div>
-          <app-invoice-lines [editor]="block.editor" [label]="'Invoice ' + (i + 1) + ', '" />
+          <app-invoice-lines [editor]="block.editor" [label]="'Invoice ' + (i + 1) + ', '" [checks]="checks" />
         </section>
       }
 
@@ -221,7 +230,7 @@ const storageKey = 'otantik-till.purchase-batch';
           <div class="block-head">
             <h3>Supplier payment {{ j + 1 }} <span class="inline-ar">سداد مورد {{ j + 1 }}</span></h3>
             <app-supplier-payment-fields [payment]="pay" [suppliers]="owedSuppliers()" [owed]="owedBefore(j)" [afterAbove]="paidAbove(j) > 0"
-              [label]="'Supplier payment ' + (j + 1)" (changed)="changed()" />
+              [label]="'Supplier payment ' + (j + 1)" [checks]="checks" (changed)="changed()" />
             <span class="spacer"></span>
             <button mat-icon-button (click)="removePayment(j)" [attr.aria-label]="'Take supplier payment ' + (j + 1) + ' off the batch'">
               <mat-icon>delete</mat-icon>
@@ -238,7 +247,7 @@ const storageKey = 'otantik-till.purchase-batch';
         <span class="spacer"></span>
         <span class="batch-total">{{ countLabel() }} · <strong>{{ total() | money }}</strong></span>
         <button mat-button (click)="startAgain()" [disabled]="saving()">Start again</button>
-        <button mat-flat-button (click)="submit()" [disabled]="!ready() || saving()">
+        <button mat-flat-button (click)="submit()" [disabled]="saving()">
           <mat-icon>inventory</mat-icon> Submit batch <span class="inline-ar">ترحيل اليومية</span>
         </button>
       </div>
@@ -328,6 +337,7 @@ export class PurchaseBatchPage {
   private readonly businessDay = inject(BusinessDay);
   private readonly catalog = inject(PurchaseCatalog);
   protected readonly approvals = inject(Approvals);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
   protected readonly loading = signal(true);
   protected readonly saving = signal(false);
@@ -367,23 +377,41 @@ export class PurchaseBatchPage {
 
   // Every invoice ready as on the invoice screen, each with its supplier on credit; every payment
   // to a supplier owed it, never on credit; the payment chosen, and from a day's takings, the day.
-  protected readonly ready = computed(() => {
+  // Each said by its field.
+  protected readonly missing = computed((): FormProblem[] => {
     this.headerVersion();
     const blocks = this.blocks();
     const payments = this.payments();
-    return (
-      !!this.invoiceDate &&
-      this.paymentMethod !== null &&
-      (this.paymentMethod !== 'DayRevenue' || !!this.revenueDate) &&
-      blocks.length + payments.length > 0 &&
-      blocks.every((b) => {
-        b.supplier.version();
-        return b.editor.ready() && !b.supplier.unresolved() && (this.paymentMethod !== 'Credit' || b.supplier.id !== null);
-      }) &&
-      (payments.length === 0 || this.paymentMethod !== 'Credit') &&
-      payments.every((p, j) => !!p.supplierId && (p.amount ?? 0) > 0 && !this.overOwed(j))
-    );
+    const found: FormProblem[] = [];
+    if (!this.invoiceDate) {
+      found.push({ where: 'Invoice date', what: 'choose the date', field: 'Invoice date' });
+    }
+    if (this.paymentMethod === null) {
+      found.push({ where: 'Paid', what: 'choose how they were paid', field: 'How they are paid' });
+    } else if (this.paymentMethod === 'DayRevenue' && !this.revenueDate) {
+      found.push({ where: 'Takings of', what: 'choose the day', field: 'Takings of' });
+    } else if (this.paymentMethod === 'Credit' && payments.length) {
+      found.push({ where: 'Paid', what: "supplier payments are cash: choose the safe or a day's takings", field: 'How they are paid' });
+    }
+    if (!blocks.length && !payments.length) {
+      found.push({ where: 'The batch', what: 'add an invoice or a supplier payment', field: '' });
+    }
+    blocks.forEach((b, i) => {
+      b.supplier.version();
+      const name = `Invoice ${i + 1}`;
+      if (b.supplier.unresolved()) {
+        found.push({ where: name, what: 'choose the supplier from the list, or add it', field: `${name}, supplier` });
+      } else if (this.paymentMethod === 'Credit' && b.supplier.id === null) {
+        found.push({ where: name, what: 'on credit, choose who it is owed to', field: `${name}, supplier` });
+      }
+      found.push(...b.editor.problems(`${name}, `));
+    });
+    payments.forEach((p, j) => found.push(...paymentProblems(p, this.owedBefore(j), `Supplier payment ${j + 1}`)));
+    return found;
   });
+  protected readonly ready = computed(() => this.missing().length === 0);
+  // Submit batch is never greyed out: clicked with something missing, it says what.
+  protected readonly checks = new FormChecks(() => this.missing());
 
   constructor() {
     // Kept in this browser as it is typed, until it is sent.
@@ -448,11 +476,6 @@ export class PurchaseBatchPage {
       .reduce((sum, p) => sum + (p.amount ?? 0), 0);
   }
 
-  protected overOwed(index: number): boolean {
-    const pay = this.payments()[index];
-    return !!pay && isOverOwed(pay, this.owedBefore(index));
-  }
-
   // "2 invoices posted, 1 supplier paid".
   protected sentLabel(result: PurchaseBatchResult): string {
     const [invoices, payments] = [result.invoices.length, result.payments.length];
@@ -465,6 +488,7 @@ export class PurchaseBatchPage {
   }
 
   protected startAgain(): void {
+    this.checks.clear();
     this.blocks.set([this.block()]);
     this.payments.set([]);
     this.paymentMethod = null;
@@ -477,7 +501,7 @@ export class PurchaseBatchPage {
   // Sent together: each invoice made and posted, or none. Done, the batch starts again with new ids;
   // refused, it stays on screen with each problem said by its invoice.
   protected async submit(): Promise<void> {
-    if (!this.ready() || !this.paymentMethod) {
+    if (this.saving() || !this.checks.passed(this.notify, this.host.nativeElement) || !this.paymentMethod) {
       return;
     }
     this.saving.set(true);
@@ -498,6 +522,7 @@ export class PurchaseBatchPage {
         }),
       );
       this.posted.set(made);
+      this.checks.clear();
       const pending =
         made.invoices.filter((i) => i.paymentStatus === 'Pending').length + made.payments.filter((p) => p.outcome === 'Requested').length;
       this.notify.info(

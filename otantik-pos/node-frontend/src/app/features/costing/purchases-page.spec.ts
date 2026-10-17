@@ -886,6 +886,23 @@ describe('correcting a posted invoice', () => {
     expect(navigate).toHaveBeenCalledWith(['/costing/purchases/invoices', page['invoiceId']]);
   });
 
+  it('never greys out Review changes: with a line put wrong, it checks nothing with the server and says what', async () => {
+    const { fixture, el, page } = await render();
+    page['lines'].update((lines: Record<string, unknown>[]) => [{ ...lines[0], quantity: null }]);
+    page['touch']();
+    fixture.detectChanges();
+    const review = [...el.querySelectorAll<HTMLButtonElement>('button')].find((b) => text(b).includes('Review changes'))!;
+    expect(review.disabled).toBe(false);
+
+    review.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(previewInvoiceCorrection).not.toHaveBeenCalled();
+    expect(notify.error).toHaveBeenCalledWith(null, 'Cannot submit. Line 1: enter the quantity.');
+    expect([...el.querySelectorAll('mat-error')].map(text)).toEqual(['Enter the quantity']);
+  });
+
   it('sends an accountant’s correction for approval, with the reason, and goes back to the invoice as it is', async () => {
     approvals.canApprove.mockReturnValue(false);
     const { fixture, el, page, navigate } = await render();
@@ -911,5 +928,141 @@ describe('correcting a posted invoice', () => {
     expect(page['paymentMethod']).toBe('BeforeTreasury');
     expect(text(el.querySelector('.before-treasury')!)).toContain('Before the treasury');
     expect(page['ready']()).toBe(true);
+  });
+});
+
+describe('saying what is missing before an invoice or a payment is sent', () => {
+  const savePurchaseInvoice = vi.fn();
+  const recordVoucher = vi.fn();
+  const notify = { info: vi.fn(), error: vi.fn() };
+  const approvals = { canApprove: vi.fn(() => true), requested: vi.fn(), refresh: vi.fn() };
+  const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
+
+  async function render() {
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([]),
+        {
+          provide: CostingApi,
+          useValue: {
+            materials: () => of(all),
+            purchaseInvoices: () => of([]),
+            suppliers: () => of([nileFarms, deltaOils]),
+            expenseItems: () => of([]),
+            businessToday: () => of({ today: '2026-10-15' }),
+            supplierBalances: () => of([{ supplierId: 'nile', supplier: 'Nile Farms', balance: 1_000 }]),
+            savePurchaseInvoice,
+            recordVoucher,
+          },
+        },
+        { provide: Approvals, useValue: approvals },
+        { provide: MatDialog, useValue: { open: vi.fn() } },
+        { provide: NotifyService, useValue: notify },
+      ],
+    });
+    const fixture = TestBed.createComponent(PurchasesPage);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const button = (label: string) => [...el.querySelectorAll<HTMLButtonElement>('button')].find((b) => text(b).includes(label))!;
+    // Clicked, and the screen brought up to date.
+    async function click(label: string) {
+      button(label).click();
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
+    const errors = () => [...el.querySelectorAll('mat-error')].map(text);
+    return { fixture, el, page: fixture.componentInstance as unknown as Record<string, any>, button, click, errors };
+  }
+
+  beforeEach(() => {
+    savePurchaseInvoice.mockReset().mockImplementation((id: string, body: SavePurchaseInvoice) => of(asInvoice(id, body)));
+    recordVoucher.mockReset();
+    notify.error.mockReset();
+  });
+
+  it('never greys out Save & review: clicked with something missing, it saves nothing, marks each field and says what', async () => {
+    const { fixture, page, button, click, errors } = await render();
+    expect(button('Save & review').disabled).toBe(false);
+    expect(errors()).toEqual([]);
+
+    await click('Save & review');
+
+    expect(savePurchaseInvoice).not.toHaveBeenCalled();
+    expect(notify.error).toHaveBeenCalledWith(null, 'Cannot submit. Paid: choose how it is paid. Line 1: choose the item. Line 1: enter the quantity.');
+    expect(errors()).toEqual(['Choose how it is paid', 'Choose the item', 'Enter the quantity']);
+    // Taken to the first.
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('How it is paid');
+
+    // Each mark goes as its field is put right.
+    page['lines'].set([{ itemType: 'Inventory', rawMaterialId: 'oil', expenseItemId: null, quantity: 20, unitSize: null, unitLabel: '', cost: 1900 }]);
+    page['touch']();
+    fixture.detectChanges();
+    expect(errors()).toEqual(['Choose how it is paid']);
+    page['paymentMethod'] = 'Safe';
+    page['touch']();
+    fixture.detectChanges();
+    expect(errors()).toEqual([]);
+
+    await click('Save & review');
+    expect(savePurchaseInvoice).toHaveBeenCalledTimes(1);
+  });
+
+  it('names a supplier typed but not chosen, an expense with no amount, and the rest beyond the first three', async () => {
+    const { fixture, page, click, errors } = await render();
+    page['supplierEntry'] = 'Nile';
+    page['supplierEntered']('Nile');
+    page['paymentMethod'] = 'Credit';
+    page['lines'].set([
+      { itemType: 'Expense', rawMaterialId: null, expenseItemId: 'power', quantity: 1, unitSize: 1, unitLabel: '', cost: null },
+      { itemType: 'Inventory', rawMaterialId: 'oil', expenseItemId: null, quantity: 0, unitSize: null, unitLabel: '', cost: 10 },
+      { itemType: 'Inventory', rawMaterialId: 'oil', expenseItemId: null, quantity: 1, unitSize: null, unitLabel: '', cost: 10 },
+    ]);
+    page['touch']();
+    fixture.detectChanges();
+
+    await click('Save & review');
+
+    expect(notify.error).toHaveBeenCalledWith(
+      null,
+      'Cannot submit. Supplier: choose it from the list, or add it. Line 1: enter what the expense cost. Line 2: enter the quantity. ' +
+        'And 1 more, marked in red.',
+    );
+    expect(errors()).toEqual([
+      'Choose it from the list, or add it',
+      'Enter what the expense cost',
+      'Enter the quantity',
+      'It is on the invoice twice: put it on one line',
+    ]);
+  });
+
+  it('never greys out Pay the supplier: clicked with nothing entered, it pays no one and says what is missing', async () => {
+    const { fixture, page, button, click, errors } = await render();
+    page['mode'].set('payment');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(button('Pay the supplier').disabled).toBe(false);
+
+    await click('Pay the supplier');
+
+    expect(recordVoucher).not.toHaveBeenCalled();
+    expect(notify.error).toHaveBeenCalledWith(
+      null,
+      'Cannot submit. Supplier payment: choose the supplier. Supplier payment: enter the amount. Paid: choose how the supplier is paid.',
+    );
+    expect(errors()).toEqual(['Choose the supplier', 'Enter the amount', 'Choose how the supplier is paid']);
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Supplier payment, supplier');
+
+    // More than they are owed is said under the amount.
+    Object.assign(page['payment'](), { supplierId: 'nile', amount: 1_200 });
+    page['payMethod'] = 'Safe';
+    page['paymentEdited']();
+    fixture.detectChanges();
+    expect(errors()).toEqual(['It is more than they are owed']);
+
+    // Started again: nothing marked.
+    page['newPayment']();
+    fixture.detectChanges();
+    expect(errors()).toEqual([]);
   });
 });

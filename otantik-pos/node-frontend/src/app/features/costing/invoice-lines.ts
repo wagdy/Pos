@@ -2,6 +2,7 @@ import { Component, Injectable, computed, inject, input, signal } from '@angular
 import { FormsModule } from '@angular/forms';
 import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { MatButtonModule } from '@angular/material/button';
+import { ErrorStateMatcher } from '@angular/material/core';
 import { MatDialog } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
@@ -21,6 +22,7 @@ import {
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { ExpenseItemDialog, ExpenseItemDialogData } from './expense-item-dialog';
+import { FormChecks, FormProblem } from './form-checks';
 import { QuickMaterialData, QuickMaterialDialog, QuickMaterialResult } from './quick-material-dialog';
 import { SupplierDialog, SupplierDialogData } from './supplier-dialog';
 
@@ -167,16 +169,33 @@ export class InvoiceLines {
 
   // Every line names an item and a quantity; nothing twice; costs, where given, not negative, and
   // always given for an expense, which is nothing else.
-  readonly ready = computed(() => {
+  readonly ready = computed(() => this.problems().length === 0);
+
+  // What holds the lines up, each by its line and field. prefix tells one invoice's from
+  // another's, as the table's label does: "Invoice 2, ".
+  problems(prefix = ''): FormProblem[] {
     this.version();
     const lines = this.lines();
-    const ids = lines.map((l) => l.rawMaterialId ?? l.expenseItemId);
-    return (
-      lines.every(
-        (l) => (l.rawMaterialId || l.expenseItemId) && (l.quantity ?? 0) > 0 && (l.cost === null ? l.itemType !== 'Expense' : l.cost >= 0),
-      ) && new Set(ids).size === ids.length
-    );
-  });
+    return lines.flatMap((line, i) => {
+      const where = prefix ? `${prefix}line ${i + 1}` : `Line ${i + 1}`;
+      const field = (name: string) => `${prefix}${name}, line ${i + 1}`;
+      const found: FormProblem[] = [];
+      const id = line.rawMaterialId ?? line.expenseItemId;
+      if (!id) {
+        const typed = typeof line.entry === 'string' && line.entry.trim();
+        found.push({ where, what: typed ? 'choose the item from the list, or add it' : 'choose the item', field: field('Item') });
+      } else if (lines.findIndex((l) => (l.rawMaterialId ?? l.expenseItemId) === id) < i) {
+        found.push({ where, what: 'it is on the invoice twice: put it on one line', field: field('Item') });
+      }
+      if (!((line.quantity ?? 0) > 0)) {
+        found.push({ where, what: 'enter the quantity', field: field('Quantity') });
+      }
+      if (line.cost === null ? line.itemType === 'Expense' : line.cost < 0) {
+        found.push({ where, what: line.cost === null ? 'enter what the expense cost' : 'the line total cannot be below 0', field: field('Line total') });
+      }
+      return found;
+    });
+  }
 
   constructor(readonly catalog: PurchaseCatalog) {}
 
@@ -434,6 +453,9 @@ export class InvoiceSupplier {
   }
 }
 
+// Material's own: a field in error once touched and invalid.
+const defaultMatcher = new ErrorStateMatcher();
+
 // An invoice's lines as a table: each line's item, found by typing or added there, its quantity
 // in the unit billed, its total, what it comes to per purchase unit beside the average now; a line
 // added or taken off; and the total, split into stock and expenses when it has both.
@@ -460,7 +482,8 @@ export class InvoiceSupplier {
               <td>
                 <mat-form-field subscriptSizing="dynamic" class="material">
                   <input matInput [matAutocomplete]="auto" [(ngModel)]="line.entry" (ngModelChange)="e.entered(line, $event)"
-                    placeholder="Type to find…" [attr.aria-label]="label() + 'Item, line ' + (i + 1)" />
+                    placeholder="Type to find…" [attr.aria-label]="label() + 'Item, line ' + (i + 1)"
+                    [errorStateMatcher]="marked(label() + 'Item, line ' + (i + 1))" />
                   <mat-autocomplete #auto="matAutocomplete" [displayWith]="e.display">
                     @if (e.matches(line); as found) {
                       @if (found.materials.length) {
@@ -487,6 +510,7 @@ export class InvoiceSupplier {
                       </mat-option>
                     }
                   </mat-autocomplete>
+                  <mat-error>{{ said(label() + 'Item, line ' + (i + 1)) }}</mat-error>
                 </mat-form-field>
                 @if (e.expense(line)) {
                   <span class="badge expense">Expense · مصروف</span>
@@ -496,7 +520,8 @@ export class InvoiceSupplier {
                 <div class="quantity">
                   <mat-form-field subscriptSizing="dynamic" class="small">
                     <input matInput type="number" min="0" step="any" [(ngModel)]="line.quantity" (ngModelChange)="e.touch()"
-                      [attr.aria-label]="label() + 'Quantity, line ' + (i + 1)" />
+                      [attr.aria-label]="label() + 'Quantity, line ' + (i + 1)" [errorStateMatcher]="marked(label() + 'Quantity, line ' + (i + 1))" />
+                    <mat-error>{{ said(label() + 'Quantity, line ' + (i + 1)) }}</mat-error>
                   </mat-form-field>
                   @if (e.material(line); as m) {
                     <mat-form-field subscriptSizing="dynamic" class="unit">
@@ -522,9 +547,11 @@ export class InvoiceSupplier {
                 <mat-form-field subscriptSizing="dynamic" class="small">
                   <span matTextPrefix>L.E&nbsp;</span>
                   <input matInput type="number" min="0" step="any" [(ngModel)]="line.cost" (ngModelChange)="e.touch()"
-                    [attr.aria-label]="label() + 'Line total, line ' + (i + 1)" [required]="!!e.expense(line)" />
+                    [attr.aria-label]="label() + 'Line total, line ' + (i + 1)" [required]="!!e.expense(line)"
+                    [errorStateMatcher]="marked(label() + 'Line total, line ' + (i + 1))" />
+                  <mat-error>{{ said(label() + 'Line total, line ' + (i + 1)) }}</mat-error>
                 </mat-form-field>
-                @if (e.expense(line) && line.cost === null) {
+                @if (e.expense(line) && line.cost === null && !checks()?.shown()) {
                   <small class="warn-text">Its amount</small>
                 }
               </td>
@@ -613,4 +640,14 @@ export class InvoiceLinesTable {
   readonly editor = input.required<InvoiceLines>();
   // Before each field's accessible name, to tell one invoice's from another's: "Invoice 2, ".
   readonly label = input('');
+  // The screen's checks, which mark a field once a send is refused for what it is missing.
+  readonly checks = input<FormChecks | null>(null);
+
+  protected marked(field: string): ErrorStateMatcher {
+    return this.checks()?.field(field) ?? defaultMatcher;
+  }
+
+  protected said(field: string): string {
+    return this.checks()?.message(field) ?? '';
+  }
 }
