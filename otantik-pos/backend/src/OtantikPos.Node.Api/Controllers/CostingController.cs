@@ -22,6 +22,12 @@ public sealed class CostingController(
     public Task<IReadOnlyList<MaterialCostDto>> GetMaterials(CancellationToken cancellationToken) =>
         costing.GetMaterialsAsync(cancellationToken);
 
+    // A material's purchase history card (كارت الصنف): each invoice line that bought it, to check
+    // against the paper invoices.
+    [HttpGet("materials/{materialId:guid}/purchases")]
+    public Task<MaterialPurchaseHistory> GetMaterialPurchases(Guid materialId, CancellationToken cancellationToken) =>
+        spending.MaterialHistoryAsync(materialId, cancellationToken);
+
     // Every dish, size and add-on with its cost per portion and food cost %.
     [HttpGet("menu")]
     public Task<IReadOnlyList<RecipeCostCard>> GetMenuCosts(CancellationToken cancellationToken) =>

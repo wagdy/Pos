@@ -17,6 +17,7 @@ import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals, pendingLabel } from './approvals';
 import { saveBlob } from './invoice-paper';
 import { MaterialDialog, MaterialDialogResult } from './material-dialog';
+import { MaterialHistoryDialog } from './material-history-dialog';
 import { MaterialImportDialog } from './material-import-dialog';
 
 // Raw materials and what they cost: AP$ per purchase unit (the weighted average of what was paid),
@@ -123,6 +124,11 @@ import { MaterialImportDialog } from './material-import-dialog';
                 <td class="num">{{ m.stockValue === null ? '' : (m.stockValue | money) }}</td>
                 <td class="num">{{ m.lastPurchaseCostPerPurchaseUnit === null ? '' : (m.lastPurchaseCostPerPurchaseUnit | money) }}</td>
                 <td class="num actions" (click)="$event.stopPropagation()">
+                  @if (m.kind !== 'Prep') {
+                    <button mat-icon-button (click)="history(m)" matTooltip="Purchase history · كارت الصنف" [attr.aria-label]="'Purchase history of ' + m.name">
+                      <mat-icon>history</mat-icon>
+                    </button>
+                  }
                   @if (pendingOf(m)) {
                     <mat-icon class="locked" matTooltip="Waiting for a manager's approval: locked until decided" aria-label="Locked: waiting for a manager">lock_clock</mat-icon>
                   } @else {
@@ -211,6 +217,11 @@ export class MaterialsPage {
 
   protected pendingOf(material: MaterialCost): ApprovalRequest | undefined {
     return this.approvals.pendingFor(material.id);
+  }
+
+  // Every invoice line that bought it, to hold against the paper invoices.
+  protected history(material: MaterialCost): void {
+    this.dialog.open<MaterialHistoryDialog, MaterialCost>(MaterialHistoryDialog, { data: material, width: '960px', maxWidth: '95vw' });
   }
 
   // Archived for a manager; asked of one for anyone else. Only one in no recipe and with nothing

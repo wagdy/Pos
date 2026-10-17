@@ -608,6 +608,52 @@ public class ApiTests
         Assert.Equal(HttpStatusCode.UnprocessableEntity, (await manager.PostAsJsonAsync(correct, Fix(), Cancel)).StatusCode);
     }
 
+    // A material's purchase history card, for whoever sees the costs: each invoice line that bought
+    // it. A cashier does not.
+    [Fact]
+    public async Task A_materials_purchase_history_is_read_by_whoever_sees_the_costs()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var cashier = await api.CashierAsync(manager);
+        var accountant = await api.AccountantAsync(manager);
+
+        async Task<JsonElement> Json(HttpResponseMessage response)
+        {
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(Cancel));
+            return await response.Content.ReadFromJsonAsync<JsonElement>(Cancel);
+        }
+        var tomatoes = (await Json(await manager.PostAsJsonAsync("/api/inventory/raw-materials", new { name = "Tomatoes", unit = "Gram" }, Cancel)))
+            .GetProperty("id").GetGuid();
+        var nile = (await Json(await manager.PutAsJsonAsync($"/api/inventory/suppliers/{Guid.NewGuid()}", new { name = "Nile Farms" }, Cancel)))
+            .GetProperty("id").GetGuid();
+        var invoice = Guid.NewGuid();
+        await Json(await manager.PostAsJsonAsync("/api/inventory/purchase-invoices/batch", new
+        {
+            invoiceDate = "2026-10-13", paymentMethod = "Credit",
+            invoices = new[]
+            {
+                new
+                {
+                    invoiceId = invoice, supplierId = nile, supplierInvoiceNumber = "F-1",
+                    lines = new[] { new { rawMaterialId = tomatoes, enteredQuantity = 6, unitLabel = "kg", unitSize = 1000, cost = 180, itemType = "Inventory" } },
+                },
+            },
+        }, Cancel));
+
+        var path = $"/api/costing/materials/{tomatoes}/purchases";
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync(path, Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await manager.GetAsync($"/api/costing/materials/{Guid.NewGuid()}/purchases", Cancel)).StatusCode);
+        var card = await Json(await accountant.GetAsync(path, Cancel));
+        var line = card.GetProperty("lines").EnumerateArray().Single();
+        Assert.Equal((invoice, "2026-10-13", "Nile Farms", "F-1", 6m, "kg", 6_000m, 30m, 180m, false),
+            (line.GetProperty("invoiceId").GetGuid(), line.GetProperty("date").GetString(), line.GetProperty("supplier").GetString(),
+                line.GetProperty("invoiceNumber").GetString(), line.GetProperty("quantity").GetDecimal(), line.GetProperty("unit").GetString(),
+                line.GetProperty("baseQuantity").GetDecimal(), line.GetProperty("unitPrice").GetDecimal(), line.GetProperty("total").GetDecimal(),
+                line.GetProperty("voided").GetBoolean()));
+        Assert.Equal(("Gram", 30m), (card.GetProperty("unit").GetString(), card.GetProperty("averagePerPurchaseUnit").GetDecimal()));
+    }
+
     // The unit a material is counted in changed: at once while nothing records it, for whoever
     // keeps stock; once something does, with the conversion, at once for a manager (200) and asked
     // of one for an accountant (202), the material locked meanwhile. A cashier may not.

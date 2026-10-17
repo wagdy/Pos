@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Otantik.BuildingBlocks;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.Purchases;
+using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Treasury;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Persistence;
@@ -38,6 +39,39 @@ public sealed record SpendingReport(
     int UnpricedLines,
     IReadOnlyList<CategorySpending> Categories,
     int Vouchers = 0);
+
+// One invoice line that bought a material, as its paper has it: Quantity in the unit billed (5 kg),
+// BaseQuantity in the material's own (5,000 g), UnitPrice per unit billed. Voided: the invoice no
+// longer stands, and ReplacedBy names the one that corrected it, if one did; RevisionOf, the one
+// it corrected.
+public sealed record MaterialPurchase(
+    Guid InvoiceId,
+    DateOnly Date,
+    string? Supplier,
+    string? InvoiceNumber,
+    decimal Quantity,
+    string Unit,
+    decimal BaseQuantity,
+    decimal? UnitPrice,
+    decimal? Total,
+    bool Voided,
+    Guid? ReplacedBy,
+    Guid? RevisionOf);
+
+// A material's purchase history card (كارت الصنف): every posted or voided invoice line that bought
+// it, newest first, to hold against the paper invoices. The totals are the standing invoices'
+// only: what came in, what it cost, and the average paid per purchase unit, over the priced lines.
+public sealed record MaterialPurchaseHistory(
+    Guid MaterialId,
+    string Material,
+    UnitOfMeasure Unit,
+    string PurchaseUnit,
+    decimal PurchaseUnitSize,
+    IReadOnlyList<MaterialPurchase> Lines,
+    decimal BaseQuantity,
+    decimal Total,
+    decimal? AveragePerPurchaseUnit,
+    int UnpricedLines);
 
 // What a period's expense lines came to in one category, for the profit and loss.
 public sealed record LoggedExpense(Guid CategoryId, string Category, string? CategoryAr, ExpenseLine ExpenseLine, decimal Amount);
@@ -106,6 +140,50 @@ public sealed class PurchaseSpendingService(NodeDbContext db, RestaurantClock cl
                 g.First().Category?.ExpenseLine ?? ExpenseLine.Controllable, Money(g.Sum(l => l.Cost!.Value))))
             .OrderByDescending(e => e.Amount)
             .ToList();
+
+    // Every line that bought the material, from posted and voided invoices (a draft has bought
+    // nothing yet), each dated as the reports date it: by the invoice, or the day it was posted.
+    public async Task<MaterialPurchaseHistory> MaterialHistoryAsync(Guid materialId, CancellationToken cancellationToken)
+    {
+        var material = await db.RawMaterials.AsNoTracking().SingleOrDefaultAsync(m => m.Id == materialId, cancellationToken)
+            ?? throw new NotFoundException("Raw material", materialId);
+        var bought = await db.PurchaseInvoices.AsNoTracking()
+            .Where(i => (i.Status == PurchaseInvoiceStatus.Posted || i.Status == PurchaseInvoiceStatus.Voided)
+                && i.Lines.Any(l => l.RawMaterialId == materialId))
+            .Select(i => new
+            {
+                i.Id, i.SupplierId, i.SupplierInvoiceNumber, i.InvoiceDate, i.PostedAtUtc, i.CreatedAtUtc, i.Status, i.ReplacedBy, i.RevisionOf,
+                Lines = i.Lines.Where(l => l.RawMaterialId == materialId).ToList(),
+            })
+            .ToListAsync(cancellationToken);
+        var supplierIds = bought.Where(i => i.SupplierId != null).Select(i => i.SupplierId!.Value).Distinct().ToList();
+        var suppliers = await db.Suppliers.AsNoTracking().Where(s => supplierIds.Contains(s.Id)).ToDictionaryAsync(s => s.Id, s => s.Name, cancellationToken);
+
+        var lines = bought
+            .SelectMany(i => i.Lines.Select(l => new
+            {
+                Posted = i.PostedAtUtc ?? i.CreatedAtUtc,
+                Line = new MaterialPurchase(
+                    i.Id, i.InvoiceDate ?? clock.BusinessDateOf(i.PostedAtUtc ?? i.CreatedAtUtc),
+                    i.SupplierId is { } supplier ? suppliers.GetValueOrDefault(supplier) : null, i.SupplierInvoiceNumber,
+                    l.EnteredQuantity, l.UnitLabel, l.Quantity,
+                    l.Cost is { } cost && l.EnteredQuantity > 0 ? Math.Round(cost / l.EnteredQuantity, 4, MidpointRounding.AwayFromZero) : null,
+                    l.Cost, i.Status == PurchaseInvoiceStatus.Voided, i.ReplacedBy, i.RevisionOf),
+            }))
+            .OrderByDescending(l => l.Line.Date)
+            .ThenByDescending(l => l.Posted)
+            .Select(l => l.Line)
+            .ToList();
+
+        var standing = lines.Where(l => !l.Voided).ToList();
+        var priced = standing.Where(l => l.Total is not null).ToList();
+        var pricedQuantity = priced.Sum(l => l.BaseQuantity);
+        return new MaterialPurchaseHistory(
+            material.Id, material.Name, material.Unit, material.PurchaseUnit, material.PurchaseUnitSize, lines,
+            Math.Round(standing.Sum(l => l.BaseQuantity), 3), Money(priced.Sum(l => l.Total!.Value)),
+            pricedQuantity > 0 ? Money(priced.Sum(l => l.Total!.Value) / pricedQuantity * material.PurchaseUnitSize) : null,
+            standing.Count - priced.Count);
+    }
 
     private async Task<IReadOnlyList<PostedLine>> PostedLinesAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken)
     {

@@ -5,6 +5,7 @@ import { of, throwError } from 'rxjs';
 import { CostingApi, MaterialCost, RawMaterialImportResult } from '../../core/costing/costing.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from './approvals';
+import { MaterialHistoryDialog } from './material-history-dialog';
 import { MaterialImportDialog } from './material-import-dialog';
 import { MaterialsPage } from './materials-page';
 
@@ -194,6 +195,34 @@ describe('changing a material', () => {
     await page['edit'](tomatoes);
     expect(open).not.toHaveBeenCalled();
     expect(notify.info).toHaveBeenCalledWith('Tomatoes: change requested, waiting for a manager. It can be changed once that is decided.');
+  });
+});
+
+describe('a material’s purchase history from its row', () => {
+  it('is a button on each bought material, not a prep item, and opens the card', async () => {
+    const open = vi.fn();
+    const row = (id: string, name: string, kind: 'Purchased' | 'Prep') =>
+      ({ id, name, kind, code: null, category: null, unit: 'Gram', purchaseUnit: 'kg', purchaseUnitSize: 1000, costPerPurchaseUnit: null,
+        defaultYieldPercent: 100, quantityOnHand: 0, stockValue: null, lastPurchaseCostPerPurchaseUnit: null }) as unknown as MaterialCost;
+    const tomatoes = row('tomatoes', 'Tomatoes', 'Purchased');
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: CostingApi, useValue: { materials: () => of([tomatoes, row('sauce', 'Tomato sauce', 'Prep')]) } },
+        { provide: MatDialog, useValue: { open } },
+        { provide: NotifyService, useValue: { info: vi.fn(), error: vi.fn() } },
+        { provide: Approvals, useValue: { refresh: vi.fn(), pendingFor: vi.fn() } },
+      ],
+    });
+    const fixture = TestBed.createComponent(MaterialsPage);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect([...el.querySelectorAll('[aria-label^="Purchase history of"]')].map((b) => b.getAttribute('aria-label'))).toEqual(['Purchase history of Tomatoes']);
+    el.querySelector<HTMLButtonElement>('[aria-label="Purchase history of Tomatoes"]')!.click();
+    expect(open).toHaveBeenCalledWith(MaterialHistoryDialog, { data: tomatoes, width: '960px', maxWidth: '95vw' });
+    // The row's own click, which opens the material to change, is not set off.
+    expect(open).toHaveBeenCalledTimes(1);
   });
 });
 

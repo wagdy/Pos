@@ -1848,6 +1848,59 @@ public class NodeTests
             Change(sauce.Id, new MaterialUnitChange(UnitOfMeasure.Piece, 250, "jar", 1)))).Message);
     }
 
+    // A material's purchase history card (كارت الصنف): every invoice line that bought it, newest first,
+    // as the paper has it, to hold against the paper invoices. A voided invoice is on it, marked, its
+    // correction named, and out of the totals; a draft has bought nothing; another material's lines
+    // are not its.
+    [Fact]
+    public async Task A_materials_purchase_history_lists_each_invoice_line_that_bought_it()
+    {
+        await using var node = await TestNode.StartAsync();
+        var ct = TestContext.Current.CancellationToken;
+        using var scope = node.Scope();
+        var today = node.Service<TreasuryService>(scope).Today;
+        var tomatoes = (await node.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram))).Id;
+        var onions = (await node.Send(new CreateRawMaterialCommand("Onions", UnitOfMeasure.Gram))).Id;
+        var nile = (await node.Send(new SaveSupplierCommand(Guid.NewGuid(), "Nile Farms"))).Id;
+        var cairo = (await node.Send(new SaveSupplierCommand(Guid.NewGuid(), "Cairo Foods"))).Id;
+        async Task<Guid> Posted(Guid supplier, string number, DateOnly date, IReadOnlyList<PurchaseInvoiceLineEntry> lines)
+        {
+            var id = Guid.NewGuid();
+            await node.Send(new SavePurchaseInvoiceCommand(id, supplier, number, date, lines, "Omar", PurchasePaymentMethod.Credit));
+            await node.Send(new PostPurchaseInvoiceCommand(id, "Omar"));
+            return id;
+        }
+
+        // 5 kg from Nile Farms, corrected to 6 kg; 500 g from Cairo Foods beside some onions; 1 kg
+        // with no price yet; and a draft of 9 kg, not posted.
+        var first = await Posted(nile, "F-1", today.AddDays(-3), [new(tomatoes, 5, "kg", 1000, 100)]);
+        var corrected = new InvoiceCorrection(Guid.NewGuid(), nile, "F-1", today.AddDays(-3), [new(tomatoes, 6, "kg", 1000, 120)], PurchasePaymentMethod.Credit, null);
+        await node.Send(new CorrectPurchaseInvoiceCommand(Guid.NewGuid(), first, corrected, null, "staff-omar", "Omar", CanApprove: true));
+        var cairos = await Posted(cairo, "C-7", today.AddDays(-1), [new(tomatoes, 500, "g", 1, 15), new(onions, 2, "kg", 1000, 30)]);
+        var unpriced = await Posted(nile, "F-2", today, [new(tomatoes, 1, "kg", 1000, null)]);
+        await node.Send(new SavePurchaseInvoiceCommand(Guid.NewGuid(), nile, "F-3", today, [new(tomatoes, 9, "kg", 1000, 270)], "Omar"));
+
+        var card = await node.Service<PurchaseSpendingService>(scope).MaterialHistoryAsync(tomatoes, ct);
+
+        Assert.Equal(("Tomatoes", UnitOfMeasure.Gram, "kg", 1000m), (card.Material, card.Unit, card.PurchaseUnit, card.PurchaseUnitSize));
+        Assert.Equal(
+            [
+                new MaterialPurchase(unpriced, today, "Nile Farms", "F-2", 1, "kg", 1_000, null, null, false, null, null),
+                new MaterialPurchase(cairos, today.AddDays(-1), "Cairo Foods", "C-7", 500, "g", 500, 0.03m, 15, false, null, null),
+                new MaterialPurchase(corrected.NewInvoiceId, today.AddDays(-3), "Nile Farms", "F-1", 6, "kg", 6_000, 20, 120, false, null, first),
+                new MaterialPurchase(first, today.AddDays(-3), "Nile Farms", "F-1", 5, "kg", 5_000, 20, 100, true, corrected.NewInvoiceId, null),
+            ],
+            card.Lines);
+        // What stands: 7.5 kg, 135 for the 6.5 kg priced, 20.77 a kg.
+        Assert.Equal((7_500m, 135m, (decimal?)20.77m, 1), (card.BaseQuantity, card.Total, card.AveragePerPurchaseUnit, card.UnpricedLines));
+
+        // Nothing bought: an empty card, no average.
+        var nothing = await node.Service<PurchaseSpendingService>(scope).MaterialHistoryAsync(
+            (await node.Send(new CreateRawMaterialCommand("Saffron", UnitOfMeasure.Gram))).Id, ct);
+        Assert.Equal((0, 0m, (decimal?)null), (nothing.Lines.Count, nothing.Total, nothing.AveragePerPurchaseUnit));
+        await Assert.ThrowsAsync<NotFoundException>(() => node.Service<PurchaseSpendingService>(scope).MaterialHistoryAsync(Guid.NewGuid(), ct));
+    }
+
     // A supplier paid in the daily batch (سداد مورد): an old debt settled with no invoice and no
     // stock, from the day's takings or the safe as the batch is paid, against what they are owed and
     // off it on their account; never on credit, never more than owed, and nothing saved unless all is.

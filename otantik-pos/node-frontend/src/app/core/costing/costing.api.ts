@@ -34,6 +34,39 @@ export interface MaterialCost {
   kind: MaterialKind;
 }
 
+// One invoice line that bought a material, as its paper has it: quantity in the unit billed (5 kg),
+// baseQuantity in the material's own (5,000 g), unitPrice per unit billed. A voided one no longer
+// stands; replacedBy names the invoice that corrected it, revisionOf the one it corrected.
+export interface MaterialPurchase {
+  invoiceId: string;
+  date: string;
+  supplier: string | null;
+  invoiceNumber: string | null;
+  quantity: number;
+  unit: string;
+  baseQuantity: number;
+  unitPrice: number | null;
+  total: number | null;
+  voided: boolean;
+  replacedBy: string | null;
+  revisionOf: string | null;
+}
+
+// A material's purchase history card (كارت الصنف), newest first. The totals are the standing
+// invoices' only; the average is per purchase unit, over the priced lines.
+export interface MaterialPurchaseHistory {
+  materialId: string;
+  material: string;
+  unit: UnitOfMeasure;
+  purchaseUnit: string;
+  purchaseUnitSize: number;
+  lines: MaterialPurchase[];
+  baseQuantity: number;
+  total: number;
+  averagePerPurchaseUnit: number | null;
+  unpricedLines: number;
+}
+
 export interface RecipeCostLine {
   rawMaterialId: string;
   code: string | null;
@@ -1177,6 +1210,10 @@ export class CostingApi {
     const form = new FormData();
     form.append('file', file, file.name);
     return this.http.post<RawMaterialImportResult>('/api/inventory/raw-materials/import', form);
+  }
+
+  materialPurchases(id: string): Observable<MaterialPurchaseHistory> {
+    return this.http.get<MaterialPurchaseHistory>(`/api/costing/materials/${id}/purchases`);
   }
 
   materialUsage(id: string): Observable<MaterialUsage> {
