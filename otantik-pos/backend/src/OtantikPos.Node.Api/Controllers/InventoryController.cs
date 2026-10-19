@@ -252,28 +252,32 @@ public sealed class InventoryController(ISender sender) : ControllerBase
     [HttpPut("purchase-categories/{categoryId:guid}")]
     [Authorize(Policy = Permissions.InventoryManage)]
     public Task<PurchaseCategoryDto> SavePurchaseCategory(Guid categoryId, SavePurchaseCategoryRequest request, CancellationToken cancellationToken) =>
-        sender.Send(new SavePurchaseCategoryCommand(categoryId, request.Name, request.NameAr, request.ExpenseLine ?? ExpenseLine.Controllable), cancellationToken);
+        sender.Send(new SavePurchaseCategoryCommand(
+            categoryId, request.Name, request.NameAr, request.ExpenseLine ?? ExpenseLine.Controllable, request.Kind), cancellationToken);
 
-    // moveTo: where what is in it goes; required while it holds anything.
+    // moveTo: where what is in it goes, as it is; required while it holds anything. One that would
+    // be converted on the way (the other kind of category) is refused: that is POST .../delete.
     [HttpDelete("purchase-categories/{categoryId:guid}")]
     [Authorize(Policy = Permissions.InventoryManage)]
     public async Task<IActionResult> DeletePurchaseCategory(Guid categoryId, [FromQuery] Guid? moveTo, CancellationToken cancellationToken)
     {
-        await sender.Send(new DeletePurchaseCategoryCommand(categoryId, moveTo), cancellationToken);
+        await sender.Send(new DeletePurchaseCategoryCommand(categoryId, moveTo, moveTo, AllowConversion: false), cancellationToken);
         return NoContent();
     }
 
-    // Deleted, what is in it moved, and converted on the way: its raw materials made expense items
-    // (their purchases restated as expenses) or its expense items made raw materials (Units: what
-    // each is counted in and bought by). Done at once for a manager, or when nothing is converted
-    // (200, Applied); asked of one for anyone else (202, Requested). RequestId is made by the till.
+    // Deleted, its raw materials moved to MaterialsTo and its expense items to ExpenseItemsTo; a
+    // kind sent to the other kind of category is converted on the way: raw materials made expense
+    // items (their purchases restated as expenses), or expense items made raw materials (Units:
+    // what each is counted in and bought by). Done at once for a manager, or when nothing is
+    // converted (200, Applied); asked of one for anyone else (202, Requested). RequestId is made by
+    // the till.
     [HttpPost("purchase-categories/{categoryId:guid}/delete")]
     [Authorize(Policy = Permissions.InventoryManage)]
     public async Task<ActionResult<CategoryDeletionResult>> DeletePurchaseCategoryConverting(
         Guid categoryId, DeletePurchaseCategoryRequest request, CancellationToken cancellationToken)
     {
         var result = await sender.Send(new DeletePurchaseCategoryCommand(
-            categoryId, request.MoveToId, request.Convert, request.Units ?? [], request.RequestId, request.Reason, StaffId, StaffName, CanApprove),
+            categoryId, request.MaterialsTo, request.ExpenseItemsTo, request.Units ?? [], request.RequestId, request.Reason, StaffId, StaffName, CanApprove),
             cancellationToken);
         return result.Outcome == ApprovalOutcome.Requested ? Accepted(result) : Ok(result);
     }
@@ -283,7 +287,7 @@ public sealed class InventoryController(ISender sender) : ControllerBase
     [Authorize(Policy = Permissions.InventoryManage)]
     public Task<CategoryDeletionPreview> PreviewPurchaseCategoryDeletion(
         Guid categoryId, DeletePurchaseCategoryRequest request, CancellationToken cancellationToken) =>
-        sender.Send(new PreviewCategoryDeletionQuery(categoryId, request.MoveToId, request.Convert, request.Units ?? []), cancellationToken);
+        sender.Send(new PreviewCategoryDeletionQuery(categoryId, request.MaterialsTo, request.ExpenseItemsTo, request.Units ?? []), cancellationToken);
 
     // Expense items: bought but never stock. A manager's, as what they cost is on them.
     [HttpGet("expense-items")]
@@ -634,14 +638,15 @@ public sealed record RejectRequestBody(string? Note = null);
 
 public sealed record SaveSupplierRequest(string Name, string? ContactPerson = null, string? Phone = null, string? Email = null, string? Notes = null);
 
-public sealed record SavePurchaseCategoryRequest(string Name, string? NameAr = null, ExpenseLine? ExpenseLine = null);
+// Kind: raw materials or general expenses; a new one is raw materials unless said.
+public sealed record SavePurchaseCategoryRequest(string Name, string? NameAr = null, ExpenseLine? ExpenseLine = null, CategoryKind? Kind = null);
 
 public sealed record SaveExpenseItemRequest(string Name, Guid? CategoryId = null, string? NameAr = null, string? Unit = null);
 
 public sealed record DeletePurchaseCategoryRequest(
     Guid RequestId,
-    Guid? MoveToId = null,
-    CategoryConversion Convert = CategoryConversion.None,
+    Guid? MaterialsTo = null,
+    Guid? ExpenseItemsTo = null,
     IReadOnlyList<StockUnit>? Units = null,
     string? Reason = null);
 

@@ -1015,9 +1015,69 @@ public class NodeTests
         });
 
         var categories = await node.Send(new GetPurchaseCategoriesQuery());
-        Assert.Equal([("General", true, 2), ("Dairy", false, 3)], categories.Select(c => (c.Name, c.IsGeneral, c.Materials)));
+        Assert.Equal([("General", true, 2), ("General expenses", true, 0), ("Dairy", false, 3)], categories.Select(c => (c.Name, c.IsGeneral, c.Materials)));
         Assert.Equal(PurchaseCategory.GeneralId, categories[0].Id);
         Assert.Equal("Dairy", (await node.Send(new GetRawMaterialsQuery())).Single(m => m.Name == "Milk").Category);
+    }
+
+    // The categories, once raw materials and expenses shared them, each made the kind most of what
+    // it holds in use is: raw materials on a tie, or when it holds nothing; expenses when all it
+    // held was. General stays raw materials, and its expense items go to General expenses, made
+    // for them. What is left in the other kind is counted as misplaced.
+    [Fact]
+    public async Task Categories_are_made_raw_materials_or_expenses_by_most_of_what_they_hold()
+    {
+        await using var node = await TestNode.StartAsync();
+        Guid Id(int n) => new($"00000000-0000-0000-0000-{n:000000000000}");
+        await node.Db(async db =>
+        {
+            var migrator = db.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
+            // General is there already, made by an earlier migration.
+            await migrator.MigrateAsync("20261015171937_InvoiceCorrections");
+            await db.Database.ExecuteSqlRawAsync($$"""
+                INSERT INTO inventory."PurchaseCategories" ("Id", "Name", "NormalizedName", "ExpenseLine", "CreatedAtUtc") VALUES
+                    ('{{Id(1)}}', 'Dairy', 'DAIRY', 'Controllable', now()),
+                    ('{{Id(2)}}', 'Utilities', 'UTILITIES', 'Controllable', now()),
+                    ('{{Id(3)}}', 'Packing', 'PACKING', 'Controllable', now()),
+                    ('{{Id(4)}}', 'Empty', 'EMPTY', 'Controllable', now()),
+                    ('{{Id(5)}}', 'Old bills', 'OLD BILLS', 'Controllable', now()),
+                    ('{{Id(6)}}', 'Tie', 'TIE', 'Controllable', now());
+                INSERT INTO inventory."RawMaterials" ("Id", "Name", "Unit", "QuantityOnHand", "ReorderLevel", "CategoryId", "ArchivedAtUtc") VALUES
+                    ('{{Id(11)}}', 'Salt', 'Gram', 0, 0, '{{PurchaseCategory.GeneralId}}', NULL),
+                    ('{{Id(12)}}', 'Milk', 'Millilitre', 0, 0, '{{Id(1)}}', NULL),
+                    ('{{Id(13)}}', 'Bulb', 'Piece', 0, 0, '{{Id(2)}}', NULL),
+                    ('{{Id(14)}}', 'Boxes', 'Piece', 0, 0, '{{Id(3)}}', NULL),
+                    ('{{Id(15)}}', 'Bags', 'Piece', 0, 0, '{{Id(3)}}', NULL),
+                    ('{{Id(16)}}', 'Old tray', 'Piece', 0, 0, '{{Id(5)}}', now()),
+                    ('{{Id(17)}}', 'Lids', 'Piece', 0, 0, '{{Id(6)}}', NULL);
+                INSERT INTO inventory."ExpenseItems" ("Id", "Name", "NormalizedName", "CategoryId", "IsArchived", "CreatedAtUtc") VALUES
+                    ('{{Id(21)}}', 'Water', 'WATER', '{{PurchaseCategory.GeneralId}}', false, now()),
+                    ('{{Id(22)}}', 'Electricity', 'ELECTRICITY', '{{Id(2)}}', false, now()),
+                    ('{{Id(23)}}', 'Gas', 'GAS', '{{Id(2)}}', false, now()),
+                    ('{{Id(24)}}', 'Tape', 'TAPE', '{{Id(3)}}', false, now()),
+                    ('{{Id(25)}}', 'Phone', 'PHONE', '{{Id(5)}}', true, now()),
+                    ('{{Id(26)}}', 'Fax', 'FAX', '{{Id(5)}}', true, now()),
+                    ('{{Id(27)}}', 'Courier', 'COURIER', '{{Id(6)}}', false, now());
+                """);
+            await migrator.MigrateAsync();
+            return 0;
+        });
+
+        var categories = await node.Send(new GetPurchaseCategoriesQuery());
+        Assert.Equal(
+            [
+                ("General", CategoryKind.RawMaterials, 1, 0, 0),
+                ("General expenses", CategoryKind.Expenses, 0, 1, 0),
+                ("Dairy", CategoryKind.RawMaterials, 1, 0, 0),
+                ("Empty", CategoryKind.RawMaterials, 0, 0, 0),
+                ("Old bills", CategoryKind.Expenses, 1, 2, 0),
+                ("Packing", CategoryKind.RawMaterials, 2, 1, 1),
+                ("Tie", CategoryKind.RawMaterials, 1, 1, 1),
+                ("Utilities", CategoryKind.Expenses, 1, 2, 1),
+            ],
+            categories.Select(c => (c.Name, c.Kind, c.Materials, c.ExpenseItems, c.Misplaced)));
+        Assert.Equal(PurchaseCategory.GeneralExpensesId, categories[1].Id);
+        Assert.Equal("مصروفات عامة", categories[1].NameAr);
     }
 
     // Expense items go on purchase invoices beside raw materials. Posting takes the stock lines in
@@ -1034,8 +1094,9 @@ public class NodeTests
         using var scope = node.Scope();
         var today = node.Service<RestaurantClock>(scope).BusinessDateOf(DateTime.UtcNow);
 
-        async Task<Guid> Category(string name, ExpenseLine line) => (await node.Send(new SavePurchaseCategoryCommand(Guid.NewGuid(), name, null, line))).Id;
-        var dairy = await Category("Dairy", ExpenseLine.Controllable);
+        async Task<Guid> Category(string name, ExpenseLine line, CategoryKind kind = CategoryKind.Expenses) =>
+            (await node.Send(new SavePurchaseCategoryCommand(Guid.NewGuid(), name, null, line, kind))).Id;
+        var dairy = await Category("Dairy", ExpenseLine.Controllable, CategoryKind.RawMaterials);
         var utilities = await Category("Utilities", ExpenseLine.Controllable);
         var rent = await Category("Rent", ExpenseLine.Occupation);
         var insurance = await Category("Insurance", ExpenseLine.OtherFixed);
@@ -1052,6 +1113,23 @@ public class NodeTests
         var spray = await Expense("Cleaning spray", utilities, "bottle");
         var shop = await Expense("Shop rent", rent);
         var cover = await Expense("Fire insurance", insurance);
+
+        // Each in a category of its kind: an expense item not in Dairy, a raw material not in
+        // Utilities. With none given, an expense item is in General expenses.
+        Assert.Contains("Dairy is a raw materials category",
+            (await Assert.ThrowsAsync<DomainException>(() => Expense("Gas cylinder", dairy))).Message);
+        Assert.Contains("Utilities is a general expenses category", (await Assert.ThrowsAsync<DomainException>(() => node.Send(
+            new CreateRawMaterialCommand("Charcoal", UnitOfMeasure.Gram, CategoryId: utilities)))).Message);
+        var water = await node.Send(new SaveExpenseItemCommand(Guid.NewGuid(), "Water bill"));
+        Assert.Equal((PurchaseCategory.GeneralExpensesId, "General expenses"), (water.CategoryId, water.Category));
+        // A category holding the one kind is not made the other; General is neither.
+        Assert.Contains("holds 2 expense items",
+            (await Assert.ThrowsAsync<DomainException>(() => node.Send(new SavePurchaseCategoryCommand(utilities, "Utilities", null, ExpenseLine.Controllable, CategoryKind.RawMaterials)))).Message);
+        await Assert.ThrowsAsync<DomainException>(() => node.Send(
+            new SavePurchaseCategoryCommand(PurchaseCategory.GeneralId, "General", null, ExpenseLine.Controllable, CategoryKind.Expenses)));
+        var categories = await node.Send(new GetPurchaseCategoriesQuery());
+        Assert.Equal((CategoryKind.RawMaterials, CategoryKind.Expenses, 0),
+            (categories.Single(c => c.Id == dairy).Kind, categories.Single(c => c.Id == utilities).Kind, categories.Single(c => c.Id == utilities).Misplaced));
 
         // Never stock: not on the stock list, and no recipe can use one.
         Assert.DoesNotContain(await node.Send(new GetRawMaterialsQuery()), m => m.Name == "Electricity");
@@ -1131,7 +1209,7 @@ public class NodeTests
         // insurance moves to Rent, and its history with it.
         await Assert.ThrowsAsync<DomainException>(() => node.Send(new DeletePurchaseCategoryCommand(insurance)));
         await Assert.ThrowsAsync<DomainException>(() => node.Send(new DeletePurchaseCategoryCommand(PurchaseCategory.GeneralId, rent)));
-        await node.Send(new DeletePurchaseCategoryCommand(insurance, rent));
+        await node.Send(new DeletePurchaseCategoryCommand(insurance, ExpenseItemsTo: rent));
         s = (await node.Service<KpiService>(node.Scope()).GetAsync(today.Year, today.Month, ct)).Statement;
         Assert.Equal((8_600m, 0m), (s.LoggedOccupationCost, s.LoggedOtherFixedCosts));
     }
@@ -1420,7 +1498,8 @@ public class NodeTests
         Assert.Equal(("Nile Farms", 1_000m, "Mona", "Omar"), (payment.Supplier, payment.Amount, payment.RecordedBy, payment.ApprovedBy));
 
         // Expense vouchers: the electricity bill and the wages, on the profit and loss.
-        async Task<Guid> Category(string name, ExpenseLine line) => (await node.Send(new SavePurchaseCategoryCommand(Guid.NewGuid(), name, null, line))).Id;
+        async Task<Guid> Category(string name, ExpenseLine line) =>
+            (await node.Send(new SavePurchaseCategoryCommand(Guid.NewGuid(), name, null, line, CategoryKind.Expenses))).Id;
         var electricity = (await node.Send(new SaveExpenseItemCommand(Guid.NewGuid(), "Electricity", await Category("Utilities", ExpenseLine.Controllable), null, null))).Id;
         var salaries = (await node.Send(new SaveExpenseItemCommand(Guid.NewGuid(), "Salaries", await Category("Staff", ExpenseLine.Wages), null, null))).Id;
         var bill = (await Voucher(New(SafeTransactionKind.ExpenseVoucher, 1_250, expense: electricity))).Transaction!;
@@ -1930,14 +2009,16 @@ public class NodeTests
         Task<RawMaterial> Read(Guid id) => node.Db(db => db.RawMaterials.AsNoTracking().SingleAsync(m => m.Id == id));
         Task<ExpenseItem> Expense(string name) => node.Db(db => db.ExpenseItems.AsNoTracking().SingleAsync(e => e.Name == name));
         DeletePurchaseCategoryCommand Delete(Guid category, Guid to, bool manager) => new(
-            category, to, CategoryConversion.ToExpenses, null, Guid.NewGuid(), manager ? null : "Cleaning is an expense",
+            category, to, to, null, Guid.NewGuid(), manager ? null : "Cleaning is an expense",
             manager ? "staff-omar" : "staff-mona", manager ? "Omar" : "Mona", manager);
 
         var cleaning = await Category("Cleaning stock");
-        var maintenance = (await node.Send(new SavePurchaseCategoryCommand(Guid.NewGuid(), "Maintenance", null, ExpenseLine.Controllable))).Id;
+        var maintenance = (await node.Send(new SavePurchaseCategoryCommand(Guid.NewGuid(), "Maintenance", null, ExpenseLine.Controllable, CategoryKind.Expenses))).Id;
         var bleach = await Material("Bleach", cleaning);
         var spray = await Material("Glass spray", cleaning);
-        await node.Send(new SaveExpenseItemCommand(Guid.NewGuid(), "Gloves", cleaning));
+        // Gloves filed there before the kinds were kept apart.
+        var gloves = (await node.Send(new SaveExpenseItemCommand(Guid.NewGuid(), "Gloves", maintenance))).Id;
+        await node.Db(db => db.ExpenseItems.Where(e => e.Id == gloves).ExecuteUpdateAsync(u => u.SetProperty(e => e.CategoryId, cleaning)));
         // An expense item of the spray's name, archived: the spray joins it, and it comes back.
         var oldSpray = (await node.Send(new SaveExpenseItemCommand(Guid.NewGuid(), "glass  spray", maintenance))).Id;
         await node.Db(db => db.ExpenseItems.Where(e => e.Id == oldSpray).ExecuteUpdateAsync(u => u.SetProperty(e => e.IsArchived, true)));
@@ -1961,7 +2042,7 @@ public class NodeTests
                 new ApprovalChange("Invoice lines", null, "3 lines (L.E 215.00) restated as expenses, each on its invoice's date"),
                 new ApprovalChange("Stock ledger", null, "5 entries and 1 count line taken out"),
                 new ApprovalChange("Their expenses count as", null, "Controllable costs"),
-                new ApprovalChange("Moved as they are", null, "1 item to Maintenance"),
+                new ApprovalChange("Moved as they are", null, "1 expense item to Maintenance"),
             ],
             asked.Request.Changes);
         Assert.Equal((12m, false), ((await Read(bleach)).QuantityOnHand, (await Read(bleach)).IsArchived));
@@ -2000,13 +2081,14 @@ public class NodeTests
         await node.Send(new SetRecipeCommand(RecipeTargetKind.MenuItem, FakeDeliverySystem.Lemonade, null, [new(lemons, 1)]));
         await Posted("C-3", today, [new(mop, 1, "piece", 1, null)]);
         var refused = await Assert.ThrowsAsync<DomainException>(() => node.Send(
-            new PreviewCategoryDeletionQuery(bar, maintenance, CategoryConversion.ToExpenses, null)));
+            new PreviewCategoryDeletionQuery(bar, maintenance, null, null)));
         Assert.Contains("Lemons is in a recipe.", refused.Message);
         Assert.Contains("Mop is on an invoice with no price", refused.Message);
-        // Moved as they are, it is a plain delete, for anyone, at once.
+        // Moved to a raw materials category, as they are, it is a plain delete, for anyone, at once.
+        var drinks = await Category("Drinks");
         Assert.Equal((ApprovalOutcome.Applied, (ApprovalRequestDto?)null),
-            ((await node.Send(new DeletePurchaseCategoryCommand(bar, maintenance, StaffName: "Mona", CanApprove: false))) is var plain ? (plain.Outcome, plain.Request) : default));
-        Assert.Equal(maintenance, (await Read(lemons)).CategoryId);
+            ((await node.Send(new DeletePurchaseCategoryCommand(bar, drinks, StaffName: "Mona", CanApprove: false))) is var plain ? (plain.Outcome, plain.Request) : default));
+        Assert.Equal(drinks, (await Read(lemons)).CategoryId);
 
         // A manager's own: done at once, kept with the decisions.
         var paper = await Category("Paper");
@@ -2037,19 +2119,21 @@ public class NodeTests
         using var scope = node.Scope();
         var today = node.Service<TreasuryService>(scope).Today;
         async Task<Guid> Category(string name) => (await node.Send(new SavePurchaseCategoryCommand(Guid.NewGuid(), name))).Id;
-        var packing = await Category("Packing");
+        var packing = (await node.Send(new SavePurchaseCategoryCommand(Guid.NewGuid(), "Packing", null, ExpenseLine.Controllable, CategoryKind.Expenses))).Id;
         var packaging = await Category("Packaging");
         var boxes = (await node.Send(new SaveExpenseItemCommand(Guid.NewGuid(), "Boxes", packing, null, "box"))).Id;
         var cupsItem = (await node.Send(new SaveExpenseItemCommand(Guid.NewGuid(), "Cups", packing, null, "sleeve"))).Id;
         var bags = (await node.Send(new SaveExpenseItemCommand(Guid.NewGuid(), "Bags", packing))).Id;
         await node.Db(db => db.ExpenseItems.Where(e => e.Id == bags).ExecuteUpdateAsync(u => u.SetProperty(e => e.IsArchived, true)));
-        var tape = (await node.Send(new CreateRawMaterialCommand("Tape", UnitOfMeasure.Piece, CategoryId: packing))).Id;
+        // Tape filed there before the kinds were kept apart.
+        var tape = (await node.Send(new CreateRawMaterialCommand("Tape", UnitOfMeasure.Piece))).Id;
+        await node.Db(db => db.RawMaterials.Where(m => m.Id == tape).ExecuteUpdateAsync(u => u.SetProperty(m => m.CategoryId, packing)));
         var bought = Guid.NewGuid();
         await node.Send(new SavePurchaseInvoiceCommand(bought, null, "P-1", today,
             [new(null, 2, "box", 1, 50, PurchaseItemType.Expense, boxes)], "Omar", PurchasePaymentMethod.Safe));
         StockUnit[] units = [new(boxes, UnitOfMeasure.Piece, "box", 50), new(cupsItem, UnitOfMeasure.Piece, "sleeve", 25)];
         DeletePurchaseCategoryCommand Delete(IReadOnlyList<StockUnit>? given) =>
-            new(packing, packaging, CategoryConversion.ToStock, given, Guid.NewGuid(), null, "staff-omar", "Omar", CanApprove: true);
+            new(packing, packaging, packaging, given, Guid.NewGuid(), null, "staff-omar", "Omar", CanApprove: true);
 
         // Each needs its unit; and a raw material already called Cups is in the way until renamed.
         Assert.Contains("Say what Cups is counted in", (await Assert.ThrowsAsync<DomainException>(() => node.Send(Delete([units[0]])))).Message);
@@ -2064,7 +2148,7 @@ public class NodeTests
                 new ApprovalChange("Boxes", "Expense item", "Raw material counted in pieces, bought by the box of 50 pieces"),
                 new ApprovalChange("Cups", "Expense item", "Raw material counted in pieces, bought by the sleeve of 25 pieces"),
                 new ApprovalChange("Past expense lines", null, "Stay expenses; each starts with nothing on hand"),
-                new ApprovalChange("Moved as they are", null, "2 items to Packaging"),
+                new ApprovalChange("Moved as they are", null, "1 raw material to Packaging; 1 expense item to Packaging"),
             ],
             done.Request.Changes);
         var made = await node.Db(db => db.RawMaterials.AsNoTracking().SingleAsync(m => m.Name == "Boxes"));

@@ -125,7 +125,7 @@ const displayUnits: Record<UnitOfMeasure, [string, number]> = { Gram: ['kg', 100
           <mat-label>Code · الكود</mat-label>
           <input matInput [(ngModel)]="code" maxlength="32" placeholder="PREP-01" />
         </mat-form-field>
-        <app-purchase-category-field [(ngModel)]="categoryId" class="category-field" />
+        <app-purchase-category-field [(ngModel)]="categoryId" class="category-field" kind="RawMaterials" />
         <mat-form-field>
           <mat-label>Recipe category · قسم الوصفة</mat-label>
           <mat-select [(ngModel)]="recipeCategoryId" aria-label="Recipe category">

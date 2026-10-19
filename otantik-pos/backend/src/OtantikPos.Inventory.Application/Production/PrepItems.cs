@@ -239,7 +239,7 @@ internal sealed class PrepItemWriter(
         }
 
         item.SetReorderLevel(change.ReorderLevel);
-        var category = await categories.ResolveAsync(change.CategoryId, cancellationToken);
+        var category = await categories.ResolveAsync(change.CategoryId, CategoryKind.RawMaterials, existingId is null ? null : item.CategoryId, cancellationToken);
         item.Describe(change.Code, category.Id);
         if (change.DisplayUnit is { } unit && change.DisplayUnitSize is { } size)
             item.SetPurchaseUnit(unit, size);
@@ -271,7 +271,7 @@ internal sealed class PrepItemWriter(
         copy.SetReorderLevel(change.ReorderLevel);
         if (change.DisplayUnit is { } unit && change.DisplayUnitSize is { } size)
             copy.SetPurchaseUnit(unit, size);
-        await CategoryNameAsync(change.CategoryId, cancellationToken);
+        await CheckCategoryAsync(change.CategoryId, existing?.CategoryId, cancellationToken);
         await RecipeCategoryNameAsync(change.RecipeCategoryId, cancellationToken);
 
         var ingredients = Ingredients(change, all, existing is null ? null : await recipes.GetByIdAsync(existing.Id, cancellationToken));
@@ -361,6 +361,17 @@ internal sealed class PrepItemWriter(
             ? (await recipeCategories.GetByIdAsync(id, cancellationToken))?.Name
               ?? throw new DomainException("That recipe category is no longer on the list. Choose it again, or add it.")
             : null;
+
+    // A raw materials category, as saving it will need: the one it is in now may stay.
+    private async Task CheckCategoryAsync(Guid? categoryId, Guid? current, CancellationToken cancellationToken)
+    {
+        if (categoryId is not { } id || id == PurchaseCategory.GeneralId)
+            return;
+        var category = await categories.GetByIdAsync(id, cancellationToken)
+            ?? throw new DomainException("That category is no longer on the list. Choose it again, or add it.");
+        if (category.Kind != CategoryKind.RawMaterials && id != current)
+            throw new DomainException($"{category.Name} is a general expenses category: choose a raw materials category.");
+    }
 
     // Its name, without adding General when it is not there yet.
     private async Task<string> CategoryNameAsync(Guid? categoryId, CancellationToken cancellationToken)

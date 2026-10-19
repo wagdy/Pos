@@ -1,4 +1,5 @@
 using Otantik.BuildingBlocks;
+using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Inventory.Domain.StockMovements;
@@ -140,6 +141,24 @@ public class CostingTests
         Assert.Equal((100m, 20m, 100m), (tomatoes.QuantityOnHand, tomatoes.ReorderLevel, tomatoes.PurchaseUnitSize));
         Assert.Equal((1.8m, 180m), (tomatoes.AverageCost, tomatoes.CostPerPurchaseUnit));
         Assert.Equal(1.8m, tomatoes.RecordSale(1, Guid.NewGuid()).UnitCost);
+    }
+
+    // A category is raw materials or general expenses, and turns the other kind only while it
+    // holds nothing of the other kind; each General keeps the kind it is.
+    [Fact]
+    public void A_categorys_kind_changes_only_while_it_holds_nothing_of_the_other_kind()
+    {
+        var packing = new PurchaseCategory(Guid.NewGuid(), "Packing");
+        Assert.Equal(CategoryKind.RawMaterials, packing.Kind);
+
+        Assert.Contains("holds 3 raw materials", Assert.Throws<DomainException>(() => packing.ChangeKind(CategoryKind.Expenses, 3)).Message);
+        packing.ChangeKind(CategoryKind.Expenses, 0);
+        Assert.Equal(CategoryKind.Expenses, packing.Kind);
+
+        Assert.Throws<DomainException>(() => PurchaseCategory.General().ChangeKind(CategoryKind.Expenses, 0));
+        Assert.Throws<DomainException>(() => PurchaseCategory.GeneralExpenses().ChangeKind(CategoryKind.RawMaterials, 0));
+        Assert.Equal((CategoryKind.Expenses, true), (PurchaseCategory.GeneralExpenses().Kind, PurchaseCategory.GeneralExpenses().IsGeneral));
+        Assert.Equal(1, new PurchaseCategoryUse(5, 2, 4, 1).Misplaced(CategoryKind.RawMaterials));
     }
 
     // Never stock after all: made an expense, nothing is on hand and it is archived. A prep item,

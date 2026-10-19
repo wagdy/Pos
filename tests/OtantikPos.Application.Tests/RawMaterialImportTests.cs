@@ -55,6 +55,7 @@ public class RawMaterialImportTests
         await _pos.Send(new CreateRawMaterialCommand("Tomatoes", UnitOfMeasure.Gram, CostPerPurchaseUnit: 15));
         var salt = await _pos.Send(new CreateRawMaterialCommand("Salt", UnitOfMeasure.Gram));
         (await _pos.Inventory.GetByIdAsync(salt.Id))!.Archive("Omar");
+        await _pos.Send(new SavePurchaseCategoryCommand(Guid.NewGuid(), "Utilities", null, ExpenseLine.Controllable, CategoryKind.Expenses));
 
         var result = await Import(
             new(2, "tomatoes ", "Vegetables", "Kg", "20"),
@@ -66,7 +67,8 @@ public class RawMaterialImportTests
             new(8, "Sugar", "Dry goods", null, null),
             new(9, "Oil", "Dry goods", "Liter", "abc"),
             new(10, "Vinegar", "Dry goods", "Liter", "-5"),
-            new(11, new string('x', 201), null, "Kg", null));
+            new(11, new string('x', 201), null, "Kg", null),
+            new(12, "Charcoal", "utilities", "Kg", null));
 
         Assert.Equal([(4, "Rice")], result.Created.Select(m => (m.Row, m.Name)));
         Assert.Equal(
@@ -80,6 +82,7 @@ public class RawMaterialImportTests
                 (9, "\"abc\" is not a cost: write a number, such as 85.50."),
                 (10, "A cost cannot be negative."),
                 (11, "The name is longer than 200 characters."),
+                (12, "Utilities is a general expenses category: give it a raw materials category."),
             ],
             result.Skipped.Select(s => (s.Row, s.Reason)));
         // A skipped row adds no category; the one already there keeps its price.

@@ -64,7 +64,7 @@ internal sealed class CreateRawMaterialCommandHandler(IRawMaterialRepository mat
 {
     public async Task<RawMaterialDto> Handle(CreateRawMaterialCommand request, CancellationToken cancellationToken)
     {
-        var category = await categories.ResolveAsync(request.CategoryId, cancellationToken);
+        var category = await categories.ResolveAsync(request.CategoryId, CategoryKind.RawMaterials, null, cancellationToken);
         var material = new RawMaterial(request.Name, request.Unit, request.ReorderLevel);
         UpdateRawMaterialCommandHandler.Describe(material, request.Code, category.Id, request.PurchaseUnit, request.PurchaseUnitSize, request.DefaultYieldPercent, request.CostPerPurchaseUnit);
         materials.Add(material);
@@ -98,7 +98,7 @@ internal sealed class UpdateRawMaterialCommandHandler(
         if (material.IsArchived)
             throw new DomainException($"{material.Name} has been deleted.");
         await approvals.EnsureNotPendingAsync(material.Id, cancellationToken);
-        var category = await categories.ResolveAsync(request.CategoryId, cancellationToken);
+        var category = await categories.ResolveAsync(request.CategoryId, CategoryKind.RawMaterials, material.CategoryId, cancellationToken);
 
         material.Rename(request.Name);
         material.SetReorderLevel(request.ReorderLevel);

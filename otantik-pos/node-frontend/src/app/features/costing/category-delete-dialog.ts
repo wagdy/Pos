@@ -5,12 +5,11 @@ import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/materia
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
-import { MatRadioModule } from '@angular/material/radio';
 import { MatSelectModule } from '@angular/material/select';
 import { firstValueFrom } from 'rxjs';
 import {
-  CategoryConversion,
   CategoryDeletionPreview,
+  CategoryKind,
   CostingApi,
   DeleteCategoryInput,
   ExpenseItem,
@@ -27,10 +26,6 @@ export interface CategoryDeleteDialogData {
   categories: PurchaseCategory[];
 }
 
-// What a category's contents end up as: raw materials (purchases and stock), expense items
-// (general expenses), or each as it is.
-type Domain = 'stock' | 'expenses' | 'keep';
-
 // An expense item made a raw material, as it is being filled in.
 interface StockRow {
   item: ExpenseItem;
@@ -39,15 +34,16 @@ interface StockRow {
   purchaseUnitSize: number | null;
 }
 
-// A category deleted (حذف قسم), what is in it moved first: as it is, or across, its raw materials
-// made expense items (one bought as stock by mistake) or its expense items made raw materials.
-// The domain chosen first, then a category that holds that kind (or nothing yet). Moved as they
-// are, it is deleted at once. Converted, the change is reviewed as the server sees it, then done
-// at once for a manager or sent to one for approval. The dialog closes with true once it has
-// gone, or been asked for.
+// A category deleted (حذف قسم), what is in it moved first: its raw materials to one category and
+// its expense items to another, each listed by kind. To a category of its own kind, a kind moves as
+// it is; to one of the other, it is converted on the way: raw materials made expense items (bought
+// as stock by mistake), expense items made raw materials (to be counted from now on). Moved as they
+// are, it is deleted at once. Converted, the change is reviewed as the server sees it, then done at
+// once for a manager or sent to one for approval. The dialog closes with true once it has gone, or
+// been asked for.
 @Component({
   selector: 'app-category-delete-dialog',
-  imports: [FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, MatRadioModule, MatSelectModule],
+  imports: [FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, MatSelectModule],
   template: `
     <h2 mat-dialog-title>Delete {{ data.category.name }} <span class="inline-ar">حذف القسم</span></h2>
     <mat-dialog-content>
@@ -78,79 +74,91 @@ interface StockRow {
       } @else if (!filed()) {
         <p>Nothing is in {{ data.category.name }}. It is deleted straight away.</p>
       } @else {
-        <p>
-          {{ data.category.name }} holds {{ holds() }}. They move, with their purchases, to another category.
-        </p>
-        <div class="step">
-          <span class="step-label" id="domain-label">What they become · تصبح</span>
-          <mat-radio-group [(ngModel)]="domain" (ngModelChange)="domainChanged()" aria-labelledby="domain-label" class="domains">
-            <mat-radio-button value="stock">Purchases &amp; raw materials · مشتريات وخامات</mat-radio-button>
-            <mat-radio-button value="expenses">General expenses · مصروفات عمومية</mat-radio-button>
-            @if (mixed()) {
-              <mat-radio-button value="keep">Each as it is · كما هي</mat-radio-button>
-            }
-          </mat-radio-group>
-          <p class="hint" [class.warn]="convert() !== 'None'">{{ effect() }}</p>
-        </div>
-        <div class="step">
-          <mat-form-field subscriptSizing="dynamic" class="target">
-            <mat-label>Move to · تُنقل إلى</mat-label>
-            <mat-select [(ngModel)]="moveTo" (ngModelChange)="error.set(null)" aria-label="Move what is in it to">
-              @for (c of targets(); track c.id) {
-                <mat-option [value]="c.id">{{ c.name }}<span class="muted"> · {{ counts(c) }}</span></mat-option>
-              } @empty {
-                <mat-option disabled>No category for this yet: add one first</mat-option>
-              }
-            </mat-select>
-            @if (convert() === 'ToExpenses' && target(); as t) {
-              <mat-hint>Their expenses count as {{ lines[t.expenseLine].en }}</mat-hint>
-            }
-          </mat-form-field>
-        </div>
-        @if (convert() === 'ToStock') {
+        <p>They move, with their purchases, to other categories: each kind to one of its own as it is, or to one of the other kind, converted on the way.</p>
+        @if (data.category.materials) {
           <div class="step">
-            <span class="step-label">How each is counted as stock · وحدة العد</span>
-            <div class="table-wrap">
-              <table class="grid units">
-                <thead>
-                  <tr>
-                    <th>Expense item<span class="ar">بند المصروف</span></th>
-                    <th>Counted in<span class="ar">وحدة العد</span></th>
-                    <th>Bought by<span class="ar">وحدة الشراء</span></th>
-                    <th class="num">How much one holds<span class="ar">تحتوي</span></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (r of rows(); track r.item.id) {
-                    <tr>
-                      <td>{{ r.item.name }}</td>
-                      <td>
-                        <mat-form-field subscriptSizing="dynamic" class="unit">
-                          <mat-select [(ngModel)]="r.unit" [aria-label]="r.item.name + ', counted in'" placeholder="Choose">
-                            <mat-option value="Gram">Grams (g)</mat-option>
-                            <mat-option value="Millilitre">Millilitres (ml)</mat-option>
-                            <mat-option value="Piece">Pieces (pc)</mat-option>
-                          </mat-select>
-                        </mat-form-field>
-                      </td>
-                      <td>
-                        <mat-form-field subscriptSizing="dynamic" class="unit">
-                          <input matInput [(ngModel)]="r.purchaseUnit" maxlength="32" [attr.aria-label]="r.item.name + ', bought by'" />
-                        </mat-form-field>
-                      </td>
-                      <td class="num">
-                        <mat-form-field subscriptSizing="dynamic" class="size">
-                          <input matInput type="number" min="0" step="any" [(ngModel)]="r.purchaseUnitSize" [attr.aria-label]="r.item.name + ', how much one holds'" />
-                          @if (r.unit) {
-                            <span matTextSuffix>&nbsp;{{ unitNames[r.unit] }}</span>
-                          }
-                        </mat-form-field>
-                      </td>
-                    </tr>
+            <mat-form-field subscriptSizing="dynamic" class="target">
+              <mat-label>Its {{ count(data.category.materials, 'raw material') }} go to · تُنقل الخامات إلى</mat-label>
+              <mat-select [(ngModel)]="materialsTo" (ngModelChange)="error.set(null)" aria-label="Where its raw materials go">
+                <mat-optgroup label="Raw materials · خامات (as they are)">
+                  @for (c of targets('RawMaterials'); track c.id) {
+                    <mat-option [value]="c.id">{{ c.name }}</mat-option>
                   }
-                </tbody>
-              </table>
-            </div>
+                </mat-optgroup>
+                <mat-optgroup label="General expenses · مصروفات (made expense items)">
+                  @for (c of targets('Expenses'); track c.id) {
+                    <mat-option [value]="c.id">{{ c.name }}</mat-option>
+                  }
+                </mat-optgroup>
+              </mat-select>
+              @if (kindOf(materialsTo) === 'Expenses') {
+                <mat-hint>Their expenses count as {{ lines[target(materialsTo)!.expenseLine].en }}</mat-hint>
+              }
+            </mat-form-field>
+            <p class="hint" [class.warn]="materialsBecomeExpenses()">{{ materialsEffect() }}</p>
+          </div>
+        }
+        @if (data.category.expenseItems) {
+          <div class="step">
+            <mat-form-field subscriptSizing="dynamic" class="target">
+              <mat-label>Its {{ count(data.category.expenseItems, 'expense item') }} go to · تُنقل بنود المصروفات إلى</mat-label>
+              <mat-select [(ngModel)]="expenseItemsTo" (ngModelChange)="error.set(null)" aria-label="Where its expense items go">
+                <mat-optgroup label="General expenses · مصروفات (as they are)">
+                  @for (c of targets('Expenses'); track c.id) {
+                    <mat-option [value]="c.id">{{ c.name }}</mat-option>
+                  }
+                </mat-optgroup>
+                <mat-optgroup label="Raw materials · خامات (made raw materials)">
+                  @for (c of targets('RawMaterials'); track c.id) {
+                    <mat-option [value]="c.id">{{ c.name }}</mat-option>
+                  }
+                </mat-optgroup>
+              </mat-select>
+            </mat-form-field>
+            <p class="hint" [class.warn]="expenseItemsBecomeStock()">{{ expenseItemsEffect() }}</p>
+            @if (expenseItemsBecomeStock()) {
+              <div class="table-wrap">
+                <table class="grid units">
+                  <thead>
+                    <tr>
+                      <th>Expense item<span class="ar">بند المصروف</span></th>
+                      <th>Counted in<span class="ar">وحدة العد</span></th>
+                      <th>Bought by<span class="ar">وحدة الشراء</span></th>
+                      <th class="num">How much one holds<span class="ar">تحتوي</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (r of rows(); track r.item.id) {
+                      <tr>
+                        <td>{{ r.item.name }}</td>
+                        <td>
+                          <mat-form-field subscriptSizing="dynamic" class="unit">
+                            <mat-select [(ngModel)]="r.unit" [aria-label]="r.item.name + ', counted in'" placeholder="Choose">
+                              <mat-option value="Gram">Grams (g)</mat-option>
+                              <mat-option value="Millilitre">Millilitres (ml)</mat-option>
+                              <mat-option value="Piece">Pieces (pc)</mat-option>
+                            </mat-select>
+                          </mat-form-field>
+                        </td>
+                        <td>
+                          <mat-form-field subscriptSizing="dynamic" class="unit">
+                            <input matInput [(ngModel)]="r.purchaseUnit" maxlength="32" [attr.aria-label]="r.item.name + ', bought by'" />
+                          </mat-form-field>
+                        </td>
+                        <td class="num">
+                          <mat-form-field subscriptSizing="dynamic" class="size">
+                            <input matInput type="number" min="0" step="any" [(ngModel)]="r.purchaseUnitSize" [attr.aria-label]="r.item.name + ', how much one holds'" />
+                            @if (r.unit) {
+                              <span matTextSuffix>&nbsp;{{ unitNames[r.unit] }}</span>
+                            }
+                          </mat-form-field>
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            }
           </div>
         }
       }
@@ -166,10 +174,10 @@ interface StockRow {
         </button>
       } @else {
         <button mat-button mat-dialog-close [disabled]="saving()">Cancel</button>
-        @if (convert() !== 'None') {
+        @if (converts()) {
           <button mat-flat-button (click)="review()" [disabled]="saving() || loading()">Review the changes</button>
         } @else {
-          <button mat-flat-button class="danger-fill" (click)="removePlain()" [disabled]="saving() || loading()">
+          <button mat-flat-button class="danger-fill" (click)="send()" [disabled]="saving() || loading()">
             {{ filed() ? 'Move and delete' : 'Delete' }}
           </button>
         }
@@ -181,18 +189,8 @@ interface StockRow {
     .step {
       margin: 12px 0;
     }
-    .step-label {
-      display: block;
-      font: var(--mat-sys-title-small);
-      margin-bottom: 4px;
-    }
-    .domains {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
     .hint {
-      margin: 6px 0 0;
+      margin: 4px 0 0;
       color: var(--mat-sys-on-surface-variant);
     }
     .hint.warn {
@@ -200,7 +198,7 @@ interface StockRow {
       font-weight: 500;
     }
     .target {
-      min-width: 280px;
+      min-width: 300px;
     }
     .unit {
       width: 150px;
@@ -243,87 +241,77 @@ export class CategoryDeleteDialog {
   // Its expense items still in use: the ones that would become raw materials.
   protected readonly rows = signal<StockRow[]>([]);
 
-  // Starts as what it holds: a category of raw materials stays one, of expenses stays one.
-  private readonly domainChoice = signal<Domain>(
-    this.data.category.materials && this.data.category.expenseItems ? 'keep' : this.data.category.expenseItems ? 'expenses' : 'stock',
-  );
-  protected get domain(): Domain {
-    return this.domainChoice();
+  // Where each kind goes: chosen, never assumed.
+  private readonly materialsTarget = signal<string | null>(null);
+  protected get materialsTo(): string | null {
+    return this.materialsTarget();
   }
-  protected set domain(value: Domain) {
-    this.domainChoice.set(value);
+  protected set materialsTo(value: string | null) {
+    this.materialsTarget.set(value);
   }
-  private readonly target$ = signal<string | null>(null);
-  protected get moveTo(): string | null {
-    return this.target$();
+  private readonly expensesTarget = signal<string | null>(null);
+  protected get expenseItemsTo(): string | null {
+    return this.expensesTarget();
   }
-  protected set moveTo(value: string | null) {
-    this.target$.set(value);
+  protected set expenseItemsTo(value: string | null) {
+    this.expensesTarget.set(value);
   }
   protected reason = '';
   private readonly requestId = crypto.randomUUID();
 
   protected readonly filed = computed(() => this.data.category.materials + this.data.category.expenseItems);
-  protected readonly mixed = computed(() => this.data.category.materials > 0 && this.data.category.expenseItems > 0);
-
-  protected readonly convert = computed((): CategoryConversion => {
-    const domain = this.domainChoice();
-    if (domain === 'expenses' && this.data.category.materials > 0) {
-      return 'ToExpenses';
-    }
-    return domain === 'stock' && this.rows().length > 0 ? 'ToStock' : 'None';
-  });
-
-  // The categories it can move to, by what they hold: for expenses one holding expense items or
-  // nothing yet, for raw materials one holding raw materials or nothing yet. General takes either.
-  protected readonly targets = computed(() => {
-    const domain = this.domainChoice();
-    return this.data.categories.filter(
-      (c) =>
-        c.id !== this.data.category.id &&
-        (domain === 'keep' ||
-          c.isGeneral ||
-          (domain === 'expenses' ? c.expenseItems > 0 || c.materials === 0 : c.materials > 0 || c.expenseItems === 0)),
-    );
-  });
-  protected readonly target = computed(() => this.data.categories.find((c) => c.id === this.target$()) ?? null);
+  protected readonly materialsBecomeExpenses = computed(
+    () => this.data.category.materials > 0 && this.kindOf(this.materialsTarget()) === 'Expenses',
+  );
+  protected readonly expenseItemsBecomeStock = computed(
+    () => this.rows().length > 0 && this.kindOf(this.expensesTarget()) === 'RawMaterials',
+  );
+  protected readonly converts = computed(() => this.materialsBecomeExpenses() || this.expenseItemsBecomeStock());
 
   constructor() {
     void this.load();
   }
 
-  protected holds(): string {
-    const { materials, expenseItems } = this.data.category;
-    return [count(materials, 'raw material'), count(expenseItems, 'expense item')].filter(Boolean).join(' and ');
+  // The other categories of that kind, its General first.
+  protected targets(kind: CategoryKind): PurchaseCategory[] {
+    return this.data.categories.filter((c) => c.id !== this.data.category.id && c.kind === kind);
   }
 
-  protected counts(category: PurchaseCategory): string {
-    return [count(category.materials, 'raw material'), count(category.expenseItems, 'expense item')].filter(Boolean).join(', ') || 'empty';
+  protected target(id: string | null): PurchaseCategory | null {
+    return this.data.categories.find((c) => c.id === id) ?? null;
   }
 
-  // What choosing the domain does to what is in it.
-  protected effect(): string {
-    const { materials, expenseItems } = this.data.category;
-    switch (this.convert()) {
-      case 'ToExpenses':
-        return materials === 1
-          ? `Its raw material becomes an expense item: its past invoice lines are restated as expenses on their own dates, and its stock ledger is taken out.${expenseItems ? ' Its expense items move as they are.' : ''}`
-          : `Its ${materials} raw materials become expense items: their past invoice lines are restated as expenses on their own dates, and their stock ledger is taken out.${expenseItems ? ' Its expense items move as they are.' : ''}`;
-      case 'ToStock':
-        return this.rows().length === 1
-          ? `Its expense item becomes a raw material, starting with nothing on hand; its past invoices stay expenses.${materials ? ' Its raw materials move as they are.' : ''}`
-          : `Its ${this.rows().length} expense items become raw materials, starting with nothing on hand; their past invoices stay expenses.${materials ? ' Its raw materials move as they are.' : ''}`;
-      default:
-        return 'They move as they are.';
+  protected kindOf(id: string | null): CategoryKind | null {
+    return this.target(id)?.kind ?? null;
+  }
+
+  protected count(n: number, what: string): string {
+    return `${n} ${n === 1 ? what : `${what}s`}`;
+  }
+
+  protected materialsEffect(): string {
+    const n = this.data.category.materials;
+    if (!this.materialsTarget()) {
+      return 'Choose where they go.';
     }
+    if (!this.materialsBecomeExpenses()) {
+      return 'They move as they are.';
+    }
+    return n === 1
+      ? 'It becomes an expense item: its past invoice lines are restated as expenses on their own dates, and its stock ledger is taken out.'
+      : 'They become expense items: their past invoice lines are restated as expenses on their own dates, and their stock ledger is taken out.';
   }
 
-  // A new domain: a category chosen for the other no longer fits.
-  protected domainChanged(): void {
-    this.error.set(null);
-    if (this.moveTo && !this.targets().some((c) => c.id === this.moveTo)) {
-      this.moveTo = null;
+  protected expenseItemsEffect(): string {
+    if (!this.expensesTarget()) {
+      return 'Choose where they go.';
     }
+    if (!this.expenseItemsBecomeStock()) {
+      return 'They move as they are.';
+    }
+    return this.rows().length === 1
+      ? 'It becomes a raw material, starting with nothing on hand; its past invoices stay expenses. Say how it is counted:'
+      : 'They become raw materials, starting with nothing on hand; their past invoices stay expenses. Say how each is counted:';
   }
 
   protected async review(): Promise<void> {
@@ -341,6 +329,7 @@ export class CategoryDeleteDialog {
     }
   }
 
+  // Moved as they are (or nothing in it), deleted at once; converted, done or asked of a manager.
   protected async send(): Promise<void> {
     const deletion = this.deletion();
     if (!deletion) {
@@ -348,7 +337,7 @@ export class CategoryDeleteDialog {
     }
     this.saving.set(true);
     try {
-      const result = await firstValueFrom(this.api.deletePurchaseCategoryConverting(this.data.category.id, deletion));
+      const result = await firstValueFrom(this.api.deletePurchaseCategory(this.data.category.id, deletion));
       if (result.outcome === 'Requested' && result.request) {
         await this.approvals.requested({ outcome: result.outcome, request: result.request });
       } else {
@@ -363,32 +352,17 @@ export class CategoryDeleteDialog {
     }
   }
 
-  // Moved as they are (or nothing in it): deleted at once, as it always was.
-  protected async removePlain(): Promise<void> {
-    if (this.filed() && !this.moveTo) {
-      this.error.set('Choose the category they move to.');
-      return;
-    }
-    this.saving.set(true);
-    try {
-      await firstValueFrom(this.api.deletePurchaseCategory(this.data.category.id, this.filed() ? this.moveTo : null));
-      this.notify.info(`${this.data.category.name} deleted.`);
-      this.ref.close(true);
-    } catch (error) {
-      this.error.set(errorMessage(error, `${this.data.category.name} could not be deleted.`));
-    } finally {
-      this.saving.set(false);
-    }
-  }
-
   // What is sent, or null with what is missing said.
   private deletion(): DeleteCategoryInput | null {
-    if (!this.moveTo) {
-      this.error.set('Choose the category they move to.');
+    if (this.data.category.materials > 0 && !this.materialsTo) {
+      this.error.set('Choose where its raw materials go.');
       return null;
     }
-    const convert = this.convert();
-    if (convert === 'ToStock') {
+    if (this.data.category.expenseItems > 0 && !this.expenseItemsTo) {
+      this.error.set('Choose where its expense items go.');
+      return null;
+    }
+    if (this.expenseItemsBecomeStock()) {
       const missing = this.rows().find((r) => !r.unit || !r.purchaseUnit.trim() || !((r.purchaseUnitSize ?? 0) > 0));
       if (missing) {
         this.error.set(`Say what ${missing.item.name} is counted in, what it is bought by, and how much one holds.`);
@@ -398,12 +372,11 @@ export class CategoryDeleteDialog {
     this.error.set(null);
     return {
       requestId: this.requestId,
-      moveToId: this.moveTo,
-      convert,
-      units:
-        convert === 'ToStock'
-          ? this.rows().map((r) => ({ expenseItemId: r.item.id, unit: r.unit!, purchaseUnit: r.purchaseUnit.trim(), purchaseUnitSize: r.purchaseUnitSize! }))
-          : [],
+      materialsTo: this.data.category.materials > 0 ? this.materialsTo : null,
+      expenseItemsTo: this.data.category.expenseItems > 0 ? this.expenseItemsTo : null,
+      units: this.expenseItemsBecomeStock()
+        ? this.rows().map((r) => ({ expenseItemId: r.item.id, unit: r.unit!, purchaseUnit: r.purchaseUnit.trim(), purchaseUnitSize: r.purchaseUnitSize! }))
+        : [],
       reason: this.reason.trim() || null,
     };
   }
@@ -424,8 +397,4 @@ export class CategoryDeleteDialog {
       this.loading.set(false);
     }
   }
-}
-
-function count(n: number, what: string): string {
-  return n === 0 ? '' : `${n} ${n === 1 ? what : `${what}s`}`;
 }

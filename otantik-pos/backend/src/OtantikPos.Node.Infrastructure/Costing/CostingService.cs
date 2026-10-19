@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Otantik.BuildingBlocks;
 using Otantik.SharedKernel.Catalog;
 using Otantik.SharedKernel.Orders;
+using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
 using OtantikPos.Inventory.Domain.StockMovements;
@@ -46,7 +47,9 @@ public sealed record MaterialCostDto(
     // Bought, or made in the kitchen (a prep item, its cost from its batches).
     MaterialKind Kind,
     // The purchase category Category names.
-    Guid CategoryId);
+    Guid CategoryId,
+    // In a general expenses category: filed there before the kinds were kept apart.
+    bool Misplaced = false);
 
 // One line of the Recipe Costing Template. Quantity is the Edible Portion (EP) for the whole
 // recipe in the material's Unit; APS/Unit and EPS/Unit are per PurchaseUnit, as prices are written.
@@ -190,7 +193,7 @@ public sealed class CostingService(NodeDbContext db, RestaurantClock clock, Sale
     {
         // Deleted ones are kept for the records that name them, off the list.
         var materials = await db.RawMaterials.AsNoTracking().Where(m => m.ArchivedAtUtc == null).OrderBy(m => m.Name).ToListAsync(cancellationToken);
-        var categories = await db.PurchaseCategories.AsNoTracking().ToDictionaryAsync(c => c.Id, c => c.Name, cancellationToken);
+        var categories = await db.PurchaseCategories.AsNoTracking().ToDictionaryAsync(c => c.Id, cancellationToken);
         // The last price that stands: a voided delivery or batch, and its reversal, are not one.
         var lastPurchases = await db.StockMovements.AsNoTracking()
             .Where(m => (m.Reason == StockMovementReason.Purchase || m.Reason == StockMovementReason.ProductionOutput) && m.UnitCost != null
@@ -203,10 +206,11 @@ public sealed class CostingService(NodeDbContext db, RestaurantClock clock, Sale
         {
             var last = lastPurchases.GetValueOrDefault(m.Id);
             return new MaterialCostDto(
-                m.Id, m.Code, m.Name, categories.GetValueOrDefault(m.CategoryId), m.Unit, m.PurchaseUnit, m.PurchaseUnitSize,
+                m.Id, m.Code, m.Name, categories.GetValueOrDefault(m.CategoryId)?.Name, m.Unit, m.PurchaseUnit, m.PurchaseUnitSize,
                 Money(m.CostPerPurchaseUnit), m.DefaultYieldPercent, m.QuantityOnHand, m.ReorderLevel,
                 Money(m.AverageCost * Math.Max(m.QuantityOnHand, 0)),
-                Money(last?.UnitCost * m.PurchaseUnitSize), last?.OccurredAtUtc, m.AverageCost, m.Kind, m.CategoryId);
+                Money(last?.UnitCost * m.PurchaseUnitSize), last?.OccurredAtUtc, m.AverageCost, m.Kind, m.CategoryId,
+                categories.GetValueOrDefault(m.CategoryId)?.Kind == CategoryKind.Expenses);
         }).ToList();
     }
 

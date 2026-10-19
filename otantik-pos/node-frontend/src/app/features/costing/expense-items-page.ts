@@ -80,7 +80,12 @@ import { ExpenseItemDialog, ExpenseItemDialogData } from './expense-item-dialog'
                     <span class="ar">{{ s.nameAr }}</span>
                   }
                 </td>
-                <td>{{ s.category }}</td>
+                <td>
+                  {{ s.category }}
+                  @if (s.misplaced) {
+                    <div class="misplaced" title="Filed in a raw materials category before the kinds were kept apart">In a raw materials category: move it</div>
+                  }
+                </td>
                 <td class="nowrap">{{ s.unit ?? '—' }}</td>
                 <td class="num">{{ s.invoices }}</td>
                 <td class="num">{{ s.postedTotal | money }}</td>
@@ -134,6 +139,10 @@ import { ExpenseItemDialog, ExpenseItemDialogData } from './expense-item-dialog'
   styles: `
     .search {
       min-width: 240px;
+    }
+    .misplaced {
+      font-size: 0.85em;
+      color: var(--mat-sys-error);
     }
         .badge {
       margin-left: 6px;

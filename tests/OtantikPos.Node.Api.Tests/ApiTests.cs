@@ -262,8 +262,8 @@ public class ApiTests
         Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync("/api/costing/purchases/spending?from=2026-10-01&to=2026-10-31", Cancel)).StatusCode);
 
         var saved = await Json(await manager.PutAsJsonAsync($"/api/inventory/purchase-categories/{utilities}",
-            new { name = "Utilities", nameAr = "مرافق", expenseLine = "Controllable" }, Cancel));
-        Assert.Equal("Controllable", saved.GetProperty("expenseLine").GetString());
+            new { name = "Utilities", nameAr = "مرافق", expenseLine = "Controllable", kind = "Expenses" }, Cancel));
+        Assert.Equal(("Controllable", "Expenses"), (saved.GetProperty("expenseLine").GetString(), saved.GetProperty("kind").GetString()));
         await Json(await manager.PutAsJsonAsync($"/api/inventory/purchase-categories/{dairy}", new { name = "Dairy" }, Cancel));
         await Json(await manager.PutAsJsonAsync($"/api/inventory/expense-items/{electricity}", new { name = "Electricity", categoryId = utilities }, Cancel));
         var milk = await Json(await manager.PostAsJsonAsync("/api/inventory/raw-materials",
@@ -294,9 +294,13 @@ public class ApiTests
         var statement = (await Json(await manager.GetAsync("/api/costing/kpis?year=2026&month=10", Cancel))).GetProperty("statement");
         Assert.Equal(1_200m, statement.GetProperty("loggedControllableCosts").GetDecimal());
 
-        // Dairy holds the milk: deleted only by moving it.
+        // Dairy holds the milk: deleted only by moving it, as it is, to a raw materials category;
+        // to Utilities it would be converted, which a plain delete does not do.
         Assert.Equal(HttpStatusCode.UnprocessableEntity, (await manager.DeleteAsync($"/api/inventory/purchase-categories/{dairy}", Cancel)).StatusCode);
-        Assert.Equal(HttpStatusCode.NoContent, (await manager.DeleteAsync($"/api/inventory/purchase-categories/{dairy}?moveTo={utilities}", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await manager.DeleteAsync($"/api/inventory/purchase-categories/{dairy}?moveTo={utilities}", Cancel)).StatusCode);
+        var fresh = Guid.NewGuid();
+        await Json(await manager.PutAsJsonAsync($"/api/inventory/purchase-categories/{fresh}", new { name = "Fresh", kind = "RawMaterials" }, Cancel));
+        Assert.Equal(HttpStatusCode.NoContent, (await manager.DeleteAsync($"/api/inventory/purchase-categories/{dairy}?moveTo={fresh}", Cancel)).StatusCode);
         Assert.Equal("Archived", (await Json(await manager.DeleteAsync($"/api/inventory/expense-items/{electricity}", Cancel))).GetProperty("outcome").GetString());
     }
 
@@ -624,16 +628,16 @@ public class ApiTests
             Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(Cancel));
             return await response.Content.ReadFromJsonAsync<JsonElement>(Cancel);
         }
-        async Task<Guid> Category(string name)
+        async Task<Guid> Category(string name, string kind = "RawMaterials")
         {
             var id = Guid.NewGuid();
-            await Json(await manager.PutAsJsonAsync($"/api/inventory/purchase-categories/{id}", new { name }, Cancel));
+            await Json(await manager.PutAsJsonAsync($"/api/inventory/purchase-categories/{id}", new { name, kind }, Cancel));
             return id;
         }
         var cleaning = await Category("Cleaning stock");
-        var maintenance = await Category("Maintenance");
+        var maintenance = await Category("Maintenance", "Expenses");
         await Json(await manager.PostAsJsonAsync("/api/inventory/raw-materials", new { name = "Bleach", unit = "Piece", categoryId = cleaning }, Cancel));
-        object Body() => new { requestId = Guid.NewGuid(), moveToId = maintenance, convert = "ToExpenses", reason = "Cleaning is an expense" };
+        object Body() => new { requestId = Guid.NewGuid(), materialsTo = maintenance, reason = "Cleaning is an expense" };
         var path = $"/api/inventory/purchase-categories/{cleaning}/delete";
 
         Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PostAsJsonAsync(path, Body(), Cancel)).StatusCode);

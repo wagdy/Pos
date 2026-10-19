@@ -48,7 +48,7 @@ export interface ExpenseItemDialogData {
           <mat-label>Arabic name · الاسم بالعربية</mat-label>
           <input matInput formControlName="nameAr" maxlength="200" dir="rtl" placeholder="الكهرباء" />
         </mat-form-field>
-        <app-purchase-category-field formControlName="categoryId" hint="Its category says where it counts in the P&L." />
+        <app-purchase-category-field formControlName="categoryId" kind="Expenses" hint="Its category says where it counts in the P&L." />
         <mat-form-field>
           <mat-label>Usually counted in · الوحدة</mat-label>
           <input matInput formControlName="unit" maxlength="32" placeholder="bottle, visit, month" />

@@ -32,6 +32,8 @@ export interface MaterialCost {
   // Per gram, millilitre or piece, unrounded: what recipe costs are worked out from.
   costPerUnit: number | null;
   kind: MaterialKind;
+  // In a general expenses category: filed there before the kinds were kept apart.
+  misplaced?: boolean;
 }
 
 // One invoice line that bought a material, as its paper has it: quantity in the unit billed (5 kg),
@@ -985,6 +987,17 @@ export const expenseLineLabels: Record<ExpenseLine, { en: string; ar: string; hi
 
 // What the restaurant buys, grouped: raw materials and expense items are each in one. General is
 // always there and cannot be deleted.
+// What a category files: raw materials (stock) or general expenses. A raw material goes in one of
+// the first, an expense item in one of the second.
+export type CategoryKind = 'RawMaterials' | 'Expenses';
+
+export const categoryKindLabels: Record<CategoryKind, { en: string; ar: string }> = {
+  RawMaterials: { en: 'Raw materials', ar: 'خامات ومشتريات' },
+  Expenses: { en: 'General expenses', ar: 'مصروفات عمومية' },
+};
+
+// isGeneral: the General of its kind, where anything not yet sorted goes. misplaced: items in use
+// of the other kind, filed there before the kinds were kept apart.
 export interface PurchaseCategory {
   id: string;
   name: string;
@@ -993,12 +1006,9 @@ export interface PurchaseCategory {
   isGeneral: boolean;
   materials: number;
   expenseItems: number;
+  kind: CategoryKind;
+  misplaced: number;
 }
-
-// What a deleted category's contents become on the way to where they move: as they are; its raw
-// materials made expense items (their past purchases restated as expenses); or its expense items
-// made raw materials, each with what it is counted in and bought by.
-export type CategoryConversion = 'None' | 'ToExpenses' | 'ToStock';
 
 export interface StockUnit {
   expenseItemId: string;
@@ -1007,11 +1017,14 @@ export interface StockUnit {
   purchaseUnitSize: number;
 }
 
+// Where its raw materials go, and where its expense items go: to a category of the other kind,
+// they are converted on the way (raw materials made expense items, their past purchases restated
+// as expenses; expense items made raw materials, each counted and bought as units says).
 // requestId is made here: a retry asks once.
 export interface DeleteCategoryInput {
   requestId: string;
-  moveToId: string | null;
-  convert: CategoryConversion;
+  materialsTo: string | null;
+  expenseItemsTo: string | null;
   units: StockUnit[];
   reason: string | null;
 }
@@ -1032,6 +1045,7 @@ export interface SavePurchaseCategory {
   name: string;
   nameAr: string | null;
   expenseLine: ExpenseLine;
+  kind: CategoryKind;
 }
 
 // Bought but never stock: only a cost, under its category.
@@ -1047,6 +1061,8 @@ export interface ExpenseItem {
   invoices: number;
   postedTotal: number;
   lastPostedAtUtc: string | null;
+  // In a raw materials category: filed there before the kinds were kept apart.
+  misplaced?: boolean;
 }
 
 export interface SaveExpenseItem {
@@ -1221,14 +1237,10 @@ export class CostingApi {
     return this.http.post<CategoryDeletionPreview>(`/api/inventory/purchase-categories/${id}/delete/preview`, deletion);
   }
 
-  // Converting its contents: at once for a manager (Applied), asked of one for anyone else (Requested).
-  deletePurchaseCategoryConverting(id: string, deletion: DeleteCategoryInput): Observable<CategoryDeletionResult> {
+  // Each kind moved as it is, deleted at once (Applied); converting any, at once for a manager
+  // (Applied) and asked of one for anyone else (Requested).
+  deletePurchaseCategory(id: string, deletion: DeleteCategoryInput): Observable<CategoryDeletionResult> {
     return this.http.post<CategoryDeletionResult>(`/api/inventory/purchase-categories/${id}/delete`, deletion);
-  }
-
-  // moveTo: where what is in it goes, needed while it holds anything.
-  deletePurchaseCategory(id: string, moveTo: string | null): Observable<void> {
-    return this.http.delete<void>(`/api/inventory/purchase-categories/${id}`, { params: moveTo ? { moveTo } : {} });
   }
 
   expenseItems(includeArchived = false): Observable<ExpenseItem[]> {

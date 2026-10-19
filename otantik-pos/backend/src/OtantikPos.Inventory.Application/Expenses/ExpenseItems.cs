@@ -23,11 +23,13 @@ public sealed record ExpenseItemDto(
     // Invoices it is on, drafts included: any at all and deleting it archives it instead.
     int Invoices,
     decimal PostedTotal,
-    DateTime? LastPostedAtUtc)
+    DateTime? LastPostedAtUtc,
+    // In a raw materials category: filed there before the kinds were kept apart.
+    bool Misplaced = false)
 {
     public static ExpenseItemDto From(ExpenseItem item, PurchaseCategory? category, ExpenseItemUse? use) => new(
-        item.Id, item.Name, item.NameAr, item.CategoryId, category?.Name ?? PurchaseCategory.GeneralName, category?.NameAr, item.Unit,
-        item.IsArchived, use?.Invoices ?? 0, use?.PostedTotal ?? 0, use?.LastPostedAtUtc);
+        item.Id, item.Name, item.NameAr, item.CategoryId, category?.Name ?? PurchaseCategory.GeneralExpensesName, category?.NameAr, item.Unit,
+        item.IsArchived, use?.Invoices ?? 0, use?.PostedTotal ?? 0, use?.LastPostedAtUtc, category?.Kind == CategoryKind.RawMaterials);
 }
 
 public enum ExpenseItemRemoval
@@ -87,8 +89,8 @@ internal sealed class SaveExpenseItemHandler(
                 : $"{namesake.Name} is already an expense item.");
         }
 
-        var category = await categories.ResolveAsync(request.CategoryId, cancellationToken);
         var item = await items.GetByIdAsync(request.ExpenseItemId, cancellationToken);
+        var category = await categories.ResolveAsync(request.CategoryId, CategoryKind.Expenses, item?.CategoryId, cancellationToken);
         if (item is null)
             items.Add(item = new ExpenseItem(request.ExpenseItemId, request.Name ?? string.Empty, category.Id, request.NameAr, request.Unit));
         else

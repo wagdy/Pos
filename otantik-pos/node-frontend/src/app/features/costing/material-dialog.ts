@@ -44,7 +44,7 @@ const many: Record<UnitOfMeasure, string> = { Gram: 'g', Millilitre: 'ml', Piece
           <mat-label>Code · الكود</mat-label>
           <input matInput formControlName="code" placeholder="ING-001" />
         </mat-form-field>
-        <app-purchase-category-field formControlName="categoryId" />
+        <app-purchase-category-field formControlName="categoryId" kind="RawMaterials" />
         <mat-form-field>
           <mat-label>Counted in · وحدة العد</mat-label>
           <mat-select formControlName="unit" (selectionChange)="unitChanged($event.value)">

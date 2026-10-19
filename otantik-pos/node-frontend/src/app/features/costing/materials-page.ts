@@ -107,7 +107,12 @@ import { MaterialImportDialog } from './material-import-dialog';
                       <span class="muted small"> by {{ p.requestedBy }}, {{ p.requestedAtUtc | date: 'd MMM' }}</span></div>
                   }
                 </td>
-                <td>{{ m.category ?? '' }}</td>
+                <td>
+                  {{ m.category ?? '' }}
+                  @if (m.misplaced) {
+                    <div class="misplaced" title="Filed in a general expenses category before the kinds were kept apart">In an expenses category: move it</div>
+                  }
+                </td>
                 <td>{{ m.purchaseUnit }} <span class="muted">({{ m.purchaseUnitSize | number: '1.0-3' }} {{ unit(m) }})</span></td>
                 <td class="num">
                   @if (m.costPerPurchaseUnit !== null) {
@@ -154,6 +159,10 @@ import { MaterialImportDialog } from './material-import-dialog';
     }
     .actions {
       white-space: nowrap;
+    }
+    .misplaced {
+      font-size: 0.85em;
+      color: var(--mat-sys-error);
     }
     .visually-hidden {
       position: absolute;

@@ -607,10 +607,12 @@ public sealed class PurchaseCategoryStore : IPurchaseCategoryRepository
         Task.FromResult(_categories.SingleOrDefault(c => c.NormalizedName == normalizedName));
     public async Task<IReadOnlyDictionary<Guid, PurchaseCategoryUse>> GetUseAsync(CancellationToken cancellationToken = default)
     {
-        var materials = (await _materials.GetAllAsync(cancellationToken)).GroupBy(m => m.CategoryId).ToDictionary(g => g.Key, g => g.Count());
-        var expenses = (await _expenses.GetAllAsync(cancellationToken)).GroupBy(e => e.CategoryId).ToDictionary(g => g.Key, g => g.Count());
+        var materials = (await _materials.GetAllAsync(cancellationToken)).GroupBy(m => m.CategoryId).ToDictionary(g => g.Key, g => g.ToList());
+        var expenses = (await _expenses.GetAllAsync(cancellationToken)).GroupBy(e => e.CategoryId).ToDictionary(g => g.Key, g => g.ToList());
         return materials.Keys.Union(expenses.Keys)
-            .ToDictionary(id => id, id => new PurchaseCategoryUse(materials.GetValueOrDefault(id), expenses.GetValueOrDefault(id)));
+            .ToDictionary(id => id, id => new PurchaseCategoryUse(
+                materials.GetValueOrDefault(id)?.Count ?? 0, expenses.GetValueOrDefault(id)?.Count ?? 0,
+                materials.GetValueOrDefault(id)?.Count(m => !m.IsArchived) ?? 0, expenses.GetValueOrDefault(id)?.Count(e => !e.IsArchived) ?? 0));
     }
 }
 

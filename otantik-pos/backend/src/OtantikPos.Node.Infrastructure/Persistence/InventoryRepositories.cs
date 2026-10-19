@@ -275,11 +275,15 @@ internal sealed class PurchaseCategoryRepository(NodeDbContext db) : IPurchaseCa
     public async Task<IReadOnlyDictionary<Guid, PurchaseCategoryUse>> GetUseAsync(CancellationToken cancellationToken = default)
     {
         var materials = await db.RawMaterials.AsNoTracking().GroupBy(m => m.CategoryId)
-            .Select(g => new { g.Key, Count = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.Count, cancellationToken);
+            .Select(g => new { g.Key, Count = g.Count(), Active = g.Count(m => m.ArchivedAtUtc == null) })
+            .ToDictionaryAsync(x => x.Key, cancellationToken);
         var expenses = await db.ExpenseItems.AsNoTracking().GroupBy(e => e.CategoryId)
-            .Select(g => new { g.Key, Count = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.Count, cancellationToken);
+            .Select(g => new { g.Key, Count = g.Count(), Active = g.Count(e => !e.IsArchived) })
+            .ToDictionaryAsync(x => x.Key, cancellationToken);
         return materials.Keys.Union(expenses.Keys)
-            .ToDictionary(id => id, id => new PurchaseCategoryUse(materials.GetValueOrDefault(id), expenses.GetValueOrDefault(id)));
+            .ToDictionary(id => id, id => new PurchaseCategoryUse(
+                materials.GetValueOrDefault(id)?.Count ?? 0, expenses.GetValueOrDefault(id)?.Count ?? 0,
+                materials.GetValueOrDefault(id)?.Active ?? 0, expenses.GetValueOrDefault(id)?.Active ?? 0));
     }
 }
 

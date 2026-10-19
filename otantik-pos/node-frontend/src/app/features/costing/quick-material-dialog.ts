@@ -36,7 +36,7 @@ export interface QuickMaterialResult {
           <mat-label>Name · الاسم</mat-label>
           <input matInput formControlName="name" cdkFocusInitial />
         </mat-form-field>
-        <app-purchase-category-field class="wide" formControlName="categoryId" />
+        <app-purchase-category-field class="wide" formControlName="categoryId" kind="RawMaterials" />
         <mat-form-field>
           <mat-label>Counted in · وحدة العد</mat-label>
           <mat-select formControlName="unit" (selectionChange)="unitChanged($event.value)">

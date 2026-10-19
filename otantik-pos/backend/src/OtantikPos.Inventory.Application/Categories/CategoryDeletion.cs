@@ -10,28 +10,21 @@ using OtantikPos.Inventory.Domain.RawMaterials;
 
 namespace OtantikPos.Inventory.Application.Categories;
 
-// What a deleted category's contents become on their way to the category they move to: as they
-// are; its raw materials made expense items (bought as stock by mistake: a cleaning spray, a
-// repair); or its expense items made raw materials, to be counted from now on.
-public enum CategoryConversion
-{
-    None = 0,
-    ToExpenses = 1,
-    ToStock = 2,
-}
-
 // An expense item made a raw material: what it is counted in, and how it is bought (a bottle of
 // 750 ml).
 public sealed record StockUnit(Guid ExpenseItemId, UnitOfMeasure Unit, string PurchaseUnit, decimal PurchaseUnitSize);
 
-// A category's deletion as asked: where its contents go, what they become, and what was in it
-// then, so a manager approves what was asked and nothing put in it since.
+// A category's deletion as asked: where its raw materials go and where its expense items go, each
+// to a category of its own kind or, converted on the way, of the other (Units: what each expense
+// item made a raw material is counted in and bought by); and what was in it then, so a manager
+// approves what was asked and nothing put in it since.
 public sealed record CategoryDeletion(
-    Guid MoveToId,
-    CategoryConversion Convert,
+    Guid MaterialsTo,
+    Guid ExpenseItemsTo,
     IReadOnlyList<StockUnit> Units,
     IReadOnlyList<Guid> Materials,
-    IReadOnlyList<Guid> ExpenseItems);
+    IReadOnlyList<Guid> ExpenseItems,
+    bool MaterialsBecomeExpenses = false);
 
 // What making raw materials expenses restates: their invoice lines and what they cost, their
 // ledger entries and their count lines.
@@ -57,27 +50,30 @@ public interface IItemConversions
     Task RestateAndSaveAsync(IReadOnlyList<(Guid MaterialId, Guid ExpenseItemId)> pairs, CancellationToken cancellationToken);
 }
 
-// Deletes the category, its contents first moved to MoveToId: one holding anything is not
-// deleted without somewhere for it to go, and the purchases go with it. Moved as they are, it is
-// done at once for whoever keeps stock. Converted on the way, it is a manager's: at once for one,
-// kept with the decisions; asked of one by anyone else, the category locked until then.
-// RequestId is made by the till.
+// Deletes the category, its raw materials first moved to MaterialsTo and its expense items to
+// ExpenseItemsTo: one holding anything is not deleted without somewhere for it to go, and the
+// purchases go with it. Each kind moved to a category of its kind goes as it is, done at once for
+// whoever keeps stock; moved to one of the other kind, it is converted on the way, and that is a
+// manager's: at once for one, kept with the decisions; asked of one by anyone else, the category
+// locked until then. RequestId is made by the till.
 public sealed record DeletePurchaseCategoryCommand(
     Guid CategoryId,
-    Guid? MoveToId = null,
-    CategoryConversion Convert = CategoryConversion.None,
+    Guid? MaterialsTo = null,
+    Guid? ExpenseItemsTo = null,
     IReadOnlyList<StockUnit>? Units = null,
     Guid? RequestId = null,
     string? Reason = null,
     string StaffId = "",
     string StaffName = "",
-    bool CanApprove = true) : IRequest<CategoryDeletionResult>, IRetryOnConflict;
+    bool CanApprove = true,
+    // False for a plain move: one that would convert anything is refused.
+    bool AllowConversion = true) : IRequest<CategoryDeletionResult>, IRetryOnConflict;
 
 // Applied (Request: the decision kept, when it converted anything) or Requested.
 public sealed record CategoryDeletionResult(ApprovalOutcome Outcome, ApprovalRequestDto? Request);
 
 // What a deletion would do, checked as it will be when sent; nothing is saved.
-public sealed record PreviewCategoryDeletionQuery(Guid CategoryId, Guid? MoveToId, CategoryConversion Convert, IReadOnlyList<StockUnit>? Units)
+public sealed record PreviewCategoryDeletionQuery(Guid CategoryId, Guid? MaterialsTo, Guid? ExpenseItemsTo, IReadOnlyList<StockUnit>? Units)
     : IRequest<CategoryDeletionPreview>;
 
 // Converts: whether it is a manager's to decide.
@@ -89,8 +85,8 @@ internal sealed class PreviewCategoryDeletionHandler(IPurchaseCategoryRepository
     public async Task<CategoryDeletionPreview> Handle(PreviewCategoryDeletionQuery request, CancellationToken cancellationToken)
     {
         var category = await categories.GetRequiredAsync(request.CategoryId, cancellationToken);
-        var plan = await deleter.PlanAsync(category, request.MoveToId, request.Convert, request.Units ?? [], null, cancellationToken);
-        return new CategoryDeletionPreview(plan.Summary, plan.Changes, plan.Deletion.Convert != CategoryConversion.None);
+        var plan = await deleter.PlanAsync(category, request.MaterialsTo, request.ExpenseItemsTo, request.Units ?? [], null, cancellationToken);
+        return new CategoryDeletionPreview(plan.Summary, plan.Changes, plan.Converts);
     }
 }
 
@@ -109,8 +105,11 @@ internal sealed class DeletePurchaseCategoryHandler(
             return new CategoryDeletionResult(ApprovalOutcome.Applied, null);
 
         await requests.EnsureNotPendingAsync(category.Id, cancellationToken);
-        var plan = await deleter.PlanAsync(category, request.MoveToId, request.Convert, request.Units ?? [], null, cancellationToken);
-        if (plan.Deletion.Convert == CategoryConversion.None)
+        var plan = await deleter.PlanAsync(category, request.MaterialsTo, request.ExpenseItemsTo, request.Units ?? [], null, cancellationToken);
+        if (plan.Converts && !request.AllowConversion)
+            throw new DomainException(
+                $"Moving what is in {category.Name} there would convert it to the other kind. Delete it from the categories screen, which asks where each kind goes.");
+        if (!plan.Converts)
         {
             await deleter.ApplyAsync(plan, request.StaffName, cancellationToken);
             return new CategoryDeletionResult(ApprovalOutcome.Applied, null);
@@ -150,58 +149,54 @@ internal sealed class CategoryDeleter(
 
     internal sealed record Plan(
         PurchaseCategory Category,
-        PurchaseCategory? Target,
+        PurchaseCategory? MaterialsTarget,
+        PurchaseCategory? ExpensesTarget,
         CategoryDeletion Deletion,
         IReadOnlyList<RawMaterial> Materials,
         IReadOnlyList<ExpenseItem> ExpenseItems,
         IReadOnlyDictionary<Guid, ExpenseItem> Namesakes,
         string Summary,
-        IReadOnlyList<ApprovalChange> Changes);
+        IReadOnlyList<ApprovalChange> Changes)
+    {
+        // Its raw materials going to a general expenses category: made expense items.
+        public bool MaterialsBecomeExpenses => Deletion.MaterialsBecomeExpenses;
 
-    // Everything that would refuse it, refused now. A conversion with nothing to convert (raw
-    // materials made expenses, in a category holding none) is a plain move.
+        // Its expense items in use going to a raw materials category: made raw materials.
+        public bool ExpenseItemsBecomeStock => Deletion.Units.Count > 0;
+
+        public bool Converts => MaterialsBecomeExpenses || ExpenseItemsBecomeStock;
+    }
+
+    // Everything that would refuse it, refused now.
     public async Task<Plan> PlanAsync(
-        PurchaseCategory category, Guid? moveToId, CategoryConversion convert, IReadOnlyList<StockUnit> units, Guid? exceptRequestId,
+        PurchaseCategory category, Guid? materialsTo, Guid? expenseItemsTo, IReadOnlyList<StockUnit> units, Guid? exceptRequestId,
         CancellationToken cancellationToken)
     {
         if (category.IsGeneral)
             throw new DomainException($"{category.Name} stays: it is where anything not yet sorted goes. Rename it if you like.");
-        if (!Enum.IsDefined(convert))
-            throw new DomainException("Say what its contents become.");
 
         var inMaterials = (await materials.GetAllAsync(cancellationToken)).Where(m => m.CategoryId == category.Id).ToList();
         var inExpenses = (await expenses.GetInCategoryAsync(category.Id, cancellationToken))
             .OrderBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase)
             .ToList();
-        var filed = inMaterials.Count + inExpenses.Count;
-        PurchaseCategory? target = null;
-        if (moveToId is { } id && id != Guid.Empty)
-        {
-            if (id == category.Id)
-                throw new DomainException("Choose another category for what is in it.");
-            target = await categories.GetRequiredAsync(id, cancellationToken);
-        }
-        else if (filed > 0)
-        {
-            throw new DomainException(
-                $"{category.Name} has {filed} {(filed == 1 ? "item" : "items")} in it. Choose the category {(filed == 1 ? "it moves" : "they move")} to.");
-        }
-
-        var toStock = inExpenses.Where(e => !e.IsArchived).ToList();
-        if ((convert == CategoryConversion.ToExpenses && inMaterials.Count == 0) || (convert == CategoryConversion.ToStock && toStock.Count == 0))
-            convert = CategoryConversion.None;
+        var materialsTarget = inMaterials.Count > 0 ? await TargetAsync(category, materialsTo, "raw materials", cancellationToken) : null;
+        var expensesTarget = inExpenses.Count > 0 ? await TargetAsync(category, expenseItemsTo, "expense items", cancellationToken) : null;
 
         var namesakes = new Dictionary<Guid, ExpenseItem>();
-        var stockUnits = new List<StockUnit>();
-        if (convert == CategoryConversion.ToExpenses)
+        if (materialsTarget?.Kind == CategoryKind.Expenses)
             await CheckExpensesAsync(category, inMaterials, namesakes, exceptRequestId, cancellationToken);
-        else if (convert == CategoryConversion.ToStock)
-            stockUnits = await CheckStockAsync(toStock, units, exceptRequestId, cancellationToken);
+        // The ones in use are made raw materials; archived ones move as they are.
+        var stockUnits = expensesTarget?.Kind == CategoryKind.RawMaterials
+            ? await CheckStockAsync([.. inExpenses.Where(e => !e.IsArchived)], units, exceptRequestId, cancellationToken)
+            : [];
 
         var deletion = new CategoryDeletion(
-            target?.Id ?? Guid.Empty, convert, stockUnits, [.. inMaterials.Select(m => m.Id).Order()], [.. inExpenses.Select(e => e.Id).Order()]);
-        var (summary, changes) = await DescribeAsync(category, target, deletion, inMaterials, inExpenses, namesakes, cancellationToken);
-        return new Plan(category, target, deletion, inMaterials, inExpenses, namesakes, summary, changes);
+            materialsTarget?.Id ?? Guid.Empty, expensesTarget?.Id ?? Guid.Empty, stockUnits,
+            [.. inMaterials.Select(m => m.Id).Order()], [.. inExpenses.Select(e => e.Id).Order()],
+            inMaterials.Count > 0 && materialsTarget?.Kind == CategoryKind.Expenses);
+        var plan = new Plan(category, materialsTarget, expensesTarget, deletion, inMaterials, inExpenses, namesakes, "", []);
+        var (summary, changes) = await DescribeAsync(plan, cancellationToken);
+        return plan with { Summary = summary, Changes = changes };
     }
 
     // On approval: planned again as it is now, and refused if what is in the category changed.
@@ -209,24 +204,38 @@ internal sealed class CategoryDeleter(
     {
         var category = await categories.GetByIdAsync(categoryId, cancellationToken)
             ?? throw new DomainException("That category has been deleted already: reject this request.");
-        var plan = await PlanAsync(category, asked.MoveToId, asked.Convert, asked.Units, requestId, cancellationToken);
+        var plan = await PlanAsync(
+            category, NoneIfEmpty(asked.MaterialsTo), NoneIfEmpty(asked.ExpenseItemsTo), asked.Units, requestId, cancellationToken);
         if (!plan.Deletion.Materials.SequenceEqual(asked.Materials) || !plan.Deletion.ExpenseItems.SequenceEqual(asked.ExpenseItems)
-            || plan.Deletion.Convert != asked.Convert)
+            || plan.Deletion.Units.Count != asked.Units.Count || plan.MaterialsBecomeExpenses != asked.MaterialsBecomeExpenses)
             throw new DomainException($"What is in {category.Name} has changed since it was asked: reject this request, and ask again.");
         await ApplyAsync(plan, by, cancellationToken);
+    }
+
+    private static Guid? NoneIfEmpty(Guid id) => id == Guid.Empty ? null : id;
+
+    // Where something of the category goes: another category, which must be there.
+    private async Task<PurchaseCategory> TargetAsync(PurchaseCategory category, Guid? to, string what, CancellationToken cancellationToken)
+    {
+        if (to is not { } id || id == Guid.Empty)
+            throw new DomainException($"{category.Name} holds {what}: choose the category they move to.");
+        if (id == category.Id)
+            throw new DomainException($"Choose another category for its {what}.");
+        return await categories.GetByIdAsync(id, cancellationToken)
+            ?? throw new DomainException("That category is no longer on the list. Choose it again, or add it.");
     }
 
     // Done and saved: everything moved, converted as planned, and the category gone.
     public async Task ApplyAsync(Plan plan, string by, CancellationToken cancellationToken)
     {
-        var target = plan.Target?.Id ?? Guid.Empty;
         var units = plan.Deletion.Units.ToDictionary(u => u.ExpenseItemId);
         var pairs = new List<(Guid MaterialId, Guid ExpenseItemId)>();
+        var target = plan.MaterialsTarget?.Id ?? Guid.Empty;
         foreach (var material in plan.Materials)
         {
             ExpenseItem expense;
             material.MoveTo(target);
-            if (plan.Deletion.Convert != CategoryConversion.ToExpenses)
+            if (!plan.MaterialsBecomeExpenses)
                 continue;
 
             // The expense item of its name, when there is one (read only to find it: loaded to be
@@ -245,14 +254,15 @@ internal sealed class CategoryDeleter(
             pairs.Add((material.Id, expense.Id));
         }
 
+        var expensesTarget = plan.ExpensesTarget?.Id ?? Guid.Empty;
         foreach (var item in plan.ExpenseItems)
         {
-            item.MoveTo(target);
+            item.MoveTo(expensesTarget);
             if (units.TryGetValue(item.Id, out var unit))
             {
                 var material = new RawMaterial(item.Name, unit.Unit);
                 material.SetPurchaseUnit(unit.PurchaseUnit, unit.PurchaseUnitSize);
-                material.Describe(null, target);
+                material.Describe(null, expensesTarget);
                 materials.Add(material);
                 item.Archive();
             }
@@ -311,58 +321,56 @@ internal sealed class CategoryDeleter(
 
     // "Category منظفات deleted: 1 raw material becomes an expense item in صيانه", and line by line
     // what it does.
-    private async Task<(string Summary, IReadOnlyList<ApprovalChange> Changes)> DescribeAsync(
-        PurchaseCategory category, PurchaseCategory? target, CategoryDeletion deletion, IReadOnlyList<RawMaterial> inMaterials,
-        IReadOnlyList<ExpenseItem> inExpenses, IReadOnlyDictionary<Guid, ExpenseItem> namesakes, CancellationToken cancellationToken)
+    private async Task<(string Summary, IReadOnlyList<ApprovalChange> Changes)> DescribeAsync(Plan plan, CancellationToken cancellationToken)
     {
         var changes = new List<ApprovalChange>();
-        var to = target?.Name ?? "";
-        string summary;
-        switch (deletion.Convert)
+        var converted = new List<string>();
+        var (inMaterials, inExpenses) = (plan.Materials, plan.ExpenseItems);
+        if (plan.MaterialsBecomeExpenses)
         {
-            case CategoryConversion.ToExpenses:
-                summary = $"Category {category.Name} deleted: {Count(inMaterials.Count, "raw material")} {(inMaterials.Count == 1 ? "becomes an expense item" : "become expense items")} in {to}";
-                foreach (var m in inMaterials)
-                    changes.Add(new ApprovalChange(
-                        m.Name, $"Raw material, {Amount(m.QuantityOnHand, m.Unit)} on hand",
-                        namesakes.TryGetValue(m.Id, out var joins) ? $"Expense item (joins {joins.Name})" : "Expense item"));
-                var restated = await conversions.RestatementAsync([.. inMaterials.Select(m => m.Id)], cancellationToken);
+            converted.Add($"{Count(inMaterials.Count, "raw material")} {(inMaterials.Count == 1 ? "becomes an expense item" : "become expense items")} in {plan.MaterialsTarget!.Name}");
+            foreach (var m in inMaterials)
                 changes.Add(new ApprovalChange(
-                    "Invoice lines", null,
-                    restated.InvoiceLines == 0
-                        ? "None: never bought on an invoice"
-                        : $"{Count(restated.InvoiceLines, "line")} ({Money(restated.InvoiceTotal)}) restated as expenses, each on its invoice's date"));
-                string[] ledger =
-                [
-                    .. restated.StockMovements > 0 ? [Count(restated.StockMovements, "entry", "entries")] : Array.Empty<string>(),
-                    .. restated.CountLines > 0 ? [Count(restated.CountLines, "count line")] : Array.Empty<string>(),
-                ];
-                changes.Add(new ApprovalChange("Stock ledger", null, ledger.Length == 0 ? "Nothing in it" : $"{string.Join(" and ", ledger)} taken out"));
-                changes.Add(new ApprovalChange("Their expenses count as", null, Line(target!.ExpenseLine)));
-                break;
-            case CategoryConversion.ToStock:
-                var made = inExpenses.Where(e => !e.IsArchived).ToList();
-                summary = $"Category {category.Name} deleted: {Count(made.Count, "expense item")} {(made.Count == 1 ? "becomes a raw material" : "become raw materials")} in {to}";
-                foreach (var unit in deletion.Units)
-                    changes.Add(new ApprovalChange(
-                        made.Single(e => e.Id == unit.ExpenseItemId).Name, "Expense item",
-                        $"Raw material counted in {Unit(unit.Unit)}, bought by the {unit.PurchaseUnit} of {Amount(unit.PurchaseUnitSize, unit.Unit)}"));
-                changes.Add(new ApprovalChange("Past expense lines", null, "Stay expenses; each starts with nothing on hand"));
-                break;
-            default:
-                summary = inMaterials.Count + inExpenses.Count == 0 ? $"Category {category.Name} deleted" : $"Category {category.Name} deleted, what is in it moved to {to}";
-                break;
+                    m.Name, $"Raw material, {Amount(m.QuantityOnHand, m.Unit)} on hand",
+                    plan.Namesakes.TryGetValue(m.Id, out var joins) ? $"Expense item (joins {joins.Name})" : "Expense item"));
+            var restated = await conversions.RestatementAsync([.. inMaterials.Select(m => m.Id)], cancellationToken);
+            changes.Add(new ApprovalChange(
+                "Invoice lines", null,
+                restated.InvoiceLines == 0
+                    ? "None: never bought on an invoice"
+                    : $"{Count(restated.InvoiceLines, "line")} ({Money(restated.InvoiceTotal)}) restated as expenses, each on its invoice's date"));
+            string[] ledger =
+            [
+                .. restated.StockMovements > 0 ? [Count(restated.StockMovements, "entry", "entries")] : Array.Empty<string>(),
+                .. restated.CountLines > 0 ? [Count(restated.CountLines, "count line")] : Array.Empty<string>(),
+            ];
+            changes.Add(new ApprovalChange("Stock ledger", null, ledger.Length == 0 ? "Nothing in it" : $"{string.Join(" and ", ledger)} taken out"));
+            changes.Add(new ApprovalChange("Their expenses count as", null, Line(plan.MaterialsTarget.ExpenseLine)));
+        }
+        if (plan.ExpenseItemsBecomeStock)
+        {
+            var made = plan.Deletion.Units.Count;
+            converted.Add($"{Count(made, "expense item")} {(made == 1 ? "becomes a raw material" : "become raw materials")} in {plan.ExpensesTarget!.Name}");
+            foreach (var unit in plan.Deletion.Units)
+                changes.Add(new ApprovalChange(
+                    inExpenses.Single(e => e.Id == unit.ExpenseItemId).Name, "Expense item",
+                    $"Raw material counted in {Unit(unit.Unit)}, bought by the {unit.PurchaseUnit} of {Amount(unit.PurchaseUnitSize, unit.Unit)}"));
+            changes.Add(new ApprovalChange("Past expense lines", null, "Stay expenses; each starts with nothing on hand"));
         }
 
         // The rest goes as it is.
-        var kept = deletion.Convert switch
-        {
-            CategoryConversion.ToExpenses => inExpenses.Count,
-            CategoryConversion.ToStock => inMaterials.Count + inExpenses.Count(e => e.IsArchived),
-            _ => inMaterials.Count + inExpenses.Count,
-        };
-        if (kept > 0)
-            changes.Add(new ApprovalChange("Moved as they are", null, $"{Count(kept, "item")} to {to}"));
+        var moved = new List<string>();
+        if (inMaterials.Count > 0 && !plan.MaterialsBecomeExpenses)
+            moved.Add($"{Count(inMaterials.Count, "raw material")} to {plan.MaterialsTarget!.Name}");
+        var expensesAsTheyAre = inExpenses.Count - plan.Deletion.Units.Count;
+        if (expensesAsTheyAre > 0)
+            moved.Add($"{Count(expensesAsTheyAre, "expense item")} to {plan.ExpensesTarget!.Name}");
+        if (moved.Count > 0)
+            changes.Add(new ApprovalChange("Moved as they are", null, string.Join("; ", moved)));
+
+        var summary = converted.Count > 0
+            ? $"Category {plan.Category.Name} deleted: {string.Join("; ", converted)}"
+            : moved.Count > 0 ? $"Category {plan.Category.Name} deleted, what is in it moved" : $"Category {plan.Category.Name} deleted";
         return (summary, changes);
     }
 

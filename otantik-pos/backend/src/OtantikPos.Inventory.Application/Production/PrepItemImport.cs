@@ -126,8 +126,12 @@ internal sealed class ImportPrepItemsHandler(
                 categories.Add(category = new PurchaseCategory(Guid.NewGuid(), CategoryName));
                 categoryAdded = category.Name;
             }
+            else if (category.Kind != CategoryKind.RawMaterials)
+            {
+                throw new DomainException($"{category.Name} is a general expenses category: make it a raw materials category for the prep items first.");
+            }
 
-            var general = await categories.ResolveAsync(null, cancellationToken);
+            var general = await categories.ResolveAsync(null, CategoryKind.RawMaterials, null, cancellationToken);
             foreach (var material in usedAdded)
             {
                 material.Describe(null, general.Id);

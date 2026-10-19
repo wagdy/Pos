@@ -132,7 +132,15 @@ internal sealed class ImportRawMaterialsHandler(IRawMaterialRepository materials
                         return "A cost cannot be negative.";
                 }
 
-                return SheetText.Clean(row.Category)?.Length > 100 ? "The category's name is longer than 100 characters." : null;
+                if (SheetText.Clean(row.Category) is { } categoryName)
+                {
+                    if (categoryName.Length > 100)
+                        return "The category's name is longer than 100 characters.";
+                    if (known.TryGetValue(PurchaseCategory.Normalize(categoryName), out var filedUnder) && filedUnder.Kind != CategoryKind.RawMaterials)
+                        return $"{filedUnder.Name} is a general expenses category: give it a raw materials category.";
+                }
+
+                return null;
             }
 
             if (Problem() is { } reason)
@@ -163,7 +171,7 @@ internal sealed class ImportRawMaterialsHandler(IRawMaterialRepository materials
         string? name, Dictionary<string, PurchaseCategory> known, List<string> added, CancellationToken cancellationToken)
     {
         if (name is null)
-            return await categories.ResolveAsync(null, cancellationToken);
+            return await categories.ResolveAsync(null, CategoryKind.RawMaterials, null, cancellationToken);
         if (known.TryGetValue(PurchaseCategory.Normalize(name), out var found))
             return found;
         var category = new PurchaseCategory(Guid.NewGuid(), name);

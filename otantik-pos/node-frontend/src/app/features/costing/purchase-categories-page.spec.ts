@@ -8,10 +8,18 @@ import { CategoryDeleteDialog } from './category-delete-dialog';
 import { PurchaseCategoriesPage } from './purchase-categories-page';
 import { PurchaseCategoryDialog } from './purchase-category-dialog';
 
-const general: PurchaseCategory = { id: 'general', name: 'General', nameAr: 'عام', expenseLine: 'Controllable', isGeneral: true, materials: 2, expenseItems: 0 };
-const dairy: PurchaseCategory = { id: 'dairy', name: 'Dairy', nameAr: null, expenseLine: 'Controllable', isGeneral: false, materials: 3, expenseItems: 0 };
-const rent: PurchaseCategory = { id: 'rent', name: 'Rent', nameAr: 'إيجار', expenseLine: 'Occupation', isGeneral: false, materials: 0, expenseItems: 1 };
-const empty: PurchaseCategory = { id: 'empty', name: 'Packaging', nameAr: null, expenseLine: 'Controllable', isGeneral: false, materials: 0, expenseItems: 0 };
+const general: PurchaseCategory = {
+  id: 'general', name: 'General', nameAr: 'عام', expenseLine: 'Controllable', isGeneral: true, materials: 2, expenseItems: 0, kind: 'RawMaterials', misplaced: 0,
+};
+const dairy: PurchaseCategory = {
+  id: 'dairy', name: 'Dairy', nameAr: null, expenseLine: 'Controllable', isGeneral: false, materials: 3, expenseItems: 0, kind: 'RawMaterials', misplaced: 0,
+};
+const rent: PurchaseCategory = {
+  id: 'rent', name: 'Rent', nameAr: 'إيجار', expenseLine: 'Occupation', isGeneral: false, materials: 0, expenseItems: 1, kind: 'Expenses', misplaced: 0,
+};
+const empty: PurchaseCategory = {
+  id: 'empty', name: 'Packaging', nameAr: null, expenseLine: 'Controllable', isGeneral: false, materials: 0, expenseItems: 0, kind: 'RawMaterials', misplaced: 0,
+};
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
@@ -52,14 +60,14 @@ describe('the purchase categories', () => {
     approvals.pendingFor.mockReset();
   });
 
-  it('lists each with where its expenses count and what is filed under it; General is never deleted', async () => {
+  it('lists each with its kind, where its expenses count and what is filed under it; General is never deleted', async () => {
     const { rows, button } = await render();
 
-    expect(rows().map((r) => [...r.querySelectorAll('td')].slice(0, 5).map(text))).toEqual([
-      ['General Default · افتراضي', 'عام', 'Controllable costsتكاليف قابلة للتحكم', '2', '0'],
-      ['Dairy', '—', 'Controllable costsتكاليف قابلة للتحكم', '3', '0'],
-      ['Rent', 'إيجار', 'Occupation (rent)الإشغال (الإيجار)', '0', '1'],
-      ['Packaging', '—', 'Controllable costsتكاليف قابلة للتحكم', '0', '0'],
+    expect(rows().map((r) => [...r.querySelectorAll('td')].slice(0, 6).map(text))).toEqual([
+      ['General Default · افتراضي', 'عام', 'Raw materialsخامات ومشتريات', '—', '2', '0'],
+      ['Dairy', '—', 'Raw materialsخامات ومشتريات', '—', '3', '0'],
+      ['Rent', 'إيجار', 'General expensesمصروفات عمومية', 'Occupation (rent)الإشغال (الإيجار)', '0', '1'],
+      ['Packaging', '—', 'Raw materialsخامات ومشتريات', '—', '0', '0'],
     ]);
     expect(button(rows()[0], 'Delete')).toBeUndefined();
     expect(button(rows()[1], 'Delete')).toBeDefined();
@@ -100,5 +108,14 @@ describe('the purchase categories', () => {
     expect(button(rows()[1], 'Delete')).toBeUndefined();
     expect(button(rows()[1], 'Edit')).toBeUndefined();
     expect(rows()[1].querySelector('[aria-label="Locked: waiting for a manager"]')).not.toBeNull();
+  });
+
+  it('says when one holds items of the other kind, filed there before the kinds were kept apart', async () => {
+    purchaseCategories.mockReturnValue(of([general, { ...dairy, expenseItems: 1, misplaced: 1 }, { ...rent, materials: 2, misplaced: 2 }]));
+    const { rows } = await render();
+
+    expect(text(rows()[1].querySelector('.misplaced')!)).toBe('1 expense item does not belong here: move or convert it.');
+    expect(text(rows()[2].querySelector('.misplaced')!)).toBe('2 raw materials do not belong here: move or convert them.');
+    expect(rows()[0].querySelector('.misplaced')).toBeNull();
   });
 });

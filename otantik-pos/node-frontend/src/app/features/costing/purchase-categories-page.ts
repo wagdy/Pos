@@ -7,7 +7,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { firstValueFrom } from 'rxjs';
-import { ApprovalRequest, CostingApi, PurchaseCategory, expenseLineLabels } from '../../core/costing/costing.api';
+import { ApprovalRequest, CostingApi, PurchaseCategory, categoryKindLabels, expenseLineLabels } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals, pendingLabel } from './approvals';
@@ -25,9 +25,9 @@ import { PurchaseCategoryDialog, PurchaseCategoryDialogData } from './purchase-c
   imports: [MatButtonModule, MatIconModule, MatProgressBarModule, MatTooltipModule],
   template: `
     <p class="note">
-      How purchases are grouped: Meat, Dairy, Packaging for raw materials; Utilities, Cleaning, Rent for expense items. Every raw
-      material and expense item is in one, and spending is added up by them. For expenses, the category also says where they count in
-      the profit and loss.
+      How purchases are grouped: Meat, Dairy, Packaging for raw materials; Utilities, Cleaning, Rent for expense items. Each category
+      is for one kind: a raw material goes in a raw materials category, an expense item in a general expenses one, and spending is
+      added up by them. For expenses, the category also says where they count in the profit and loss.
       <span class="inline-ar">تصنيف المشتريات والخامات والمصروفات.</span>
     </p>
     @if (loading()) {
@@ -45,6 +45,7 @@ import { PurchaseCategoryDialog, PurchaseCategoryDialogData } from './purchase-c
             <tr>
               <th>Category<span class="ar">الفئة</span></th>
               <th>Arabic name<span class="ar">الاسم بالعربية</span></th>
+              <th>For<span class="ar">النوع</span></th>
               <th>Expenses count as<span class="ar">تُحتسب المصروفات ضمن</span></th>
               <th class="num">Raw materials<span class="ar">الخامات</span></th>
               <th class="num">Expense items<span class="ar">بنود المصروفات</span></th>
@@ -59,13 +60,26 @@ import { PurchaseCategoryDialog, PurchaseCategoryDialogData } from './purchase-c
                   @if (c.isGeneral) {
                     <span class="badge">Default · افتراضي</span>
                   }
+                  @if (c.misplaced) {
+                    <div class="misplaced">
+                      {{ c.misplaced }} {{ c.kind === 'RawMaterials' ? (c.misplaced === 1 ? 'expense item does' : 'expense items do') : (c.misplaced === 1 ? 'raw material does' : 'raw materials do') }}
+                      not belong here: move or convert {{ c.misplaced === 1 ? 'it' : 'them' }}.
+                    </div>
+                  }
                   @if (pendingOf(c); as p) {
                     <div><span class="pending-badge">{{ pendingLabel(p).en }}<span class="ar">{{ pendingLabel(p).ar }}</span></span>
                       <span class="muted small"> by {{ p.requestedBy }}</span></div>
                   }
                 </td>
                 <td dir="rtl" class="ar-cell">{{ c.nameAr ?? '—' }}</td>
-                <td>{{ lines[c.expenseLine].en }}<span class="ar">{{ lines[c.expenseLine].ar }}</span></td>
+                <td>{{ kinds[c.kind].en }}<span class="ar">{{ kinds[c.kind].ar }}</span></td>
+                <td>
+                  @if (c.kind === 'Expenses') {
+                    {{ lines[c.expenseLine].en }}<span class="ar">{{ lines[c.expenseLine].ar }}</span>
+                  } @else {
+                    <span class="muted">—</span>
+                  }
+                </td>
                 <td class="num">{{ c.materials }}</td>
                 <td class="num">{{ c.expenseItems }}</td>
                 <td class="num actions">
@@ -82,7 +96,7 @@ import { PurchaseCategoryDialog, PurchaseCategoryDialogData } from './purchase-c
                 </td>
               </tr>
             } @empty {
-              <tr><td colspan="6" class="muted">No categories yet.</td></tr>
+              <tr><td colspan="7" class="muted">No categories yet.</td></tr>
             }
           </tbody>
         </table>
@@ -93,6 +107,11 @@ import { PurchaseCategoryDialog, PurchaseCategoryDialogData } from './purchase-c
   styles: `
     .ar-cell {
       text-align: start;
+    }
+    .misplaced {
+      margin-top: 2px;
+      font-size: 0.85em;
+      color: var(--mat-sys-error);
     }
     .actions {
       white-space: nowrap;
@@ -124,6 +143,7 @@ export class PurchaseCategoriesPage {
   private readonly approvals = inject(Approvals);
 
   protected readonly lines = expenseLineLabels;
+  protected readonly kinds = categoryKindLabels;
   protected readonly pendingLabel = pendingLabel;
   protected readonly categories = signal<PurchaseCategory[]>([]);
   protected readonly loading = signal(true);

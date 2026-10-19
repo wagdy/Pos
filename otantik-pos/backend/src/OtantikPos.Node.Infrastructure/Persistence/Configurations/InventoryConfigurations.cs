@@ -316,6 +316,8 @@ internal sealed class PurchaseCategoryConfiguration : IEntityTypeConfiguration<P
         builder.Property(c => c.NormalizedName).HasMaxLength(100);
         builder.Property(c => c.NameAr).HasMaxLength(100);
         builder.Property(c => c.ExpenseLine).IsEnumName();
+        // Raw materials or general expenses; the CategoryKinds migration gave each it had one.
+        builder.Property(c => c.Kind).IsEnumName().HasDefaultValue(CategoryKind.RawMaterials).HasSentinel((CategoryKind)0);
         builder.Ignore(c => c.IsGeneral);
         builder.HasIndex(c => c.NormalizedName).IsUnique();
     }
