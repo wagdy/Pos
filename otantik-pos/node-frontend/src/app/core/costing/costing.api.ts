@@ -677,7 +677,16 @@ export interface PurchaseInvoiceSummary {
 
 // Maker-checker: what a manager decides. Deletions in every costing module; new and changed prep
 // items and production orders too.
-export type ApprovalModule = 'Recipe' | 'PurchaseInvoice' | 'Waste' | 'StockCount' | 'RawMaterial' | 'PrepItem' | 'ProductionOrder' | 'Treasury';
+export type ApprovalModule =
+  | 'Recipe'
+  | 'PurchaseInvoice'
+  | 'Waste'
+  | 'StockCount'
+  | 'RawMaterial'
+  | 'PrepItem'
+  | 'ProductionOrder'
+  | 'Treasury'
+  | 'PurchaseCategory';
 export type ApprovalAction = 'Create' | 'Update' | 'Delete';
 export type ApprovalStatus = 'Pending' | 'Approved' | 'Rejected';
 export type ApprovalOutcome = 'Requested' | 'Applied';
@@ -691,6 +700,7 @@ export const moduleLabels: Record<ApprovalModule, { en: string; ar: string }> = 
   PrepItem: { en: 'Prep item', ar: 'الأصناف نصف المصنعة' },
   ProductionOrder: { en: 'Production', ar: 'أذونات التصنيع' },
   Treasury: { en: 'Safe', ar: 'الخزنة' },
+  PurchaseCategory: { en: 'Purchase category', ar: 'أقسام المشتريات' },
 };
 
 export const actionLabels: Record<ApprovalAction, { en: string; ar: string }> = {
@@ -985,6 +995,39 @@ export interface PurchaseCategory {
   expenseItems: number;
 }
 
+// What a deleted category's contents become on the way to where they move: as they are; its raw
+// materials made expense items (their past purchases restated as expenses); or its expense items
+// made raw materials, each with what it is counted in and bought by.
+export type CategoryConversion = 'None' | 'ToExpenses' | 'ToStock';
+
+export interface StockUnit {
+  expenseItemId: string;
+  unit: UnitOfMeasure;
+  purchaseUnit: string;
+  purchaseUnitSize: number;
+}
+
+// requestId is made here: a retry asks once.
+export interface DeleteCategoryInput {
+  requestId: string;
+  moveToId: string | null;
+  convert: CategoryConversion;
+  units: StockUnit[];
+  reason: string | null;
+}
+
+// What a deletion would do, line by line as the manager reads it; converts: a manager's to decide.
+export interface CategoryDeletionPreview {
+  summary: string;
+  changes: ApprovalChange[];
+  converts: boolean;
+}
+
+export interface CategoryDeletionResult {
+  outcome: ApprovalOutcome;
+  request: ApprovalRequest | null;
+}
+
 export interface SavePurchaseCategory {
   name: string;
   nameAr: string | null;
@@ -1172,6 +1215,15 @@ export class CostingApi {
   // Adds it on the first save, under the id made here; changes it after.
   savePurchaseCategory(id: string, category: SavePurchaseCategory): Observable<PurchaseCategory> {
     return this.http.put<PurchaseCategory>(`/api/inventory/purchase-categories/${id}`, category);
+  }
+
+  previewCategoryDeletion(id: string, deletion: DeleteCategoryInput): Observable<CategoryDeletionPreview> {
+    return this.http.post<CategoryDeletionPreview>(`/api/inventory/purchase-categories/${id}/delete/preview`, deletion);
+  }
+
+  // Converting its contents: at once for a manager (Applied), asked of one for anyone else (Requested).
+  deletePurchaseCategoryConverting(id: string, deletion: DeleteCategoryInput): Observable<CategoryDeletionResult> {
+    return this.http.post<CategoryDeletionResult>(`/api/inventory/purchase-categories/${id}/delete`, deletion);
   }
 
   // moveTo: where what is in it goes, needed while it holds anything.

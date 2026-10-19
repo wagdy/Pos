@@ -21,6 +21,8 @@ export const consequences: Record<ApprovalModule, string> = {
   PrepItem: 'It leaves the lists: it can no longer be made, counted or put in a recipe. The batches that name it keep it.',
   ProductionOrder: 'It is kept, marked voided: its ingredients go back into stock and the prep item comes back out, at the costs it was made at, dated today.',
   Treasury: 'It is kept, marked voided: its cash goes back where it came from, dated today, and a supplier payment goes back on the supplier’s account.',
+  PurchaseCategory:
+    'The category goes and what is in it moves, converted as listed: raw materials made expense items have their past invoice lines restated as expenses on their own dates and their stock ledger taken out; expense items made raw materials start with nothing on hand.',
 };
 
 // The posted records, which are voided rather than deleted.

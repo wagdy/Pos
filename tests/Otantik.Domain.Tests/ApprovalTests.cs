@@ -156,6 +156,11 @@ public class ApprovalTests
             Guid.NewGuid(), ApprovalModule.RawMaterial, ApprovalAction.Update, Guid.NewGuid(), "Tomatoes counted in pieces", [], "{}", null, "staff-1", "Mona").Status);
         Assert.Throws<DomainException>(() => ApprovalRequest.AskToChange(
             Guid.NewGuid(), ApprovalModule.RawMaterial, ApprovalAction.Create, Guid.NewGuid(), "Tomatoes", [], "{}", null, "staff-1", "Mona"));
+        // A category's deletion holds where its contents go and what they become.
+        var category = ApprovalRequest.AskToChange(
+            Guid.NewGuid(), ApprovalModule.PurchaseCategory, ApprovalAction.Delete, Guid.NewGuid(), "Category Cleaning deleted", [], "{\"convert\":\"ToExpenses\"}",
+            null, "staff-1", "Mona");
+        Assert.Equal((ApprovalAction.Delete, "{\"convert\":\"ToExpenses\"}"), (category.Action, category.Payload));
     }
 
     [Fact]

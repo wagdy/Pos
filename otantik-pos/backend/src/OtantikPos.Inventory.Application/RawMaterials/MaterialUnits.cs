@@ -157,20 +157,20 @@ internal sealed class MaterialUnitWriter(IMaterialUnits units)
         var ratio = change.OneNewIsOld ?? 1;
         var (from, to) = (material.Unit, change.Unit);
         // Said of the larger unit: "1 piece is 60 g" whichever way it goes.
-        var conversion = ratio >= 1 ? $"1 {One(to)} is {Quantity(ratio)} {Name(from)}" : $"1 {One(from)} is {Quantity(1 / ratio)} {Name(to)}";
+        var conversion = ratio >= 1 ? $"1 {One(to)} is {Amount(ratio, from)}" : $"1 {One(from)} is {Amount(1 / ratio, to)}";
         var changes = new List<ApprovalChange>
         {
             new("Counted in", Name(from), Name(to)),
             new("Conversion", null, conversion),
-            new("On hand", $"{Quantity(material.QuantityOnHand)} {Name(from)}", $"{Quantity(material.QuantityOnHand / ratio)} {Name(to)}"),
+            new("On hand", Amount(material.QuantityOnHand, from), Amount(material.QuantityOnHand / ratio, to)),
         };
         if (material.AverageCost is { } cost)
             changes.Add(new ApprovalChange("Average cost", $"{Money(cost)} a {One(from)}", $"{Money(cost * ratio)} a {One(to)}"));
         if (material.ReorderLevel != 0)
-            changes.Add(new ApprovalChange("Reorder at", $"{Quantity(material.ReorderLevel)} {Name(from)}", $"{Quantity(material.ReorderLevel / ratio)} {Name(to)}"));
+            changes.Add(new ApprovalChange("Reorder at", Amount(material.ReorderLevel, from), Amount(material.ReorderLevel / ratio, to)));
         changes.Add(new ApprovalChange(
-            "Bought by", $"{material.PurchaseUnit} of {Quantity(material.PurchaseUnitSize)} {Name(from)}",
-            $"{change.PurchaseUnit} of {Quantity(change.PurchaseUnitSize)} {Name(to)}"));
+            "Bought by", $"{material.PurchaseUnit} of {Amount(material.PurchaseUnitSize, from)}",
+            $"{change.PurchaseUnit} of {Amount(change.PurchaseUnitSize, to)}"));
         var restated = new[]
         {
             Count(usage.StockMovements, "stock movement"), Count(usage.InvoiceLines, "invoice line"), Count(usage.Recipes, "recipe"),
@@ -200,6 +200,9 @@ internal sealed class MaterialUnitWriter(IMaterialUnits units)
         UnitOfMeasure.Millilitre => "ml",
         _ => "piece",
     };
+
+    // "12 pieces", "1 piece", "2,400 g".
+    private static string Amount(decimal value, UnitOfMeasure unit) => $"{Quantity(value)} {(Quantity(value) == "1" ? One(unit) : Name(unit))}";
 
     private static string Quantity(decimal value) => Math.Round(value, 3, MidpointRounding.AwayFromZero).ToString("#,0.###", Invariant);
 

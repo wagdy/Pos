@@ -142,6 +142,20 @@ public class CostingTests
         Assert.Equal(1.8m, tomatoes.RecordSale(1, Guid.NewGuid()).UnitCost);
     }
 
+    // Never stock after all: made an expense, nothing is on hand and it is archived. A prep item,
+    // made in the kitchen, cannot be.
+    [Fact]
+    public void A_raw_material_made_an_expense_has_nothing_on_hand_and_is_archived()
+    {
+        var spray = new RawMaterial("Glass spray", UnitOfMeasure.Piece);
+        spray.ReceivePurchase(4, Guid.NewGuid(), lineCost: 60);
+
+        spray.ConvertToExpense("Omar");
+
+        Assert.Equal((0m, true, "Omar"), (spray.QuantityOnHand, spray.IsArchived, spray.ArchivedBy));
+        Assert.Throws<DomainException>(() => new RawMaterial("Dough", UnitOfMeasure.Gram, kind: MaterialKind.Prep).ConvertToExpense("Omar"));
+    }
+
     // Eggs counted in pieces that should have been grams: the conversion is less than one.
     [Fact]
     public void A_conversion_can_go_to_a_smaller_unit()

@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using MediatR;
 using Otantik.BuildingBlocks;
+using OtantikPos.Inventory.Application.Categories;
 using OtantikPos.Inventory.Application.Common;
 using OtantikPos.Inventory.Application.Production;
 using OtantikPos.Inventory.Application.Purchases;
@@ -116,6 +117,7 @@ internal sealed class ApproveRequestHandler(
     TreasuryWriter treasury,
     InvoiceCorrector invoices,
     MaterialUnitWriter units,
+    CategoryDeleter categoryDeleter,
     IRawMaterialRepository materials,
     IStockMovementRepository movements,
     IUnitOfWork unitOfWork) : IRequestHandler<ApproveRequestCommand, ApprovalRequestDto>
@@ -129,6 +131,12 @@ internal sealed class ApproveRequestHandler(
         approval.Approve(request.StaffName);
         switch (approval.Action, approval.Module)
         {
+            // A category deleted, what is in it moved and converted as asked, and saved with it.
+            case (ApprovalAction.Delete, ApprovalModule.PurchaseCategory):
+                await categoryDeleter.ApplyApprovedAsync(
+                    approval.RecordId, ApprovalPayload.Read<CategoryDeletion>(approval), approval.Id, request.StaffName, cancellationToken);
+                break;
+
             case (ApprovalAction.Delete, _):
                 foreach (var reversal in await deletions.DeleteAsync(approval.Module, approval.RecordId, request.StaffName, cancellationToken))
                     movements.Add(reversal);

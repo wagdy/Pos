@@ -289,6 +289,17 @@ public sealed class RawMaterial : AggregateRoot
         ArchivedBy = archivedBy;
     }
 
+    // Never stock after all: bought as an expense, and filed as a raw material by mistake. Its
+    // purchases are restated as expense lines and its ledger taken out by the caller, so nothing
+    // is on hand; archived, it stays only for what names it.
+    public void ConvertToExpense(string convertedBy)
+    {
+        if (IsPrepItem)
+            throw new DomainException($"{Name} is a prep item, made in the kitchen: it cannot be an expense.");
+        QuantityOnHand = 0;
+        Archive(convertedBy);
+    }
+
     private StockMovement Move(
         decimal delta, StockMovementReason reason, Guid sourceId, decimal? unitCost, string? note = null, string? recordedBy = null,
         Guid? reversalOf = null)

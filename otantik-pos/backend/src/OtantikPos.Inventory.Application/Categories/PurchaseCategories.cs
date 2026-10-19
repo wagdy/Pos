@@ -1,7 +1,9 @@
 using MediatR;
 using Otantik.BuildingBlocks;
+using OtantikPos.Inventory.Application.Approvals;
 using OtantikPos.Inventory.Application.Common;
 using OtantikPos.Inventory.Application.RawMaterials;
+using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.Expenses;
 using OtantikPos.Inventory.Domain.RawMaterials;
@@ -66,7 +68,7 @@ internal sealed class GetPurchaseCategoriesHandler(IPurchaseCategoryRepository c
 public sealed record SavePurchaseCategoryCommand(
     Guid CategoryId, string Name, string? NameAr = null, ExpenseLine ExpenseLine = ExpenseLine.Controllable) : IRequest<PurchaseCategoryDto>;
 
-internal sealed class SavePurchaseCategoryHandler(IPurchaseCategoryRepository categories, IUnitOfWork unitOfWork)
+internal sealed class SavePurchaseCategoryHandler(IPurchaseCategoryRepository categories, IApprovalRequestRepository requests, IUnitOfWork unitOfWork)
     : IRequestHandler<SavePurchaseCategoryCommand, PurchaseCategoryDto>
 {
     public async Task<PurchaseCategoryDto> Handle(SavePurchaseCategoryCommand request, CancellationToken cancellationToken)
@@ -80,51 +82,13 @@ internal sealed class SavePurchaseCategoryHandler(IPurchaseCategoryRepository ca
         if (category is null)
             categories.Add(category = new PurchaseCategory(request.CategoryId, request.Name, request.NameAr, request.ExpenseLine));
         else
+        {
+            // Locked while its deletion waits for a manager.
+            await requests.EnsureNotPendingAsync(category.Id, cancellationToken);
             category.Update(request.Name, request.NameAr, request.ExpenseLine);
+        }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return PurchaseCategoryDto.From(category, (await categories.GetUseAsync(cancellationToken)).GetValueOrDefault(category.Id));
-    }
-}
-
-// Deletes the category. What is filed under it moves first to MoveToId: one with materials or
-// expense items is not deleted without somewhere for them to go. Their purchases go with them.
-public sealed record DeletePurchaseCategoryCommand(Guid CategoryId, Guid? MoveToId = null) : IRequest;
-
-internal sealed class DeletePurchaseCategoryHandler(
-    IPurchaseCategoryRepository categories,
-    IRawMaterialRepository materials,
-    IExpenseItemRepository expenses,
-    IUnitOfWork unitOfWork) : IRequestHandler<DeletePurchaseCategoryCommand>
-{
-    public async Task Handle(DeletePurchaseCategoryCommand request, CancellationToken cancellationToken)
-    {
-        // Already gone: a retry of a delete that worked.
-        if (await categories.GetByIdAsync(request.CategoryId, cancellationToken) is not { } category)
-            return;
-        if (category.IsGeneral)
-            throw new DomainException($"{category.Name} stays: it is where anything not yet sorted goes. Rename it if you like.");
-
-        var inMaterials = (await materials.GetAllAsync(cancellationToken)).Where(m => m.CategoryId == category.Id).ToList();
-        var inExpenses = await expenses.GetInCategoryAsync(category.Id, cancellationToken);
-        var filed = inMaterials.Count + inExpenses.Count;
-        if (request.MoveToId is { } moveToId)
-        {
-            if (moveToId == category.Id)
-                throw new DomainException("Choose another category for what is in it.");
-            _ = await categories.GetRequiredAsync(moveToId, cancellationToken);
-            foreach (var material in inMaterials)
-                material.MoveTo(moveToId);
-            foreach (var expense in inExpenses)
-                expense.MoveTo(moveToId);
-        }
-        else if (filed > 0)
-        {
-            throw new DomainException(
-                $"{category.Name} has {filed} {(filed == 1 ? "item" : "items")} in it. Choose the category {(filed == 1 ? "it moves" : "they move")} to.");
-        }
-
-        categories.Remove(category);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 }

@@ -608,6 +608,55 @@ public class ApiTests
         Assert.Equal(HttpStatusCode.UnprocessableEntity, (await manager.PostAsJsonAsync(correct, Fix(), Cancel)).StatusCode);
     }
 
+    // A category deleted with its raw materials made expense items: reviewed first, nothing saved;
+    // an accountant's waits for a manager (202); a cashier may not. Moved as they are, it is the
+    // plain delete it always was.
+    [Fact]
+    public async Task A_category_is_deleted_with_its_contents_converted_on_a_managers_say()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var cashier = await api.CashierAsync(manager);
+        var accountant = await api.AccountantAsync(manager);
+
+        async Task<JsonElement> Json(HttpResponseMessage response)
+        {
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync(Cancel));
+            return await response.Content.ReadFromJsonAsync<JsonElement>(Cancel);
+        }
+        async Task<Guid> Category(string name)
+        {
+            var id = Guid.NewGuid();
+            await Json(await manager.PutAsJsonAsync($"/api/inventory/purchase-categories/{id}", new { name }, Cancel));
+            return id;
+        }
+        var cleaning = await Category("Cleaning stock");
+        var maintenance = await Category("Maintenance");
+        await Json(await manager.PostAsJsonAsync("/api/inventory/raw-materials", new { name = "Bleach", unit = "Piece", categoryId = cleaning }, Cancel));
+        object Body() => new { requestId = Guid.NewGuid(), moveToId = maintenance, convert = "ToExpenses", reason = "Cleaning is an expense" };
+        var path = $"/api/inventory/purchase-categories/{cleaning}/delete";
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PostAsJsonAsync(path, Body(), Cancel)).StatusCode);
+        var preview = await Json(await accountant.PostAsJsonAsync($"{path}/preview", Body(), Cancel));
+        Assert.Equal(("Category Cleaning stock deleted: 1 raw material becomes an expense item in Maintenance", true),
+            (preview.GetProperty("summary").GetString(), preview.GetProperty("converts").GetBoolean()));
+
+        var asked = await accountant.PostAsJsonAsync(path, Body(), Cancel);
+        Assert.Equal(HttpStatusCode.Accepted, asked.StatusCode);
+        var request = (await asked.Content.ReadFromJsonAsync<JsonElement>(Cancel)).GetProperty("request");
+        Assert.Equal(("PurchaseCategory", "Delete"), (request.GetProperty("module").GetString(), request.GetProperty("action").GetString()));
+        // Locked meanwhile, even to a manager's plain delete.
+        Assert.Equal(HttpStatusCode.UnprocessableEntity,
+            (await manager.DeleteAsync($"/api/inventory/purchase-categories/{cleaning}?moveTo={maintenance}", Cancel)).StatusCode);
+        await Json(await manager.PostAsync($"/api/inventory/approval-requests/{request.GetProperty("id").GetGuid()}/approve", null, Cancel));
+        var expenses = await Json(await manager.GetAsync("/api/inventory/expense-items", Cancel));
+        Assert.Contains(expenses.EnumerateArray(), e => e.GetProperty("name").GetString() == "Bleach");
+
+        // Moved as they are: deleted at once, as before.
+        var spare = await Category("Spare");
+        Assert.Equal(HttpStatusCode.NoContent, (await accountant.DeleteAsync($"/api/inventory/purchase-categories/{spare}", Cancel)).StatusCode);
+    }
+
     // A material's purchase history card, for whoever sees the costs: each invoice line that bought
     // it. A cashier does not.
     [Fact]

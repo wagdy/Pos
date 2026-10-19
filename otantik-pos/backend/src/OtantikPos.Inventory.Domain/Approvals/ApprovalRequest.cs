@@ -30,6 +30,10 @@ public enum ApprovalModule
     // A safe entry: opening balance, funding, a day's takings moved in, an expense voucher, a
     // supplier payment, or an invoice paid in cash. Entered when approved, or voided (reversed).
     Treasury = 8,
+
+    // Deleted, what was in it moved to another category, and on the way its raw materials made
+    // expense items or its expense items raw materials, as the request holds.
+    PurchaseCategory = 9,
 }
 
 public enum ApprovalAction
@@ -63,7 +67,8 @@ public sealed record ApprovalChange(string Label, string? Before, string? After)
 //
 // A deletion needs only the record. A new or changed prep item or production order also holds
 // what was entered (Payload, as the module writes it), applied on approval and only then: a new
-// one does not exist until it is approved, and a changed one stays as it was.
+// one does not exist until it is approved, and a changed one stays as it was. A category's
+// deletion holds where its contents go and what they become.
 //
 // Its id is made by the till, so a retried request is recorded once.
 public sealed class ApprovalRequest : AggregateRoot
@@ -109,7 +114,7 @@ public sealed class ApprovalRequest : AggregateRoot
         RecordId = recordId;
         Summary = summary.Trim();
         _changes = [.. changes];
-        Payload = action == ApprovalAction.Delete ? null : payload;
+        Payload = payload;
         Reason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
         RequestedById = requestedById;
         RequestedBy = requestedBy;

@@ -74,6 +74,7 @@ public static class DependencyInjection
         // Inventory.
         services.AddScoped<IRawMaterialRepository, RawMaterialRepository>();
         services.AddScoped<OtantikPos.Inventory.Application.RawMaterials.IMaterialUnits, MaterialUnits>();
+        services.AddScoped<OtantikPos.Inventory.Application.Categories.IItemConversions, ItemConversions>();
         services.AddScoped<IRecipeRepository, RecipeRepository>();
         services.AddScoped<IRecipeCategoryRepository, RecipeCategoryRepository>();
         services.AddScoped<IStockMovementRepository, StockMovementRepository>();

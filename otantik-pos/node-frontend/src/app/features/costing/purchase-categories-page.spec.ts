@@ -3,6 +3,8 @@ import { MatDialog } from '@angular/material/dialog';
 import { of } from 'rxjs';
 import { CostingApi, PurchaseCategory } from '../../core/costing/costing.api';
 import { NotifyService } from '../../core/ui/notify.service';
+import { Approvals } from './approvals';
+import { CategoryDeleteDialog } from './category-delete-dialog';
 import { PurchaseCategoriesPage } from './purchase-categories-page';
 import { PurchaseCategoryDialog } from './purchase-category-dialog';
 
@@ -18,6 +20,7 @@ describe('the purchase categories', () => {
   const deletePurchaseCategory = vi.fn();
   const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
+  const approvals = { refresh: vi.fn(), pendingFor: vi.fn() };
 
   async function render() {
     TestBed.configureTestingModule({
@@ -25,6 +28,7 @@ describe('the purchase categories', () => {
         { provide: CostingApi, useValue: { purchaseCategories, deletePurchaseCategory } },
         { provide: MatDialog, useValue: { open } },
         { provide: NotifyService, useValue: notify },
+        { provide: Approvals, useValue: approvals },
       ],
     });
     const fixture = TestBed.createComponent(PurchaseCategoriesPage);
@@ -45,6 +49,7 @@ describe('the purchase categories', () => {
     deletePurchaseCategory.mockReset().mockReturnValue(of(undefined));
     open.mockReset();
     notify.info.mockReset();
+    approvals.pendingFor.mockReset();
   });
 
   it('lists each with where its expenses count and what is filed under it; General is never deleted', async () => {
@@ -70,29 +75,30 @@ describe('the purchase categories', () => {
     expect(open).toHaveBeenLastCalledWith(PurchaseCategoryDialog, expect.objectContaining({ data: { category: rent } }));
   });
 
-  it('moves what is in one before deleting it', async () => {
-    const { page, rows, button } = await render();
+  it('deletes one in the delete dialog, with the rest of the list to move what is in it to, and reads the list again', async () => {
+    open.mockReturnValue({ afterClosed: () => of(true) });
+    const { rows, button } = await render();
 
     button(rows()[1], 'Delete')!.click();
-    const ask = rows()[2];
-    expect(text(ask)).toContain('Delete Dairy? Its 3 items move, with their purchases, to');
-    expect(button(ask, 'Move and delete')!.disabled).toBe(true);
-    expect(page['others'](dairy).map((c: PurchaseCategory) => c.name)).toEqual(['General', 'Rent', 'Packaging']);
+    await new Promise((r) => setTimeout(r));
 
-    page['moveTo'] = 'general';
-    await page['remove'](dairy);
-
-    expect(deletePurchaseCategory).toHaveBeenCalledWith('dairy', 'general');
-    expect(notify.info).toHaveBeenCalledWith('Dairy deleted; what was in it is in General now.');
+    expect(open).toHaveBeenCalledWith(CategoryDeleteDialog, {
+      data: { category: dairy, categories: [general, dairy, rent, empty] },
+      width: '720px',
+      maxWidth: '95vw',
+    });
+    expect(purchaseCategories).toHaveBeenCalledTimes(2);
   });
 
-  it('deletes an empty one straight away after asking', async () => {
-    const { page, rows, button } = await render();
+  it('marks one whose deletion waits for a manager, and locks it', async () => {
+    approvals.pendingFor.mockImplementation((id: string) =>
+      id === 'dairy' ? { action: 'Delete', module: 'PurchaseCategory', requestedBy: 'Mona' } : undefined,
+    );
+    const { rows, button } = await render();
 
-    button(rows()[3], 'Delete')!.click();
-    expect(text(rows()[4])).toContain('Delete Packaging? Nothing is in it.');
-    await page['remove'](empty);
-
-    expect(deletePurchaseCategory).toHaveBeenCalledWith('empty', null);
+    expect(text(rows()[1].querySelector('td')!)).toBe('Dairy Deletion requestedطلب حذف by Mona');
+    expect(button(rows()[1], 'Delete')).toBeUndefined();
+    expect(button(rows()[1], 'Edit')).toBeUndefined();
+    expect(rows()[1].querySelector('[aria-label="Locked: waiting for a manager"]')).not.toBeNull();
   });
 });

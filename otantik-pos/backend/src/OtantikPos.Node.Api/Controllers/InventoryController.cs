@@ -263,6 +263,28 @@ public sealed class InventoryController(ISender sender) : ControllerBase
         return NoContent();
     }
 
+    // Deleted, what is in it moved, and converted on the way: its raw materials made expense items
+    // (their purchases restated as expenses) or its expense items made raw materials (Units: what
+    // each is counted in and bought by). Done at once for a manager, or when nothing is converted
+    // (200, Applied); asked of one for anyone else (202, Requested). RequestId is made by the till.
+    [HttpPost("purchase-categories/{categoryId:guid}/delete")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public async Task<ActionResult<CategoryDeletionResult>> DeletePurchaseCategoryConverting(
+        Guid categoryId, DeletePurchaseCategoryRequest request, CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new DeletePurchaseCategoryCommand(
+            categoryId, request.MoveToId, request.Convert, request.Units ?? [], request.RequestId, request.Reason, StaffId, StaffName, CanApprove),
+            cancellationToken);
+        return result.Outcome == ApprovalOutcome.Requested ? Accepted(result) : Ok(result);
+    }
+
+    // What deleting it would do, checked as it will be when sent; nothing is saved.
+    [HttpPost("purchase-categories/{categoryId:guid}/delete/preview")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public Task<CategoryDeletionPreview> PreviewPurchaseCategoryDeletion(
+        Guid categoryId, DeletePurchaseCategoryRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new PreviewCategoryDeletionQuery(categoryId, request.MoveToId, request.Convert, request.Units ?? []), cancellationToken);
+
     // Expense items: bought but never stock. A manager's, as what they cost is on them.
     [HttpGet("expense-items")]
     [Authorize(Policy = Permissions.InventoryManage)]
@@ -615,6 +637,13 @@ public sealed record SaveSupplierRequest(string Name, string? ContactPerson = nu
 public sealed record SavePurchaseCategoryRequest(string Name, string? NameAr = null, ExpenseLine? ExpenseLine = null);
 
 public sealed record SaveExpenseItemRequest(string Name, Guid? CategoryId = null, string? NameAr = null, string? Unit = null);
+
+public sealed record DeletePurchaseCategoryRequest(
+    Guid RequestId,
+    Guid? MoveToId = null,
+    CategoryConversion Convert = CategoryConversion.None,
+    IReadOnlyList<StockUnit>? Units = null,
+    string? Reason = null);
 
 public sealed record ChangeMaterialUnitRequest(
     Guid RequestId,

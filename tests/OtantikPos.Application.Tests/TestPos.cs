@@ -90,6 +90,7 @@ public sealed class TestPos
         services.AddSingleton<IPrepRecipeRepository>(Inventory.PrepRecipes);
         services.AddSingleton<IProductionOrderRepository>(Inventory.Production);
         services.AddSingleton<OtantikPos.Inventory.Application.RawMaterials.IMaterialUnits>(Inventory.Units);
+        services.AddSingleton<OtantikPos.Inventory.Application.Categories.IItemConversions>(new NoItemConversions());
 
         _services = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }
@@ -456,6 +457,24 @@ public sealed class MaterialUnitStore(MovementStore movements) : OtantikPos.Inve
         Task.FromResult(new OtantikPos.Inventory.Application.RawMaterials.MaterialUsage(movements.All.Count(m => m.RawMaterialId == material.Id), 0, 0, 0, 0, 0, 0));
 
     public Task RestateAndSaveAsync(RawMaterial material, decimal oneNewIsOld, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Restated in the database: see NodeTests.");
+}
+
+// Converting raw materials to expense items reads and restates the database's records: tested
+// against one (NodeTests). Here nothing stops it and nothing is restated.
+public sealed class NoItemConversions : OtantikPos.Inventory.Application.Categories.IItemConversions
+{
+    public Task<IReadOnlyList<string>> ExpenseBlockersAsync(
+        IReadOnlyList<RawMaterial> materials, IReadOnlyDictionary<Guid, Guid> namesakes, Guid? exceptRequestId, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<string>>([]);
+
+    public Task<OtantikPos.Inventory.Application.Categories.ExpenseRestatement> RestatementAsync(
+        IReadOnlyList<Guid> materialIds, CancellationToken cancellationToken) =>
+        Task.FromResult(new OtantikPos.Inventory.Application.Categories.ExpenseRestatement(0, 0, 0, 0));
+
+    public Task<int> PendingNamingAsync(IReadOnlyCollection<Guid> ids, Guid? exceptRequestId, CancellationToken cancellationToken) => Task.FromResult(0);
+
+    public Task RestateAndSaveAsync(IReadOnlyList<(Guid MaterialId, Guid ExpenseItemId)> pairs, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Restated in the database: see NodeTests.");
 }
 
