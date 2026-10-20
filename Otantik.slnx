@@ -2,6 +2,7 @@
   <Folder Name="/otantik-pos/" />
   <Folder Name="/otantik-pos/backend/" />
   <Folder Name="/otantik-pos/backend/src/">
+    <Project Path="otantik-pos/backend/src/OtantikPos.Hr.Domain/OtantikPos.Hr.Domain.csproj" />
     <Project Path="otantik-pos/backend/src/OtantikPos.Inventory.Application/OtantikPos.Inventory.Application.csproj" />
     <Project Path="otantik-pos/backend/src/OtantikPos.Inventory.Domain/OtantikPos.Inventory.Domain.csproj" />
     <Project Path="otantik-pos/backend/src/OtantikPos.Node.Api/OtantikPos.Node.Api.csproj" />
