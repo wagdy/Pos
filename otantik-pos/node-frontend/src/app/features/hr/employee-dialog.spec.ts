@@ -1,0 +1,154 @@
+import { HttpErrorResponse } from '@angular/common/http';
+import { TestBed } from '@angular/core/testing';
+import { MAT_DIALOG_DATA, MatDialogRef } from '@angular/material/dialog';
+import { of, throwError } from 'rxjs';
+import { Employee, EmployeeInput, HrApi } from '../../core/hr/hr.api';
+import { NotifyService } from '../../core/ui/notify.service';
+import { EmployeeDialog, EmployeeDialogData } from './employee-dialog';
+import { EmploymentDialog, EmploymentDialogData } from './employment-dialog';
+
+const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
+
+const hassan: Employee = {
+  id: 'hassan', name: 'Hassan', jobTitle: 'Chef', monthlySalary: 5_400, shiftStartsAt: '16:00:00', shiftEndsAt: '01:00:00', daysOff: ['Friday'],
+  deviceUserId: '7', hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20,
+};
+
+describe('the employee form', () => {
+  const saveEmployee = vi.fn();
+  const close = vi.fn();
+  const notify = { info: vi.fn(), error: vi.fn() };
+
+  async function render(data: EmployeeDialogData) {
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: HrApi, useValue: { saveEmployee } },
+        { provide: NotifyService, useValue: notify },
+        { provide: MatDialogRef, useValue: { close } },
+        { provide: MAT_DIALOG_DATA, useValue: data },
+      ],
+    });
+    const fixture = TestBed.createComponent(EmployeeDialog);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    // As typing does: the dialog marked for a fresh look.
+    const refresh = async () => {
+      fixture.componentRef.changeDetectorRef.markForCheck();
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+    };
+    return { el, refresh, page: fixture.componentInstance as unknown as Record<string, any> };
+  }
+
+  beforeEach(() => {
+    saveEmployee.mockReset().mockImplementation((id: string, input: EmployeeInput) => of({ ...hassan, id, name: input.name }));
+    close.mockReset();
+    notify.error.mockReset();
+  });
+
+  it('says what is missing, field by field, and sends nothing', async () => {
+    const { el, page, refresh } = await render({ canApprove: true, today: '2026-10-20' });
+    page['salary'] = null;
+    page['daysOff'] = ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
+    await page['save']();
+    await refresh();
+
+    expect(saveEmployee).not.toHaveBeenCalled();
+    expect(notify.error.mock.lastCall![1]).toBe(
+      'Cannot submit. Name: enter their name. Role: enter what they do. Base salary: enter the salary. And 1 more, marked in red.',
+    );
+    expect([...el.querySelectorAll('mat-error')].map(text)).toEqual(['Enter their name', 'Enter what they do', 'Enter the salary']);
+    expect(text(el.querySelector('.days .error')!)).toBe('Leave at least one working day');
+  });
+
+  it('adds one with a nine-hour shift, its rates, and its days off, under a new id', async () => {
+    const { el, page, refresh } = await render({ canApprove: true, today: '2026-10-20' });
+    Object.assign(page, { name: ' Mona ', jobTitle: 'Waiter', salary: 4_050, shiftStart: '16:30', daysOff: ['Friday'], deviceUserId: ' 12 ' });
+    await refresh();
+
+    expect([...el.querySelectorAll('mat-hint')].map(text)).toContain('Nine hours: ends 01:30 the next day');
+    expect([...el.querySelectorAll('mat-hint')].map(text)).toContain('A month: 135.00 a day · 15.00 an hour');
+    await page['save']();
+
+    const [id, input] = saveEmployee.mock.lastCall! as [string, EmployeeInput];
+    expect(input).toMatchObject({
+      name: 'Mona', jobTitle: 'Waiter', monthlySalary: 4_050, shiftStartsAt: '16:30:00', daysOff: ['Friday'], hiredOn: '2026-10-20', deviceUserId: '12', reason: null,
+    });
+    expect(id).not.toBe(input.requestId);
+    expect(close).toHaveBeenCalledWith(expect.objectContaining({ id, name: 'Mona' }));
+  });
+
+  it('changes one as it is, and an accountant sends it for approval with a reason', async () => {
+    const { el, page } = await render({ employee: hassan, canApprove: false, today: '2026-10-20' });
+
+    expect(text(el.querySelector('h2')!)).toBe('Edit Hassan تعديل بيانات الموظف');
+    expect(text(el.querySelector('.ask')!)).toContain('A manager approves employees and their changes');
+    expect([...el.querySelectorAll('mat-dialog-actions button')].map(text)).toEqual(['Cancel', 'Send for approval']);
+    page['salary'] = 6_000;
+    page['reason'] = 'Promoted';
+    await page['save']();
+
+    expect(saveEmployee.mock.lastCall![0]).toBe('hassan');
+    expect(saveEmployee.mock.lastCall![1]).toMatchObject({ monthlySalary: 6_000, shiftStartsAt: '16:00:00', daysOff: ['Friday'], deviceUserId: '7', reason: 'Promoted' });
+  });
+
+  it('shows why the till refuses it, and stays open', async () => {
+    saveEmployee.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 422, error: { errors: ['Hassan has number 7 on the attendance device already.'] } })));
+    const { el, page, refresh } = await render({ canApprove: true, today: '2026-10-20' });
+    Object.assign(page, { name: 'Karim', jobTitle: 'Waiter', salary: 4_000, deviceUserId: '7' });
+
+    await page['save']();
+    await refresh();
+
+    expect(text(el.querySelector('[role=alert]')!)).toBe('Hassan has number 7 on the attendance device already.');
+    expect(close).not.toHaveBeenCalled();
+  });
+});
+
+describe('an employee leaving or coming back', () => {
+  const leave = vi.fn();
+  const comeBack = vi.fn();
+  const close = vi.fn();
+
+  async function render(data: EmploymentDialogData) {
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: HrApi, useValue: { leave, comeBack } },
+        { provide: MatDialogRef, useValue: { close } },
+        { provide: MAT_DIALOG_DATA, useValue: data },
+      ],
+    });
+    const fixture = TestBed.createComponent(EmploymentDialog);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return { el: fixture.nativeElement as HTMLElement, page: fixture.componentInstance as unknown as Record<string, any> };
+  }
+
+  beforeEach(() => {
+    leave.mockReset().mockReturnValue(of({ ...hassan, isActive: false }));
+    comeBack.mockReset().mockReturnValue(of(hassan));
+  });
+
+  it('leaves on the day chosen, paid to it', async () => {
+    const { el, page } = await render({ employee: hassan, mode: 'leave', canApprove: true, today: '2026-10-20' });
+
+    expect(text(el.querySelector('h2')!)).toBe('Hassan leaves إنهاء الخدمة');
+    page['day'] = '2026-10-15';
+    await page['save']();
+    expect(leave).toHaveBeenCalledWith('hassan', '2026-10-15', null);
+    expect(close).toHaveBeenCalled();
+  });
+
+  it('comes back, asked of a manager by an accountant', async () => {
+    const left = { ...hassan, isActive: false, leftOn: '2026-09-30' };
+    const { el, page } = await render({ employee: left, mode: 'return', canApprove: false, today: '2026-10-20' });
+
+    expect([...el.querySelectorAll('mat-dialog-actions button')].map(text)).toEqual(['Cancel', 'Send for approval']);
+    page['reason'] = ' Rehired ';
+    await page['save']();
+    expect(comeBack).toHaveBeenCalledWith('hassan', '2026-10-20', 'Rehired');
+  });
+});

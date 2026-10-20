@@ -37,15 +37,15 @@ public static class RolePermissions
 
     private static readonly IReadOnlySet<string> Manager = new HashSet<string>(Cashier)
     {
-        InventoryManage, MenuManage, StaffManage, CostingView, ApprovalDecide,
+        InventoryManage, MenuManage, StaffManage, CostingView, ApprovalDecide, HrView, HrManage,
     };
 
-    // The back office's data entry: stock, purchases, recipes and their costs. No orders and no
-    // money; deletes, prep items and production orders are requests a manager decides (no
-    // ApprovalDecide).
+    // The back office's data entry: stock, purchases, recipes and their costs, and HR's employees
+    // and advances. No orders; deletes, prep items, production orders, safe entries and HR's
+    // changes are requests a manager decides (no ApprovalDecide).
     private static readonly IReadOnlySet<string> Accountant = new HashSet<string>
     {
-        InventoryView, InventoryManage, CostingView,
+        InventoryView, InventoryManage, CostingView, HrView, HrManage,
     };
 
     // Everything. In the delivery system an Admin can additionally be narrowed by a custom

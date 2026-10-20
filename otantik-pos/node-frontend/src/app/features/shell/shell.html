@@ -21,6 +21,10 @@
       <mat-icon>calculate</mat-icon>
       <span class="nav-text">Costing</span>
     </a>
+    <a *appCan="Permissions.HrView" mat-button routerLink="/hr" routerLinkActive="active" aria-label="HR & Payroll" matTooltip="HR & Payroll · الموارد البشرية والرواتب" [matTooltipDisabled]="!compactNav()">
+      <mat-icon>groups</mat-icon>
+      <span class="nav-text">HR &amp; Payroll</span>
+    </a>
   </nav>
 
   <span class="spacer"></span>

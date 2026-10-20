@@ -64,6 +64,13 @@ public enum FundingSource
 // Its id is made by the till, so a retried voucher is recorded once.
 public sealed class SafeTransaction : AggregateRoot
 {
+    // What can be paid out of a day's takings, as well as out of the safe: what the drawer pays
+    // before they are entered is taken off them. An array, so EF turns Contains into SQL.
+    public static readonly SafeTransactionKind[] PaidOutKinds =
+    [
+        SafeTransactionKind.InvoicePayment, SafeTransactionKind.SupplierPayment, SafeTransactionKind.EmployeeAdvance, SafeTransactionKind.SalaryPayment,
+    ];
+
     private SafeTransaction() { }
 
     private SafeTransaction(
@@ -335,4 +342,8 @@ public interface ISafeTransactionRepository : IRepository<SafeTransaction>
     Task<IReadOnlySet<Guid>> PaidInvoicesAsync(IReadOnlyCollection<Guid> invoiceIds, CancellationToken cancellationToken = default);
 
     Task<bool> AnyOpeningBalanceAsync(CancellationToken cancellationToken = default);
+
+    // An employee's advances and salary payments counted in a payroll month, voids and their
+    // reversals too: everyone's, or one employee's.
+    Task<IReadOnlyList<SafeTransaction>> GetForPayrollMonthAsync(DateOnly month, Guid? employeeId = null, CancellationToken cancellationToken = default);
 }

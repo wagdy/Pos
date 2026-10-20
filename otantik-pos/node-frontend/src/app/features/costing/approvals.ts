@@ -23,6 +23,7 @@ export const consequences: Record<ApprovalModule, string> = {
   Treasury: 'It is kept, marked voided: its cash goes back where it came from, dated today, and a supplier payment goes back on the supplier’s account.',
   PurchaseCategory:
     'The category goes and what is in it moves, converted as listed: raw materials made expense items have their past invoice lines restated as expenses on their own dates and their stock ledger taken out; expense items made raw materials start with nothing on hand.',
+  Employee: 'They leave the payroll: paid to their last day.',
 };
 
 // The posted records, which are voided rather than deleted.
@@ -38,6 +39,11 @@ export function approvalEffect(module: ApprovalModule, action: ApprovalAction): 
   }
   if (module === 'PurchaseInvoice') {
     return 'The invoice is voided and the corrected one posted in its place: its stock, cash and supplier’s account are redone, at the average costs at this moment.';
+  }
+  if (module === 'Employee') {
+    return action === 'Create'
+      ? 'The employee is added to the payroll: their days are counted from the day they start.'
+      : 'The change is saved: a new salary or shift counts in every month not yet finalized.';
   }
   if (module === 'RawMaterial') {
     return 'The material is counted in the new unit from now: its stock, average cost, invoices, recipes, counts and batches are restated by the conversion, every amount of money as it was.';

@@ -73,6 +73,13 @@ public sealed class FinancialsController(ISender sender, TreasuryService treasur
     public async Task<ActionResult<SupplierStatement>> GetSupplierStatement(Guid supplierId, CancellationToken cancellationToken) =>
         await treasury.GetSupplierStatementAsync(supplierId, cancellationToken) is { } statement ? statement : NotFound();
 
+    // Employees' advances (السلفيات) paid in a period, and the payroll month each is deducted in.
+    // Salaries show here: whoever keeps the books may see them only with HR.
+    [HttpGet("advances")]
+    [Authorize(Policy = Permissions.HrView)]
+    public Task<IReadOnlyList<AdvanceRow>> GetAdvances([FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken cancellationToken) =>
+        treasury.GetAdvancesAsync(from, to, cancellationToken);
+
     [HttpGet("supplier-payments")]
     public Task<IReadOnlyList<SupplierPaymentRow>> GetSupplierPayments([FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken cancellationToken) =>
         treasury.GetSupplierPaymentsAsync(from, to, cancellationToken);
@@ -86,8 +93,8 @@ public sealed class FinancialsController(ISender sender, TreasuryService treasur
         return NoContent();
     }
 
-    // A safe entry: opening balance, funding, a day's takings moved in, an expense voucher, or a
-    // supplier payment. Entered at once for a manager (200, the entry); asked of one for anyone
+    // A safe entry: opening balance, funding, a day's takings moved in, an expense voucher, a
+    // supplier payment, an employee's advance or their salary. Entered at once for a manager (200, the entry); asked of one for anyone
     // else (202, the request). RequestId and TransactionId are made by the till.
     [HttpPost("vouchers")]
     public async Task<IActionResult> RecordVoucher(SafeVoucherRequest request, CancellationToken cancellationToken)
@@ -96,7 +103,8 @@ public sealed class FinancialsController(ISender sender, TreasuryService treasur
             request.RequestId,
             new SafeVoucher(
                 request.TransactionId, request.Kind, request.Amount, request.Date ?? treasury.Today, request.Source, request.RevenueDate,
-                request.SupplierId, request.ExpenseItemId, null, request.Notes, request.IncludesTax),
+                request.SupplierId, request.ExpenseItemId, null, request.Notes, request.IncludesTax, EmployeeId: request.EmployeeId,
+                PayrollMonth: request.PayrollMonth),
             request.Reason, StaffClaims.IdOf(User) ?? string.Empty, StaffName, CanApprove), cancellationToken);
         return result.Outcome == ApprovalOutcome.Requested
             ? Accepted(new ApprovalResultDto(result.Outcome, result.Request!))
@@ -121,6 +129,9 @@ public sealed record SafeVoucherRequest(
     string? Notes = null,
     string? Reason = null,
     // A day's takings counted with the tax in them: taken off at the till's own rate.
-    bool IncludesTax = false);
+    bool IncludesTax = false,
+    // An advance's or a salary's employee; a salary's payroll month (its first day).
+    Guid? EmployeeId = null,
+    DateOnly? PayrollMonth = null);
 
 public sealed record SupplierOpeningBalanceRequest(Guid EntryId, decimal Owed, DateOnly? Date = null);

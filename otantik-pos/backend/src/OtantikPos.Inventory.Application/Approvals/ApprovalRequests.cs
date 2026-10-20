@@ -4,6 +4,7 @@ using MediatR;
 using Otantik.BuildingBlocks;
 using OtantikPos.Inventory.Application.Categories;
 using OtantikPos.Inventory.Application.Common;
+using OtantikPos.Inventory.Application.Hr;
 using OtantikPos.Inventory.Application.Production;
 using OtantikPos.Inventory.Application.Purchases;
 using OtantikPos.Inventory.Application.RawMaterials;
@@ -32,6 +33,9 @@ public interface IRecordDescriptions
     // The calendar date in the restaurant: after midnight, a day ahead of the business date
     // until the business day starts.
     DateOnly LocalDateOf(DateTime utc);
+
+    // The restaurant's wall clock at a moment: what an attendance device's clock shows.
+    DateTime LocalTimeOf(DateTime utc);
 }
 
 public enum ApprovalOutcome
@@ -118,6 +122,7 @@ internal sealed class ApproveRequestHandler(
     InvoiceCorrector invoices,
     MaterialUnitWriter units,
     CategoryDeleter categoryDeleter,
+    EmployeeWriter employees,
     IRawMaterialRepository materials,
     IStockMovementRepository movements,
     IUnitOfWork unitOfWork) : IRequestHandler<ApproveRequestCommand, ApprovalRequestDto>
@@ -151,6 +156,11 @@ internal sealed class ApproveRequestHandler(
             case (ApprovalAction.Create, ApprovalModule.ProductionOrder):
                 await production.MakeAsync(
                     ApprovalPayload.Read<ProductionChange>(approval), approval.RequestedBy, request.StaffName, cancellationToken);
+                break;
+
+            // An employee added, changed, leaving or coming back, as asked.
+            case (_, ApprovalModule.Employee):
+                await employees.ApplyAsync(approval.RecordId, ApprovalPayload.Read<EmployeeRequest>(approval), cancellationToken);
                 break;
 
             case (ApprovalAction.Create, ApprovalModule.Treasury):

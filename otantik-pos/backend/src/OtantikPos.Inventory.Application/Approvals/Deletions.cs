@@ -4,6 +4,7 @@ using Otantik.BuildingBlocks;
 using OtantikPos.Inventory.Application.Common;
 using OtantikPos.Inventory.Application.Production;
 using OtantikPos.Inventory.Application.RawMaterials;
+using OtantikPos.Hr.Domain;
 using OtantikPos.Inventory.Application.Treasury;
 using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Production;
@@ -36,7 +37,8 @@ internal sealed class DeletionTargets(
     ProductionWriter production,
     ISafeTransactionRepository safe,
     TreasuryWriter treasury,
-    IRecordDescriptions descriptions)
+    IRecordDescriptions descriptions,
+    IPayrollSlipRepository slips)
 {
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
@@ -218,7 +220,13 @@ internal sealed class DeletionTargets(
         var entry = await safe.GetByIdAsync(id, cancellationToken) ?? throw new NotFoundException("Safe entry", id);
         if (entry.IsReversal)
             throw new DomainException("This undoes another entry: it is not voided itself.");
-        return entry.IsVoided ? throw new DomainException("This has already been voided.") : entry;
+        if (entry.IsVoided)
+            throw new DomainException("This has already been voided.");
+        // Deducted from a finalized slip: the pay was worked out with it.
+        if (entry is { Kind: SafeTransactionKind.EmployeeAdvance, EmployeeId: { } employee, PayrollMonth: { } month }
+            && await slips.GetAsync(employee, month, cancellationToken) is { IsFinalized: true })
+            throw new DomainException($"This advance is deducted from the finalized pay of {month.ToString("MMMM yyyy", Invariant)}: it cannot be voided now.");
+        return entry;
     }
 
     // ---- Prep items: archived, as a raw material is ----

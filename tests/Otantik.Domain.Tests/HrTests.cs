@@ -173,8 +173,8 @@ public class HrTests
         punch.Restore();
         Assert.True(punch.Counts);
 
-        Assert.Throws<DomainException>(() => AttendanceLog.Manual(employee, at, "", "Omar"));
-        Assert.Equal(PunchSource.Manual, AttendanceLog.Manual(employee, at, "The device was down", "Omar").Source);
+        Assert.Throws<DomainException>(() => AttendanceLog.Manual(Guid.NewGuid(), employee, at, "", "Omar"));
+        Assert.Equal(PunchSource.Manual, AttendanceLog.Manual(Guid.NewGuid(), employee, at, "The device was down", "Omar").Source);
     }
 
     [Fact]

@@ -107,7 +107,7 @@ public sealed record DailyCashDay(
 // A day's takings as they stand before they are entered: the gross already entered for them, if
 // any; and what was paid straight out of them, invoices and supplier payments, which entering them
 // takes off.
-public sealed record TakingsPreview(DateOnly Date, decimal? Entered, decimal PaidOut, int Invoices, int SupplierPayments);
+public sealed record TakingsPreview(DateOnly Date, decimal? Entered, decimal PaidOut, int Invoices, int SupplierPayments, int EmployeePayments = 0);
 
 public sealed record DailyCashReport(DateOnly From, DateOnly To, decimal Gross, decimal Deductions, decimal NetToSafe, IReadOnlyList<DailyCashDay> Days);
 
@@ -151,6 +151,12 @@ public sealed record SupplierStatement(
 public sealed record SupplierPaymentRow(
     Guid Id, DateOnly Date, Guid SupplierId, string Supplier, decimal Amount, string? Notes, string RecordedBy, string? ApprovedBy,
     DateTime? VoidedAtUtc, string? VoidedBy, DateOnly? FromTakingsOf = null);
+
+// An employee's advance (سلفة): when and from where it was paid, and the payroll month whose slip
+// deducts it.
+public sealed record AdvanceRow(
+    Guid Id, DateOnly Date, Guid EmployeeId, string Employee, decimal Amount, DateOnly PayrollMonth, DateOnly? FromTakingsOf, string? Notes,
+    string RecordedBy, string? ApprovedBy, DateTime? VoidedAtUtc, string? VoidedBy);
 
 // Tax and service (إعدادات الضريبة والخدمة): the till's tax rate, as the delivery system set it (null
 // until it has synced, when the till cannot price a bill either), and the service charge.
@@ -289,7 +295,7 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
                 var cash = sales.GetValueOrDefault(day);
                 var ofDay = moved.Where(m => m.RevenueDate == day).ToList();
                 var entered = ofDay.Where(m => m.Kind == SafeTransactionKind.RevenueTransfer).Sum(m => m.GrossAmount ?? m.Amount);
-                var paid = -ofDay.Where(m => m.Kind is SafeTransactionKind.InvoicePayment or SafeTransactionKind.SupplierPayment).Sum(m => m.Amount);
+                var paid = -ofDay.Where(m => SafeTransaction.PaidOutKinds.Contains(m.Kind)).Sum(m => m.Amount);
                 // What of the day's takings is in the safe: the takings less what the drawer had
                 // paid by then, less what was paid out of the safe for them since.
                 var transferred = ofDay.Where(m => m.Fund == CashFund.Safe).Sum(m => m.Amount);
@@ -312,18 +318,19 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         var standing = drawer.Where(t => !t.IsReversal && !t.IsVoided).ToList();
         return new TakingsPreview(
             day, entered is null ? null : Money(entered.GrossAmount ?? entered.Amount), Money(-drawer.Sum(t => t.Amount)),
-            standing.Count(t => t.Kind == SafeTransactionKind.InvoicePayment), standing.Count(t => t.Kind == SafeTransactionKind.SupplierPayment));
+            standing.Count(t => t.Kind == SafeTransactionKind.InvoicePayment), standing.Count(t => t.Kind == SafeTransactionKind.SupplierPayment),
+            standing.Count(t => t.Kind is SafeTransactionKind.EmployeeAdvance or SafeTransactionKind.SalaryPayment));
     }
 
-    // Each day of the period whose takings paid an invoice or were counted into the safe, latest
-    // first. A voided entry and its void are both of the entry's day, and come to nothing: neither
+    // Each day of the period whose takings paid an invoice, a supplier or an employee, or were
+    // counted into the safe, latest first. A voided entry and its void are both of the entry's day, and come to nothing: neither
     // is listed. Read only: the safe and the takings are as they were.
     public async Task<DailyCashReport> GetDailyCashAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken)
     {
         Period(from, to);
         var rows = await db.SafeTransactions.AsNoTracking()
             .Where(t => t.RevenueDate != null && t.RevenueDate >= from && t.RevenueDate <= to
-                && (t.Kind == SafeTransactionKind.RevenueTransfer || t.Kind == SafeTransactionKind.InvoicePayment || t.Kind == SafeTransactionKind.SupplierPayment))
+                && (t.Kind == SafeTransactionKind.RevenueTransfer || SafeTransaction.PaidOutKinds.Contains(t.Kind)))
             .OrderBy(t => t.BusinessDate).ThenBy(t => t.RecordedAtUtc)
             .ToListAsync(cancellationToken);
         var standing = rows.Where(t => !t.IsReversal && !t.IsVoided).ToList();
@@ -341,6 +348,12 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         {
             if (t.Kind == SafeTransactionKind.RevenueTransfer)
                 return new DailyCashLine(t.Id, t.Kind, t.BusinessDate, "Takings entered", Money(t.GrossAmount ?? t.Amount), null, [], t.RecordedBy, t.ApprovedBy);
+            // An employee's advance or salary: who, and the notes as what it was for.
+            if (t.Kind is SafeTransactionKind.EmployeeAdvance or SafeTransactionKind.SalaryPayment)
+                return new DailyCashLine(
+                    t.Id, t.Kind, t.BusinessDate,
+                    $"{(t.Kind == SafeTransactionKind.EmployeeAdvance ? "Advance to" : "Salary of")} {names.Employees.GetValueOrDefault(t.EmployeeId!.Value) ?? "a removed employee"}",
+                    Money(-t.Amount), null, t.Notes is { } said ? [said] : [], t.RecordedBy, t.ApprovedBy);
             // An old debt paid: the supplier, and the notes (a receipt number) as what it was for.
             if (t.Kind == SafeTransactionKind.SupplierPayment)
                 return new DailyCashLine(
@@ -369,7 +382,7 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
             .Select(g =>
             {
                 var gross = g.Where(t => t.Kind == SafeTransactionKind.RevenueTransfer).Sum(t => t.GrossAmount ?? t.Amount);
-                var deductions = -g.Where(t => t.Kind is SafeTransactionKind.InvoicePayment or SafeTransactionKind.SupplierPayment).Sum(t => t.Amount);
+                var deductions = -g.Where(t => SafeTransaction.PaidOutKinds.Contains(t.Kind)).Sum(t => t.Amount);
                 var net = g.Where(t => t.Fund == CashFund.Safe).Sum(t => t.Amount);
                 var lines = standing.Where(t => t.RevenueDate == g.Key).ToList();
                 return new DailyCashDay(
@@ -428,7 +441,7 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
 
         var cash = await db.SafeTransactions.AsNoTracking()
             .Where(t => t.RevenueDate != null && t.RevenueDate >= from && t.RevenueDate <= to
-                && (t.Kind == SafeTransactionKind.RevenueTransfer || t.Kind == SafeTransactionKind.InvoicePayment || t.Kind == SafeTransactionKind.SupplierPayment))
+                && (t.Kind == SafeTransactionKind.RevenueTransfer || SafeTransaction.PaidOutKinds.Contains(t.Kind)))
             .ToListAsync(cancellationToken);
         var (fromUtc, _) = clock.Bounds(from);
         var (_, toUtc) = clock.Bounds(to);
@@ -453,7 +466,7 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         // what was paid straight out of them, and the tax in the gross.
         var takings = cash.Where(t => t.Kind == SafeTransactionKind.RevenueTransfer).ToList();
         var entered = takings.Sum(t => t.GrossAmount ?? t.Amount);
-        var paidOut = -cash.Where(t => t.Kind is SafeTransactionKind.InvoicePayment or SafeTransactionKind.SupplierPayment).Sum(t => t.Amount);
+        var paidOut = -cash.Where(t => SafeTransaction.PaidOutKinds.Contains(t.Kind)).Sum(t => t.Amount);
         var tax = takings.Sum(t => t.TaxAmount);
         var netCash = entered - tax;
 
@@ -581,6 +594,22 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         return new SupplierStatement(supplierId, supplier.Name, opening, credit, paid, Money(opening + credit - paid), statement, OpenInvoices(lines, invoices));
     }
 
+    // The advances paid in a period, latest first, voided ones too (marked).
+    public async Task<IReadOnlyList<AdvanceRow>> GetAdvancesAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken)
+    {
+        Period(from, to);
+        var advances = await db.SafeTransactions.AsNoTracking()
+            .Where(t => t.Kind == SafeTransactionKind.EmployeeAdvance && t.ReversalOf == null && t.BusinessDate >= from && t.BusinessDate <= to)
+            .OrderByDescending(t => t.BusinessDate).ThenByDescending(t => t.RecordedAtUtc)
+            .ToListAsync(cancellationToken);
+        var names = await db.Employees.AsNoTracking().ToDictionaryAsync(e => e.Id, e => e.Name, cancellationToken);
+        return advances
+            .Select(t => new AdvanceRow(
+                t.Id, t.BusinessDate, t.EmployeeId!.Value, names.GetValueOrDefault(t.EmployeeId.Value) ?? "A removed employee", Money(-t.Amount),
+                t.PayrollMonth!.Value, t.RevenueDate, t.Notes, t.RecordedBy, t.ApprovedBy, t.VoidedAtUtc, t.VoidedBy))
+            .ToList();
+    }
+
     public async Task<IReadOnlyList<SupplierPaymentRow>> GetSupplierPaymentsAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken)
     {
         Period(from, to);
@@ -650,7 +679,8 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
     // ---- Shared ----
 
     private sealed record Names(
-        IReadOnlyDictionary<Guid, string> Suppliers, IReadOnlyDictionary<Guid, string> Expenses, IReadOnlyDictionary<Guid, string?> Invoices);
+        IReadOnlyDictionary<Guid, string> Suppliers, IReadOnlyDictionary<Guid, string> Expenses, IReadOnlyDictionary<Guid, string?> Invoices,
+        IReadOnlyDictionary<Guid, string> Employees);
 
     private async Task<Names> NamesAsync(IReadOnlyList<SafeTransaction> rows, CancellationToken cancellationToken)
     {
@@ -659,13 +689,15 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
             await db.Suppliers.AsNoTracking().ToDictionaryAsync(s => s.Id, s => s.Name, cancellationToken),
             await db.ExpenseItems.AsNoTracking().ToDictionaryAsync(e => e.Id, e => e.Name, cancellationToken),
             await db.PurchaseInvoices.AsNoTracking().Where(i => invoiceIds.Contains(i.Id))
-                .ToDictionaryAsync(i => i.Id, i => i.SupplierInvoiceNumber, cancellationToken));
+                .ToDictionaryAsync(i => i.Id, i => i.SupplierInvoiceNumber, cancellationToken),
+            await db.Employees.AsNoTracking().ToDictionaryAsync(e => e.Id, e => e.Name, cancellationToken));
     }
 
     private static SafeEntryRow Row(SafeTransaction t, Names names, decimal? balance)
     {
         string Supplier() => t.SupplierId is { } id ? names.Suppliers.GetValueOrDefault(id) ?? "a removed supplier" : "no supplier";
         string Takings() => t.RevenueDate is { } day ? $" · from the takings of {day.ToString("d MMM", Invariant)}" : "";
+        string Employee() => t.EmployeeId is { } id ? names.Employees.GetValueOrDefault(id) ?? "a removed employee" : "an employee";
         var what = t.Kind switch
         {
             SafeTransactionKind.OpeningBalance => $"Opening balance · {SourceName(t.Source)}",
@@ -675,8 +707,8 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
             SafeTransactionKind.ExpenseVoucher => t.ExpenseItemId is { } e ? names.Expenses.GetValueOrDefault(e) ?? "A removed expense" : "An expense",
             SafeTransactionKind.SupplierPayment => $"Payment to {Supplier()}" +
                 (t.RevenueDate is { } paidFrom ? $" · from the takings of {paidFrom.ToString("d MMM", Invariant)}" : ""),
-            SafeTransactionKind.EmployeeAdvance => "Employee advance" + Takings(),
-            SafeTransactionKind.SalaryPayment => "Salary" + Takings(),
+            SafeTransactionKind.EmployeeAdvance => $"Advance to {Employee()}" + Takings(),
+            SafeTransactionKind.SalaryPayment => $"Salary of {Employee()}" + (t.PayrollMonth is { } month ? $" · {month.ToString("MMMM yyyy", Invariant)}" : "") + Takings(),
             _ => (t.PurchaseInvoiceId is { } i && names.Invoices.GetValueOrDefault(i) is { } number ? $"Invoice {number}" : "Invoice") +
                  (t.SupplierId is null ? "" : $" · {Supplier()}") +
                  (t.RevenueDate is { } day ? $" · from the takings of {day.ToString("d MMM", Invariant)}" : ""),

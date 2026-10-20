@@ -159,6 +159,14 @@ public sealed partial class Employee : AggregateRoot
     public void LinkStaff(string? staffMemberId) =>
         StaffMemberId = string.IsNullOrWhiteSpace(staffMemberId) ? null : staffMemberId.Trim();
 
+    // The day they started, put right.
+    public void ChangeStart(DateOnly hiredOn)
+    {
+        if (LeftOn is { } left && hiredOn > left)
+            throw new DomainException("They start on or before their last day.");
+        HiredOn = hiredOn;
+    }
+
     // Left on `lastDay`: paid to it, and absent from none of the days after it.
     public void Leave(DateOnly lastDay)
     {

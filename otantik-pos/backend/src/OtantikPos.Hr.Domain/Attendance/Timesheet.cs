@@ -92,6 +92,10 @@ public static class Timesheet
         return (from, from.AddDays(1));
     }
 
+    // The day a punch at `time` belongs to: the one whose window holds it.
+    public static DateOnly DayOf(Employee employee, DateTime time) =>
+        DateOnly.FromDateTime(time - (employee.ShiftStartsAt.ToTimeSpan() - DayStartsBeforeShift));
+
     // `now` is local time, as the punches are: a day is over once its window has closed.
     public static DayEvaluation Evaluate(
         Employee employee, DateOnly day, IEnumerable<DateTime> punches, DayMarkKind? mark, AttendancePolicy policy, DateTime now)

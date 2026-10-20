@@ -182,6 +182,12 @@ export const routes: Routes = [
                 loadComponent: () => import('./features/costing/supplier-payments-page').then((m) => m.SupplierPaymentsPage),
               },
               {
+                // Employees' advances: who is paid what, so only for whoever sees HR.
+                path: 'advances',
+                canActivate: [permissionGuard(Permissions.HrView)],
+                loadComponent: () => import('./features/costing/advances-page').then((m) => m.AdvancesPage),
+              },
+              {
                 path: 'tax-service',
                 loadComponent: () => import('./features/costing/tax-service-page').then((m) => m.TaxServicePage),
               },
@@ -229,6 +235,23 @@ export const routes: Routes = [
             path: 'approvals',
             canActivate: [permissionGuard(Permissions.ApprovalDecide)],
             loadComponent: () => import('./features/costing/approvals-page').then((m) => m.ApprovalsPage),
+          },
+        ],
+      },
+      {
+        // HR & Payroll (الموارد البشرية والرواتب): employees, their attendance and their pay.
+        path: 'hr',
+        canActivate: [permissionGuard(Permissions.HrView)],
+        loadComponent: () => import('./features/hr/hr-shell').then((m) => m.HrShell),
+        children: [
+          { path: '', pathMatch: 'full', redirectTo: 'employees' },
+          {
+            path: 'employees',
+            loadComponent: () => import('./features/hr/employees-page').then((m) => m.EmployeesPage),
+          },
+          {
+            path: 'devices',
+            loadComponent: () => import('./features/hr/devices-page').then((m) => m.DevicesPage),
           },
         ],
       },

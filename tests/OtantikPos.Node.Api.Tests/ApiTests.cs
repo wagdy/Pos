@@ -1032,7 +1032,14 @@ public class ApiTests
             .Select(e => $"{string.Join(",", e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? ["*"])} {e.RoutePattern.RawText}")
             .Order(StringComparer.Ordinal)
             .ToList();
-        Assert.Equal(["* /health", "* /health/ready", "* {*path:nonfile}", "GET api/auth/staff", "POST api/auth/sign-in"], open);
+        // The attendance device's ADMS door cannot sign in: it is checked by the device's serial
+        // number, refused until a manager approves it (HrApiTests).
+        Assert.Equal(
+            [
+                "* /health", "* /health/ready", "* {*path:nonfile}", "GET api/auth/staff", "GET iclock/cdata", "GET iclock/getrequest",
+                "POST api/auth/sign-in", "POST iclock/cdata", "POST iclock/devicecmd",
+            ],
+            open);
     }
 
     [Fact]

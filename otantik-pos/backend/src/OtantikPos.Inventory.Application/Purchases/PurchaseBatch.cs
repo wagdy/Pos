@@ -1,6 +1,7 @@
 using System.Globalization;
 using MediatR;
 using Otantik.BuildingBlocks;
+using OtantikPos.Hr.Domain;
 using OtantikPos.Inventory.Application.Approvals;
 using OtantikPos.Inventory.Application.Common;
 using OtantikPos.Inventory.Application.Treasury;
@@ -24,18 +25,25 @@ namespace OtantikPos.Inventory.Application.Purchases;
 // from the safe or the day's takings, as the batch is paid, never on credit; against what is owed
 // to them, never more, and taken off it on their account.
 //
-// All or nothing: every invoice and payment is checked before any is saved, and each problem is
-// said by the invoice or payment it is on. InvoiceId and a payment's TransactionId are made by the
-// till: a batch sent again does not post an invoice, or pay a supplier, twice.
+// An employee's advance (سلفة) can be paid in it as well, as a payment is: from the safe or the
+// day's takings, never on credit, and owed by the employee until the payslip of its month deducts it.
+//
+// All or nothing: every invoice, payment and advance is checked before any is saved, and each
+// problem is said by the one it is on. InvoiceId and a payment's or advance's TransactionId are
+// made by the till: a batch sent again does not post an invoice, pay a supplier, or advance, twice.
 
 public sealed record BatchInvoice(Guid InvoiceId, Guid? SupplierId, string? SupplierInvoiceNumber, IReadOnlyList<PurchaseInvoiceLineEntry> Lines);
 
 public sealed record BatchPayment(Guid TransactionId, Guid SupplierId, decimal Amount, string? Notes = null);
 
+public sealed record BatchAdvance(Guid TransactionId, Guid EmployeeId, decimal Amount, string? Notes = null);
+
 // A payment the batch made (Applied), or asked of a manager (Requested): no cash moves until then.
 public sealed record BatchPaymentDto(Guid TransactionId, Guid SupplierId, string Supplier, decimal Amount, string? Notes, ApprovalOutcome Outcome);
 
-public sealed record PurchaseBatchResult(IReadOnlyList<PurchaseInvoiceDto> Invoices, IReadOnlyList<BatchPaymentDto> Payments);
+public sealed record BatchAdvanceDto(Guid TransactionId, Guid EmployeeId, string Employee, decimal Amount, string? Notes, ApprovalOutcome Outcome);
+
+public sealed record PurchaseBatchResult(IReadOnlyList<PurchaseInvoiceDto> Invoices, IReadOnlyList<BatchPaymentDto> Payments, IReadOnlyList<BatchAdvanceDto> Advances);
 
 public sealed record PostPurchaseBatchCommand(
     DateOnly InvoiceDate,
@@ -45,7 +53,8 @@ public sealed record PostPurchaseBatchCommand(
     string StaffName = "",
     string StaffId = "",
     bool CanApprove = true,
-    IReadOnlyList<BatchPayment>? Payments = null) : IRequest<PurchaseBatchResult>, IRetryOnConflict;
+    IReadOnlyList<BatchPayment>? Payments = null,
+    IReadOnlyList<BatchAdvance>? Advances = null) : IRequest<PurchaseBatchResult>, IRetryOnConflict;
 
 internal sealed class PostPurchaseBatchHandler(
     IPurchaseInvoiceRepository invoices,
@@ -59,6 +68,7 @@ internal sealed class PostPurchaseBatchHandler(
     IApprovalRequestRepository requests,
     ISupplierLedgerRepository suppliersLedger,
     TreasuryWriter treasury,
+    IEmployeeRepository employees,
     IUnitOfWork unitOfWork) : IRequestHandler<PostPurchaseBatchCommand, PurchaseBatchResult>
 {
     public const int MaxInvoices = 50;
@@ -66,21 +76,25 @@ internal sealed class PostPurchaseBatchHandler(
     public async Task<PurchaseBatchResult> Handle(PostPurchaseBatchCommand request, CancellationToken cancellationToken)
     {
         var payments = request.Payments ?? [];
-        if (request.Invoices.Count == 0 && payments.Count == 0)
-            throw new DomainException("Add an invoice or a supplier payment to the batch.");
-        if (request.Invoices.Count + payments.Count > MaxInvoices)
-            throw new DomainException($"A batch holds at most {MaxInvoices} invoices and payments: send the rest as another.");
+        var advances = request.Advances ?? [];
+        if (request.Invoices.Count == 0 && payments.Count == 0 && advances.Count == 0)
+            throw new DomainException("Add an invoice, a supplier payment or an advance to the batch.");
+        if (request.Invoices.Count + payments.Count + advances.Count > MaxInvoices)
+            throw new DomainException($"A batch holds at most {MaxInvoices} invoices, payments and advances: send the rest as another.");
         if (request.PaymentMethod == PurchasePaymentMethod.BeforeTreasury)
             throw new DomainException("Before the treasury is for the invoices from before it, not for new ones.");
         if (request.Invoices.Select(i => i.InvoiceId).Distinct().Count() != request.Invoices.Count)
             throw new DomainException("The same invoice is in the batch twice.");
-        if (payments.Count > 0)
+        if (payments.Count > 0 || advances.Count > 0)
         {
             if (request.PaymentMethod == PurchasePaymentMethod.Credit)
-                throw new DomainException("A supplier payment is cash: pay the batch from the safe or a day's takings, or send the payments apart.");
+                throw new DomainException(payments.Count > 0
+                    ? "A supplier payment is cash: pay the batch from the safe or a day's takings, or send the payments apart."
+                    : "An advance is cash: pay the batch from the safe or a day's takings, or send the advances apart.");
             if (request.PaymentMethod == PurchasePaymentMethod.DayRevenue && request.RevenueDate is null)
                 throw new DomainException("Choose the day whose takings pay them.");
-            if (payments.Select(p => p.TransactionId).Concat(request.Invoices.Select(i => i.InvoiceId)).Distinct().Count() != payments.Count + request.Invoices.Count)
+            var ids = payments.Select(p => p.TransactionId).Concat(advances.Select(a => a.TransactionId)).Concat(request.Invoices.Select(i => i.InvoiceId)).ToList();
+            if (ids.Distinct().Count() != ids.Count)
                 throw new DomainException("The same payment is in the batch twice.");
         }
 
@@ -170,6 +184,47 @@ internal sealed class PostPurchaseBatchHandler(
             }
         }
 
+        var advanced = new List<BatchAdvanceDto>();
+        for (var i = 0; i < advances.Count; i++)
+        {
+            var entry = advances[i];
+            var name = (await employees.GetByIdAsync(entry.EmployeeId, cancellationToken))?.Name;
+            try
+            {
+                // Sent again after an answer was lost: paid, or asked, already.
+                var paidAlready = await safe.GetByIdAsync(entry.TransactionId, cancellationToken) is not null;
+                if (paidAlready || await requests.GetByIdAsync(entry.TransactionId, cancellationToken) is not null)
+                {
+                    var outcome = paidAlready ? ApprovalOutcome.Applied : ApprovalOutcome.Requested;
+                    advanced.Add(new BatchAdvanceDto(entry.TransactionId, entry.EmployeeId, name ?? "", entry.Amount, entry.Notes, outcome));
+                    continue;
+                }
+
+                var voucher = new SafeVoucher(
+                    entry.TransactionId, SafeTransactionKind.EmployeeAdvance, entry.Amount, request.InvoiceDate,
+                    RevenueDate: request.PaymentMethod == PurchasePaymentMethod.DayRevenue ? request.RevenueDate : null,
+                    Notes: entry.Notes, EmployeeId: entry.EmployeeId);
+                if (request.CanApprove)
+                {
+                    await treasury.ApplyAsync(voucher, request.StaffName, null, cancellationToken);
+                    advanced.Add(new BatchAdvanceDto(entry.TransactionId, entry.EmployeeId, name!, entry.Amount, voucher.Notes?.Trim(), ApprovalOutcome.Applied));
+                }
+                else
+                {
+                    await treasury.CheckAsync(voucher, cancellationToken);
+                    var (summary, changes) = await treasury.DescribeAsync(voucher, cancellationToken);
+                    requests.Add(ApprovalRequest.AskToChange(
+                        entry.TransactionId, ApprovalModule.Treasury, ApprovalAction.Create, entry.TransactionId, summary, changes,
+                        ApprovalPayload.Write(voucher), null, request.StaffId, request.StaffName));
+                    advanced.Add(new BatchAdvanceDto(entry.TransactionId, entry.EmployeeId, name!, entry.Amount, voucher.Notes?.Trim(), ApprovalOutcome.Requested));
+                }
+            }
+            catch (Exception error) when (error is DomainException or NotFoundException)
+            {
+                problems.Add($"Advance {i + 1}{(name is null ? "" : $" · {name}")}: {error.Message}");
+            }
+        }
+
         if (problems.Count > 0)
             throw new DomainException(string.Join("\n", problems));
 
@@ -178,7 +233,7 @@ internal sealed class PostPurchaseBatchHandler(
         var dtos = new List<PurchaseInvoiceDto>();
         foreach (var invoice in made)
             dtos.Add(await reading.DtoAsync(invoice, cancellationToken));
-        return new PurchaseBatchResult(dtos, paid);
+        return new PurchaseBatchResult(dtos, paid, advanced);
     }
 
     private static string Money(decimal value) => $"L.E {value.ToString("N2", CultureInfo.InvariantCulture)}";

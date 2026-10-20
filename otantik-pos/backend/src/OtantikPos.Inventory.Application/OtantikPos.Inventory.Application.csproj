@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!-- References Ordering's contracts (its events), never its domain or application: Inventory
-       learns of a sale only as catalog ids and a quantity. -->
+       learns of a sale only as catalog ids and a quantity. HR's use cases are here too, beside the
+       treasury their advances and salaries are paid from, and the approvals they share. -->
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -12,6 +13,7 @@
   <ItemGroup>
     <ProjectReference Include="..\OtantikPos.Inventory.Domain\OtantikPos.Inventory.Domain.csproj" />
     <ProjectReference Include="..\OtantikPos.Ordering.Contracts\OtantikPos.Ordering.Contracts.csproj" />
+    <ProjectReference Include="..\OtantikPos.Hr.Domain\OtantikPos.Hr.Domain.csproj" />
   </ItemGroup>
 
   <ItemGroup>

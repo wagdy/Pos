@@ -688,7 +688,8 @@ export type ApprovalModule =
   | 'PrepItem'
   | 'ProductionOrder'
   | 'Treasury'
-  | 'PurchaseCategory';
+  | 'PurchaseCategory'
+  | 'Employee';
 export type ApprovalAction = 'Create' | 'Update' | 'Delete';
 export type ApprovalStatus = 'Pending' | 'Approved' | 'Rejected';
 export type ApprovalOutcome = 'Requested' | 'Applied';
@@ -703,6 +704,7 @@ export const moduleLabels: Record<ApprovalModule, { en: string; ar: string }> = 
   ProductionOrder: { en: 'Production', ar: 'أذونات التصنيع' },
   Treasury: { en: 'Safe', ar: 'الخزنة' },
   PurchaseCategory: { en: 'Purchase category', ar: 'أقسام المشتريات' },
+  Employee: { en: 'Employee', ar: 'الموظفين' },
 };
 
 export const actionLabels: Record<ApprovalAction, { en: string; ar: string }> = {
@@ -940,14 +942,16 @@ export interface SavePurchaseInvoice {
 // A stock line names its material; an expense line its expense item, in units of 1, with its cost.
 // A day's purchases entered together (يومية المشتريات المجمعة): the date and how they were paid,
 // chosen once, and an invoice for each supplier, each its own invoice. InvoiceId is made here.
-// A day's purchases sent together: an invoice for each supplier, and suppliers paid against what they
-// are owed (سداد مورد), no invoice and no stock. A payment's transactionId is made here, once.
+// A day's purchases sent together: an invoice for each supplier, suppliers paid against what they
+// are owed (سداد مورد), no invoice and no stock, and employees' advances (سلفة). A payment's or an
+// advance's transactionId is made here, once.
 export interface PurchaseBatch {
   invoiceDate: string;
   paymentMethod: PurchasePaymentMethod;
   revenueDate: string | null;
   invoices: { invoiceId: string; supplierId: string | null; supplierInvoiceNumber: string | null; lines: SavePurchaseLine[] }[];
   payments: { transactionId: string; supplierId: string; amount: number; notes: string | null }[];
+  advances?: { transactionId: string; employeeId: string; amount: number; notes: string | null }[];
 }
 
 // A supplier paid in a batch: at once (Applied), or asked of a manager (Requested).
@@ -960,9 +964,20 @@ export interface BatchPaymentMade {
   outcome: ApprovalOutcome;
 }
 
+// An employee's advance paid in a batch: at once (Applied), or asked of a manager (Requested).
+export interface BatchAdvanceMade {
+  transactionId: string;
+  employeeId: string;
+  employee: string;
+  amount: number;
+  notes: string | null;
+  outcome: ApprovalOutcome;
+}
+
 export interface PurchaseBatchResult {
   invoices: PurchaseInvoice[];
   payments: BatchPaymentMade[];
+  advances?: BatchAdvanceMade[];
 }
 
 export interface SavePurchaseLine {
@@ -1417,6 +1432,11 @@ export class CostingApi {
     return this.http.get<SupplierPaymentRow[]>('/api/financials/supplier-payments', { params: { from, to } });
   }
 
+  // Employees' advances paid in a period: with HR's view only, as it shows who is paid what.
+  advances(from: string, to: string): Observable<AdvanceRow[]> {
+    return this.http.get<AdvanceRow[]>('/api/financials/advances', { params: { from, to } });
+  }
+
   // What a supplier was owed before the treasury: no cash moves, so it is entered at once.
   supplierOpeningBalance(supplierId: string, entryId: string, owed: number, date: string | null): Observable<void> {
     return this.http.post<void>(`/api/financials/suppliers/${supplierId}/opening-balance`, { entryId, owed, date });
@@ -1725,7 +1745,15 @@ export const paymentStatusLabels: Record<InvoicePaymentStatus, { en: string; ar:
   BeforeTreasury: { en: 'Before the treasury', ar: 'قبل الخزنة' },
 };
 
-export type SafeTransactionKind = 'OpeningBalance' | 'Funding' | 'RevenueTransfer' | 'ExpenseVoucher' | 'SupplierPayment' | 'InvoicePayment';
+export type SafeTransactionKind =
+  | 'OpeningBalance'
+  | 'Funding'
+  | 'RevenueTransfer'
+  | 'ExpenseVoucher'
+  | 'SupplierPayment'
+  | 'InvoicePayment'
+  | 'EmployeeAdvance'
+  | 'SalaryPayment';
 export type CashFund = 'Safe' | 'DayRevenue';
 // Where money put into the safe came from (مصدر التمويل).
 export type FundingSource = 'CarriedOver' | 'OwnerFinancing' | 'Other';
@@ -1743,6 +1771,8 @@ export const safeKindLabels: Record<SafeTransactionKind, { en: string; ar: strin
   ExpenseVoucher: { en: 'Expense voucher', ar: 'إذن صرف مصروفات' },
   SupplierPayment: { en: 'Supplier payment', ar: 'إذن صرف لمورد' },
   InvoicePayment: { en: 'Invoice paid', ar: 'سداد فاتورة' },
+  EmployeeAdvance: { en: 'Employee advance', ar: 'سلفة موظف' },
+  SalaryPayment: { en: 'Salary paid', ar: 'صرف راتب' },
 };
 
 // One line of the safe's ledger: in or out, and the balance after it (null where not running).
@@ -1842,6 +1872,8 @@ export interface TakingsPreview {
   paidOut: number;
   invoices: number;
   supplierPayments: number;
+  // Employees' advances and salaries.
+  employeePayments?: number;
 }
 
 export interface ExpenseVoucherRow {
@@ -1930,6 +1962,23 @@ export interface SupplierPaymentRow {
   fromTakingsOf: string | null;
 }
 
+// An employee's advance (سلفة): when and from where it was paid, and the payroll month whose slip
+// deducts it (its first day).
+export interface AdvanceRow {
+  id: string;
+  date: string;
+  employeeId: string;
+  employee: string;
+  amount: number;
+  payrollMonth: string;
+  fromTakingsOf: string | null;
+  notes: string | null;
+  recordedBy: string;
+  approvedBy: string | null;
+  voidedAtUtc: string | null;
+  voidedBy: string | null;
+}
+
 // A safe entry as entered. requestId and transactionId are made here, once per entry.
 export interface SafeVoucherInput {
   requestId: string;
@@ -1945,6 +1994,9 @@ export interface SafeVoucherInput {
   reason: string | null;
   // A day's takings, gross, with the tax in them: the server takes it off at the till's rate.
   includesTax: boolean;
+  // An advance's or a salary's employee; a salary's payroll month (its first day).
+  employeeId?: string | null;
+  payrollMonth?: string | null;
 }
 
 export interface SafeTransaction {

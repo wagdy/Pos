@@ -44,6 +44,7 @@ public sealed class TestPos
     public FakeDeliverySystem Cloud { get; } = new();
     public RecordingSink Sink { get; } = new();
     public InventoryStore Inventory { get; } = new();
+    public HrStore Hr { get; } = new();
 
     // Names and dates for the inventory's records: the business day can be set a day behind the
     // calendar, as it is after midnight.
@@ -91,6 +92,14 @@ public sealed class TestPos
         services.AddSingleton<IProductionOrderRepository>(Inventory.Production);
         services.AddSingleton<OtantikPos.Inventory.Application.RawMaterials.IMaterialUnits>(Inventory.Units);
         services.AddSingleton<OtantikPos.Inventory.Application.Categories.IItemConversions>(new NoItemConversions());
+        services.AddSingleton<OtantikPos.Hr.Domain.IEmployeeRepository>(Hr.Employees);
+        services.AddSingleton<OtantikPos.Hr.Domain.IAttendanceDeviceRepository>(Hr.Devices);
+        services.AddSingleton<OtantikPos.Hr.Domain.IAttendanceLogRepository>(Hr.Punches);
+        services.AddSingleton<OtantikPos.Hr.Domain.IDayMarkRepository>(Hr.Marks);
+        services.AddSingleton<OtantikPos.Hr.Domain.IDailyRecordRepository>(Hr.Records);
+        services.AddSingleton<OtantikPos.Hr.Domain.IPayrollAdjustmentRepository>(Hr.Adjustments);
+        services.AddSingleton<OtantikPos.Hr.Domain.IPayrollSlipRepository>(Hr.Slips);
+        services.AddSingleton<OtantikPos.Inventory.Application.Hr.IAttendanceSettings>(Hr.Settings);
 
         _services = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }
@@ -652,6 +661,9 @@ public sealed class SafeStore : ISafeTransactionRepository
             .Select(t => t.PurchaseInvoiceId!.Value).ToHashSet());
     public Task<bool> AnyOpeningBalanceAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult(_entries.Any(t => t.Kind == SafeTransactionKind.OpeningBalance && !t.IsReversal && !t.IsVoided));
+    public Task<IReadOnlyList<SafeTransaction>> GetForPayrollMonthAsync(DateOnly month, Guid? employeeId = null, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<SafeTransaction>>(_entries
+            .Where(t => t.PayrollMonth == month && t.EmployeeId != null && (employeeId == null || t.EmployeeId == employeeId)).ToList());
 }
 
 public sealed class SupplierLedgerStore : ISupplierLedgerRepository
@@ -689,6 +701,8 @@ public sealed class NamesFromTheTestMenu : OtantikPos.Inventory.Application.Appr
     public DateOnly BusinessDateOf(DateTime utc) => DateOnly.FromDateTime(utc).AddDays(-BusinessDayBehind);
 
     public DateOnly LocalDateOf(DateTime utc) => DateOnly.FromDateTime(utc);
+
+    public DateTime LocalTimeOf(DateTime utc) => DateTime.SpecifyKind(utc, DateTimeKind.Unspecified);
 
     // 1 for the hours after midnight, before the business day starts: the business date is a day
     // behind the calendar.

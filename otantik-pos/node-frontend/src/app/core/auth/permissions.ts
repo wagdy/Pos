@@ -21,6 +21,9 @@ export const Permissions = {
   CostingView: 'costing.view',
   // Deleting recipes, materials, invoices, waste and counts outright, and deciding others' requests.
   ApprovalDecide: 'approvals.decide',
+  // HR & Payroll: seeing it shows salaries; managing it is a request for anyone who cannot approve.
+  HrView: 'hr.view',
+  HrManage: 'hr.manage',
 } as const;
 
 export type Permission = (typeof Permissions)[keyof typeof Permissions];

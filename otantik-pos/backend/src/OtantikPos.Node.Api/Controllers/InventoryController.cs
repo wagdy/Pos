@@ -137,14 +137,15 @@ public sealed class InventoryController(ISender sender) : ControllerBase
         sender.Send(new PostPurchaseInvoiceCommand(invoiceId, StaffName, StaffId, CanApprove), cancellationToken);
 
     // A day's purchases entered together: the date and payment chosen once, an invoice for each
-    // supplier, and suppliers paid against what they are owed. Each becomes its own posted invoice
-    // or payment, paid as chosen (a manager's at once, anyone else's asked of one); none is saved
+    // supplier, suppliers paid against what they are owed, and employees' advances. Each becomes
+    // its own posted invoice or payment, paid as chosen (a manager's at once, anyone else's asked of one); none is saved
     // unless all can be (422, each problem by its invoice or payment).
     [HttpPost("purchase-invoices/batch")]
     [Authorize(Policy = Permissions.InventoryManage)]
     public Task<PurchaseBatchResult> PostPurchaseBatch(PurchaseBatchRequest request, CancellationToken cancellationToken) =>
         sender.Send(new PostPurchaseBatchCommand(
-            request.InvoiceDate, request.PaymentMethod, request.RevenueDate, request.Invoices, StaffName, StaffId, CanApprove, request.Payments ?? []),
+            request.InvoiceDate, request.PaymentMethod, request.RevenueDate, request.Invoices, StaffName, StaffId, CanApprove, request.Payments ?? [],
+            request.Advances ?? []),
             cancellationToken);
 
     // A posted invoice corrected (تعديل فاتورة): voided and posted again as it should have been, as a
@@ -587,7 +588,7 @@ public sealed record PayPurchaseInvoiceRequest(Guid RequestId, PurchasePaymentMe
 
 public sealed record PurchaseBatchRequest(
     DateOnly InvoiceDate, PurchasePaymentMethod PaymentMethod, IReadOnlyList<BatchInvoice> Invoices, DateOnly? RevenueDate = null,
-    IReadOnlyList<BatchPayment>? Payments = null);
+    IReadOnlyList<BatchPayment>? Payments = null, IReadOnlyList<BatchAdvance>? Advances = null);
 
 public sealed record SavePrepItemRequest(
     string Name,

@@ -4,12 +4,19 @@ import { of } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
 import { CostingApi, SafeVoucherInput } from '../../core/costing/costing.api';
+import { Employee, HrApi } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { SafeVoucherDialog, SafeVoucherDialogData, Treasury, taxIn } from './financials';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
+const employee = (id: string, name: string, isActive = true): Employee => ({
+  id, name, jobTitle: 'Chef', monthlySalary: 5_400, shiftStartsAt: '10:00:00', shiftEndsAt: '19:00:00', daysOff: [], deviceUserId: null,
+  hiredOn: '2026-01-01', leftOn: isActive ? null : '2026-09-30', isActive, dailyRate: 180, hourlyRate: 20,
+});
+
 describe('entering a safe entry', () => {
+  const employees = vi.fn();
   const supplierBalances = vi.fn();
   const expenseItems = vi.fn();
   const takingsPreview = vi.fn();
@@ -19,6 +26,7 @@ describe('entering a safe entry', () => {
     TestBed.configureTestingModule({
       providers: [
         { provide: CostingApi, useValue: { supplierBalances, expenseItems, takingsPreview } },
+        { provide: HrApi, useValue: { employees } },
         { provide: MAT_DIALOG_DATA, useValue: data },
         { provide: MatDialogRef, useValue: { close } },
       ],
@@ -35,6 +43,7 @@ describe('entering a safe entry', () => {
       { supplierId: 'delta', supplier: 'Delta Oils', isArchived: false, openingDebt: 0, creditPurchases: 100, payments: 100, balance: 0, lastPaidOn: null, openInvoices: 0 },
     ]));
     expenseItems.mockReset().mockReturnValue(of([]));
+    employees.mockReset().mockReturnValue(of([employee('hassan', 'Hassan'), employee('old', 'Left Already', false)]));
     takingsPreview.mockReset().mockImplementation((day: string) => of({ date: day, entered: null, paidOut: 0, invoices: 0 }));
     close.mockReset();
   });
@@ -54,6 +63,26 @@ describe('entering a safe entry', () => {
     const voucher = close.mock.lastCall![0] as SafeVoucherInput;
     expect(voucher).toMatchObject({ kind: 'SupplierPayment', amount: 750, supplierId: 'nile', notes: 'Cash on delivery', expenseItemId: null, source: null });
     expect(voucher.requestId).not.toBe(voucher.transactionId);
+  });
+
+  it('advances an employee still employed, from the safe or a day’s takings', async () => {
+    const { el, page } = await dialog({ kind: 'EmployeeAdvance', canApprove: true, today: '2026-10-20' });
+
+    expect(text(el.querySelector('h2')!)).toBe('Employee advance سلفة موظف');
+    expect(text(el)).toContain('It is not an expense: it comes off their pay for the month');
+    expect(page['payable']().map((e: Employee) => e.name)).toEqual(['Hassan']);
+    page['amount'] = 300;
+    expect(page['problem']()).toBe('Choose the employee.');
+    page['employeeId'] = 'hassan';
+    page['done']();
+    expect(close.mock.lastCall![0]).toMatchObject({ kind: 'EmployeeAdvance', amount: 300, employeeId: 'hassan', revenueDate: null, date: '2026-10-20' });
+
+    page['paidFrom'] = 'DayRevenue';
+    page['revenueDate'] = '2026-10-21';
+    expect(page['problem']()).toBe('Choose the day whose takings pay it: that day or one before the advance.');
+    page['revenueDate'] = '2026-10-19';
+    page['done']();
+    expect(close.mock.lastCall![0]).toMatchObject({ employeeId: 'hassan', revenueDate: '2026-10-19', supplierId: null, expenseItemId: null });
   });
 
   it('asks where the money came from, and tells an accountant that a manager approves it', async () => {

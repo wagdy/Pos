@@ -239,6 +239,13 @@ internal sealed class SafeTransactionRepository(NodeDbContext db) : ISafeTransac
             .ToListAsync(cancellationToken))
         .ToHashSet();
 
+    public async Task<IReadOnlyList<SafeTransaction>> GetForPayrollMonthAsync(
+        DateOnly month, Guid? employeeId = null, CancellationToken cancellationToken = default) =>
+        await db.SafeTransactions.AsNoTracking()
+            .Where(t => t.PayrollMonth == month && t.EmployeeId != null && (employeeId == null || t.EmployeeId == employeeId))
+            .OrderBy(t => t.BusinessDate).ThenBy(t => t.RecordedAtUtc)
+            .ToListAsync(cancellationToken);
+
     public Task<bool> AnyOpeningBalanceAsync(CancellationToken cancellationToken = default) =>
         db.SafeTransactions.AnyAsync(t => t.Kind == SafeTransactionKind.OpeningBalance && t.ReversalOf == null && t.VoidedAtUtc == null, cancellationToken);
 }
@@ -405,4 +412,6 @@ internal sealed class RecordDescriptions(NodeDbContext db, RestaurantClock clock
     public DateOnly BusinessDateOf(DateTime utc) => clock.BusinessDateOf(utc);
 
     public DateOnly LocalDateOf(DateTime utc) => clock.LocalDateOf(utc);
+
+    public DateTime LocalTimeOf(DateTime utc) => DateTime.SpecifyKind(clock.ToLocal(utc), DateTimeKind.Unspecified);
 }

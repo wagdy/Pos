@@ -1,6 +1,8 @@
 using System.Globalization;
 using MediatR;
 using Otantik.BuildingBlocks;
+using OtantikPos.Hr.Domain;
+using OtantikPos.Hr.Domain.Employees;
 using OtantikPos.Inventory.Application.Approvals;
 using OtantikPos.Inventory.Application.Common;
 using OtantikPos.Inventory.Domain.Approvals;
@@ -13,8 +15,10 @@ namespace OtantikPos.Inventory.Application.Treasury;
 
 // The treasury (الماليات): the safe's ledger and what is owed to suppliers. Cash goes into the
 // safe as its opening balance, as funding, or as a day's takings; it goes out as expense
-// vouchers, supplier payments, and invoices paid in cash, from the safe or straight from a day's
-// takings. An invoice on credit is owed to its supplier until a payment voucher pays it.
+// vouchers, supplier payments, invoices paid in cash, employees' advances and salaries, from the
+// safe or straight from a day's takings. An invoice on credit is owed to its supplier until a
+// payment voucher pays it. An advance is owed by the employee until the payslip of the month it
+// counts in deducts it: the first month whose payroll is not finalized, from the advance's own.
 //
 // A day's takings are entered gross, as the POS totals them, once. What was paid straight out of
 // them by then came out of the drawer, so the safe gets the rest; what is paid out of them, or put
@@ -41,7 +45,10 @@ public sealed record SafeVoucher(
     Guid? PurchaseInvoiceId = null,
     string? Notes = null,
     bool IncludesTax = false,
-    decimal? TaxPercent = null);
+    decimal? TaxPercent = null,
+    // An advance's or a salary's employee; a salary's month (its first day).
+    Guid? EmployeeId = null,
+    DateOnly? PayrollMonth = null);
 
 // The tax rate the till's bills are charged: the delivery system's, as last synced.
 public interface ITaxRate
@@ -70,12 +77,14 @@ public sealed record SafeTransactionDto(
     bool IncludesTax,
     decimal? TaxPercent,
     decimal TaxAmount,
-    decimal? GrossAmount)
+    decimal? GrossAmount,
+    Guid? EmployeeId,
+    DateOnly? PayrollMonth)
 {
     public static SafeTransactionDto From(SafeTransaction t) => new(
         t.Id, t.Kind, t.Fund, t.Amount, t.BusinessDate, t.RevenueDate, t.Source, t.SupplierId, t.PurchaseInvoiceId, t.ExpenseItemId, t.Notes,
         t.RecordedBy, t.RecordedAtUtc, t.ApprovedBy, t.ReversalOf, t.VoidedAtUtc, t.VoidedBy, t.IncludesTax, t.TaxPercent, t.TaxAmount,
-        t.GrossAmount);
+        t.GrossAmount, t.EmployeeId, t.PayrollMonth);
 }
 
 // Checks, describes and enters safe entries: for a manager's own and for an approval alike. What
@@ -87,7 +96,9 @@ internal sealed class TreasuryWriter(
     IExpenseItemRepository expenses,
     IPurchaseInvoiceRepository invoices,
     IRecordDescriptions descriptions,
-    ITaxRate taxRate)
+    ITaxRate taxRate,
+    IEmployeeRepository employees,
+    IPayrollSlipRepository slips)
 {
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
@@ -170,6 +181,22 @@ internal sealed class TreasuryWriter(
             case SafeTransactionKind.InvoicePayment:
                 await UnpaidInvoiceAsync(voucher.PurchaseInvoiceId, cancellationToken);
                 break;
+            case SafeTransactionKind.EmployeeAdvance:
+            {
+                var employee = await EmployeeAsync(voucher.EmployeeId, cancellationToken);
+                if (!employee.IsEmployedOn(voucher.Date))
+                    throw new DomainException($"{employee.Name} is not employed on {Day(voucher.Date)}.");
+                break;
+            }
+            case SafeTransactionKind.SalaryPayment:
+            {
+                var (employee, month, owed) = await SalaryOwedAsync(voucher, cancellationToken);
+                if (voucher.Amount > owed)
+                    throw new DomainException(owed > 0
+                        ? $"{employee.Name} is owed {Money(owed)} of their pay for {MonthName(month)}: pay that much or less."
+                        : $"{employee.Name}'s pay for {MonthName(month)} is paid.");
+                break;
+            }
             default:
                 throw new DomainException("Say what the safe entry is.");
         }
@@ -217,6 +244,16 @@ internal sealed class TreasuryWriter(
                     await TakingsInSafeAsync(invoice.RevenueDate, cancellationToken));
                 break;
             }
+            case SafeTransactionKind.EmployeeAdvance:
+                entry = SafeTransaction.EmployeeAdvance(
+                    id, voucher.Amount, voucher.Date, voucher.EmployeeId!.Value, await OpenMonthAsync(voucher.EmployeeId.Value, voucher.Date, cancellationToken),
+                    voucher.Notes, recordedBy, approvedBy, voucher.RevenueDate, await TakingsInSafeAsync(voucher.RevenueDate, cancellationToken));
+                break;
+            case SafeTransactionKind.SalaryPayment:
+                entry = SafeTransaction.SalaryPayment(
+                    id, voucher.Amount, voucher.Date, voucher.EmployeeId!.Value, voucher.PayrollMonth!.Value, voucher.Notes, recordedBy, approvedBy,
+                    voucher.RevenueDate, await TakingsInSafeAsync(voucher.RevenueDate, cancellationToken));
+                break;
             default:
                 throw new DomainException("Say what the safe entry is.");
         }
@@ -335,13 +372,33 @@ internal sealed class TreasuryWriter(
                           $"{(name is null ? "" : $" · {name}")} paid from {fromWhere} · {Money(invoice.Total)}";
                 changes.Add(new ApprovalChange("Paid from", null, fromWhere));
                 break;
+            case SafeTransactionKind.EmployeeAdvance:
+            {
+                var employee = await EmployeeAsync(voucher.EmployeeId, cancellationToken);
+                var advanceFrom = voucher.RevenueDate is { } advanceDay ? $"the takings of {Day(advanceDay)}" : "the safe";
+                summary = $"Employee advance · {employee.Name} · {amount}{(voucher.RevenueDate is null ? "" : $" from {advanceFrom}")}";
+                changes.Add(new ApprovalChange("Employee", null, employee.Name));
+                changes.Add(new ApprovalChange("Paid from", null, advanceFrom));
+                changes.Add(new ApprovalChange("Deducted from the pay of", null, MonthName(await OpenMonthAsync(employee.Id, voucher.Date, cancellationToken))));
+                break;
+            }
+            case SafeTransactionKind.SalaryPayment:
+            {
+                var (employee, month, owedOfPay) = await SalaryOwedAsync(voucher, cancellationToken);
+                var salaryFrom = voucher.RevenueDate is { } salaryDay ? $"the takings of {Day(salaryDay)}" : "the safe";
+                summary = $"Salary · {employee.Name} · {MonthName(month)} · {amount}{(voucher.RevenueDate is null ? "" : $" from {salaryFrom}")}";
+                changes.Add(new ApprovalChange("Employee", null, employee.Name));
+                changes.Add(new ApprovalChange($"Owed of {MonthName(month)}'s pay", Money(owedOfPay), Money(owedOfPay - voucher.Amount)));
+                changes.Add(new ApprovalChange("Paid from", null, salaryFrom));
+                break;
+            }
             default:
                 throw new DomainException("Say what the safe entry is.");
         }
 
         changes.Insert(1, new ApprovalChange(voucher.Kind == SafeTransactionKind.RevenueTransfer ? "Gross takings" : "Amount", null, amount));
         // What the safe holds after it: a payment out of a day's takings moves it once they are in it.
-        var fromDrawer = voucher is { Kind: SafeTransactionKind.InvoicePayment or SafeTransactionKind.SupplierPayment, RevenueDate: not null }
+        var fromDrawer = voucher.RevenueDate is not null && SafeTransaction.PaidOutKinds.Contains(voucher.Kind)
             && !await TakingsInSafeAsync(voucher.RevenueDate, cancellationToken);
         decimal? moves = voucher.Kind switch
         {
@@ -372,10 +429,50 @@ internal sealed class TreasuryWriter(
             SafeTransactionKind.ExpenseVoucher => $"Expense voucher · {(entry.ExpenseItemId is { } e ? (await expenses.GetByIdAsync(e, cancellationToken))?.Name : null) ?? "an expense"}",
             SafeTransactionKind.SupplierPayment => $"Supplier payment · {(entry.SupplierId is { } s ? (await suppliers.GetByIdAsync(s, cancellationToken))?.Name : null) ?? "a supplier"}" +
                 (entry.RevenueDate is { } paidFrom ? $" from the takings of {Day(paidFrom)}" : ""),
+            SafeTransactionKind.EmployeeAdvance => $"Employee advance · {await EmployeeNameAsync(entry.EmployeeId, cancellationToken)}" + From(entry.RevenueDate),
+            SafeTransactionKind.SalaryPayment => $"Salary · {await EmployeeNameAsync(entry.EmployeeId, cancellationToken)}" +
+                (entry.PayrollMonth is { } month ? $" · {MonthName(month)}" : "") + From(entry.RevenueDate),
             _ => $"Invoice payment from {(entry.RevenueDate is { } day ? $"the takings of {Day(day)}" : "the safe")}",
         };
         return $"{what} · {Money(Math.Abs(entry.Amount))} · {Day(entry.BusinessDate)}";
     }
+
+    // The month an advance paid on `date` counts in: its own, or the first after it whose payroll
+    // is not finalized for the employee.
+    private async Task<DateOnly> OpenMonthAsync(Guid employeeId, DateOnly date, CancellationToken cancellationToken)
+    {
+        var month = OtantikPos.Hr.Domain.Payroll.PayrollMonth.Of(date);
+        while (await slips.GetAsync(employeeId, month, cancellationToken) is { IsFinalized: true })
+            month = month.AddMonths(1);
+        return month;
+    }
+
+    // A salary's employee and month, and what is still owed of that month's finalized pay.
+    private async Task<(Employee Employee, DateOnly Month, decimal Owed)> SalaryOwedAsync(SafeVoucher voucher, CancellationToken cancellationToken)
+    {
+        var employee = await EmployeeAsync(voucher.EmployeeId, cancellationToken);
+        var month = voucher.PayrollMonth is { } chosen
+            ? OtantikPos.Hr.Domain.Payroll.PayrollMonth.Required(chosen)
+            : throw new DomainException("Choose the month whose pay this is.");
+        if (await slips.GetAsync(employee.Id, month, cancellationToken) is not { IsFinalized: true } slip)
+            throw new DomainException($"{employee.Name}'s pay for {MonthName(month)} is not finalized yet: finalize it on the payroll first.");
+        var paid = -(await safe.GetForPayrollMonthAsync(month, employee.Id, cancellationToken))
+            .Where(t => t.Kind == SafeTransactionKind.SalaryPayment)
+            .Sum(t => t.Amount);
+        return (employee, month, Math.Max(0, slip.NetPayable - paid));
+    }
+
+    private async Task<Employee> EmployeeAsync(Guid? id, CancellationToken cancellationToken) =>
+        id is { } employeeId
+            ? await employees.GetByIdAsync(employeeId, cancellationToken) ?? throw new NotFoundException(nameof(Employee), employeeId)
+            : throw new DomainException("Choose the employee.");
+
+    private async Task<string> EmployeeNameAsync(Guid? id, CancellationToken cancellationToken) =>
+        (id is { } employeeId ? (await employees.GetByIdAsync(employeeId, cancellationToken))?.Name : null) ?? "an employee";
+
+    private static string From(DateOnly? revenueDate) => revenueDate is { } day ? $" from the takings of {Day(day)}" : "";
+
+    private static string MonthName(DateOnly month) => month.ToString("MMMM yyyy", Invariant);
 
     // Whether a day's takings are entered, and so in the safe: what is paid out of them, or put
     // back, moves the safe.

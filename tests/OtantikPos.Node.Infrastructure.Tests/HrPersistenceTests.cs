@@ -95,7 +95,7 @@ public class HrPersistenceTests
         await node.Db(async db =>
         {
             db.AttendanceLogs.Add(AttendanceLog.FromDevice("CQZ7232060999", "7", PunchIn, 0, 1, chef.Id));
-            db.AttendanceLogs.Add(AttendanceLog.Manual(chef.Id, PunchIn, "Forgot to scan", "Omar"));
+            db.AttendanceLogs.Add(AttendanceLog.Manual(Guid.NewGuid(), chef.Id, PunchIn, "Forgot to scan", "Omar"));
             return await db.SaveChangesAsync();
         });
         Assert.Equal(3, await node.Db(db => db.AttendanceLogs.CountAsync()));

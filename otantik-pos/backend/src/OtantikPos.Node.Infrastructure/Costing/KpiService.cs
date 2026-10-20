@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using OtantikPos.Hr.Domain.Payroll;
 using Otantik.BuildingBlocks;
 using Otantik.SharedKernel.Orders;
 using OtantikPos.Inventory.Domain.Categories;
@@ -59,7 +60,8 @@ public sealed record MonthStatement(
     decimal LoggedOccupationCost = 0,
     decimal LoggedOtherFixedCosts = 0,
     IReadOnlyList<LoggedExpense>? LoggedExpenses = null,
-    // Wages paid as expenses (vouchers, invoices under a Wages category), added to the wages entered.
+    // Wages paid as expenses (vouchers, invoices under a Wages category) and the finalized payroll's
+    // wages, added to the wages entered.
     decimal LoggedWages = 0,
     // Every overhead: wages, controllable, occupation, other fixed, interest and depreciation.
     decimal TotalExpenses = 0);
@@ -176,6 +178,12 @@ public sealed class KpiService(NodeDbContext db, RestaurantClock clock, CostingS
         decimal Logged(ExpenseLine line) => Money(logged.Where(e => e.ExpenseLine == line).Sum(e => e.Amount));
         var (loggedControllable, loggedOccupation, loggedOtherFixed, loggedWages) =
             (Logged(ExpenseLine.Controllable), Logged(ExpenseLine.Occupation), Logged(ExpenseLine.OtherFixed), Logged(ExpenseLine.Wages));
+        // The month's payroll, once finalized: what its work cost. Advances are settled in it, not
+        // counted again.
+        var payrollMonth = new DateOnly(year, month, 1);
+        loggedWages += Money(await db.PayrollSlips.AsNoTracking()
+            .Where(p => p.Month == payrollMonth && p.Status == PayrollSlipStatus.Finalized)
+            .SumAsync(p => p.WagesCost, cancellationToken));
         // Known once entered or paid: wages as entered plus wages paid as expenses.
         decimal? wages = expenses?.WagesAndBenefits is null && loggedWages == 0 ? null : (expenses?.WagesAndBenefits ?? 0) + loggedWages;
         var totalExpenses = (wages ?? 0) + (expenses?.OtherControllableCosts ?? 0) + (expenses?.OccupationCost ?? 0)

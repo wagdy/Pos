@@ -17,9 +17,13 @@ import {
   paymentMethodLabels,
   paymentStatusLabels,
 } from '../../core/costing/costing.api';
+import { AuthService } from '../../core/auth/auth.service';
+import { Permissions } from '../../core/auth/permissions';
+import { Employee, HrApi } from '../../core/hr/hr.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
+import { AdvanceEntry, AdvanceFields, advanceProblems, newAdvance } from './advance-fields';
 import { Approvals } from './approvals';
 import { BusinessDay } from './financials';
 import { FormChecks, FormProblem } from './form-checks';
@@ -46,6 +50,7 @@ interface StoredBatch {
   revenueDate: string;
   blocks: { id: string; supplierId: string | null; supplierName: string | null; number: string; lines: Omit<InvoiceLine, 'entry'>[] }[];
   payments?: PaymentBlock[];
+  advances?: AdvanceEntry[];
 }
 
 const storageKey = 'otantik-till.purchase-batch';
@@ -55,7 +60,8 @@ const storageKey = 'otantik-till.purchase-batch';
 // suppliers paid against what they are owed. Sent together, each invoice becomes its own posted
 // invoice, its stock in and paid as chosen: on credit owed to its supplier, in cash paid for a
 // manager and asked of one for anyone else. A payment is cash, never on credit, and never more than
-// the supplier is owed. None is saved unless all can be. A batch not sent yet is kept in this browser.
+// the supplier is owed; so is an employee's advance (سلفة), which comes off their pay for the month.
+// None is saved unless all can be. A batch not sent yet is kept in this browser.
 @Component({
   selector: 'app-purchase-batch-page',
   providers: [PurchaseCatalog],
@@ -72,6 +78,7 @@ const storageKey = 'otantik-till.purchase-batch';
     MoneyPipe,
     RouterLink,
     SupplierPaymentFields,
+    AdvanceFields,
   ],
   template: `
     @if (loading()) {
@@ -139,6 +146,36 @@ const storageKey = 'otantik-till.purchase-batch';
               </table>
             </div>
           }
+          @if (result.advances?.length) {
+            <div class="table-wrap">
+              <table class="grid payments-made">
+                <thead>
+                  <tr>
+                    <th>Employee advanced<span class="ar">الموظف</span></th>
+                    <th>Notes<span class="ar">ملاحظات</span></th>
+                    <th class="num">Amount<span class="ar">القيمة</span></th>
+                    <th>Advance<span class="ar">السلفة</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (adv of result.advances; track adv.transactionId) {
+                    <tr>
+                      <td>{{ adv.employee }}</td>
+                      <td>{{ adv.notes ?? '—' }}</td>
+                      <td class="num">{{ adv.amount | money }}</td>
+                      <td>
+                        @if (adv.outcome === 'Applied') {
+                          Paid, off their pay<span class="ar">صُرفت</span>
+                        } @else {
+                          Waits for a manager<span class="ar">بانتظار موافقة المدير</span>
+                        }
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          }
           <button mat-button (click)="posted.set(null)">Done</button>
         </section>
       }
@@ -161,11 +198,11 @@ const storageKey = 'otantik-till.purchase-batch';
           <mat-select [(ngModel)]="paymentMethod" (ngModelChange)="changed()" aria-label="How they are paid" required
             [errorStateMatcher]="checks.field('How they are paid')">
             @for (m of paymentMethods; track m) {
-              <mat-option [value]="m" [disabled]="m === 'Credit' && payments().length > 0">{{ paymentLabels[m].en }} · {{ paymentLabels[m].ar }}</mat-option>
+              <mat-option [value]="m" [disabled]="m === 'Credit' && (payments().length > 0 || advances().length > 0)">{{ paymentLabels[m].en }} · {{ paymentLabels[m].ar }}</mat-option>
             }
           </mat-select>
-          @if (paymentMethod !== 'Credit' && payments().length) {
-            <mat-hint>Supplier payments are cash: not on credit.</mat-hint>
+          @if (paymentMethod !== 'Credit' && (payments().length || advances().length)) {
+            <mat-hint>{{ payments().length ? 'Supplier payments' : 'Advances' }} are cash: not on credit.</mat-hint>
           } @else if (paymentMethod === 'Credit') {
             <mat-hint>Each owed to its supplier until paid by a payment voucher.</mat-hint>
           } @else if (!paymentMethod) {
@@ -183,7 +220,7 @@ const storageKey = 'otantik-till.purchase-batch';
         }
       </div>
       @if (!approvals.canApprove() && paymentMethod && paymentMethod !== 'Credit') {
-        <p class="ask">Each invoice's cash payment, and each supplier payment, goes to a manager for approval; the stock is in at once.</p>
+        <p class="ask">Each invoice's cash payment, each supplier payment and each advance goes to a manager for approval; the stock is in at once.</p>
       }
 
       @for (block of blocks(); track block.id; let i = $index) {
@@ -217,7 +254,7 @@ const storageKey = 'otantik-till.purchase-batch';
             </mat-form-field>
             <span class="spacer"></span>
             <strong class="block-total">{{ block.editor.total() | money }}</strong>
-            <button mat-icon-button (click)="removeBlock(i)" [disabled]="blocks().length === 1 && !payments().length" [attr.aria-label]="'Take invoice ' + (i + 1) + ' off the batch'">
+            <button mat-icon-button (click)="removeBlock(i)" [disabled]="blocks().length === 1 && !payments().length && !advances().length" [attr.aria-label]="'Take invoice ' + (i + 1) + ' off the batch'">
               <mat-icon>delete</mat-icon>
             </button>
           </div>
@@ -239,11 +276,29 @@ const storageKey = 'otantik-till.purchase-batch';
         </section>
       }
 
+      @for (adv of advances(); track adv.id; let k = $index) {
+        <section class="block payment-block" [attr.aria-label]="'Advance ' + (k + 1)">
+          <div class="block-head">
+            <h3>Employee advance {{ k + 1 }} <span class="inline-ar">سلفة {{ k + 1 }}</span></h3>
+            <app-advance-fields [advance]="adv" [employees]="employees()" [label]="'Advance ' + (k + 1)" [checks]="checks" (changed)="changed()" />
+            <span class="spacer"></span>
+            <button mat-icon-button (click)="removeAdvance(k)" [attr.aria-label]="'Take advance ' + (k + 1) + ' off the batch'">
+              <mat-icon>delete</mat-icon>
+            </button>
+          </div>
+        </section>
+      }
+
       <div class="toolbar actions">
         <button mat-stroked-button (click)="addBlock()"><mat-icon>add</mat-icon> Add another invoice <span class="inline-ar">فاتورة أخرى</span></button>
         <button mat-stroked-button (click)="addPayment()" [disabled]="paymentMethod === 'Credit'">
           <mat-icon>payments</mat-icon> Add supplier payment <span class="inline-ar">سداد مورد</span>
         </button>
+        @if (canAdvance()) {
+          <button mat-stroked-button (click)="addAdvance()" [disabled]="paymentMethod === 'Credit'">
+            <mat-icon>request_quote</mat-icon> Add employee advance <span class="inline-ar">سلفة موظف</span>
+          </button>
+        }
         <span class="spacer"></span>
         <span class="batch-total">{{ countLabel() }} · <strong>{{ total() | money }}</strong></span>
         <button mat-button (click)="startAgain()" [disabled]="saving()">Start again</button>
@@ -348,6 +403,13 @@ export class PurchaseBatchPage {
   protected readonly posted = signal<PurchaseBatchResult | null>(null);
   protected readonly blocks = signal<BatchBlock[]>([this.block()]);
   protected readonly payments = signal<PaymentBlock[]>([]);
+  protected readonly advances = signal<AdvanceEntry[]>([]);
+  // Who can be advanced: those employed. Only for whoever manages HR.
+  private readonly hr = inject(HrApi);
+  private readonly auth = inject(AuthService);
+  protected readonly canAdvance = computed(() => this.auth.can(Permissions.HrManage));
+  private readonly staff = signal<Employee[]>([]);
+  protected readonly employees = computed(() => this.staff().filter((e) => e.isActive));
   // What each supplier is owed, for paying them: only those owed something can be paid.
   private readonly balances = signal<SupplierBalance[]>([]);
   protected readonly owedSuppliers = computed(() => this.balances().filter((b) => b.balance > 0));
@@ -365,13 +427,21 @@ export class PurchaseBatchPage {
 
   protected readonly total = computed(() => {
     this.headerVersion();
-    return this.blocks().reduce((sum, b) => sum + b.editor.total(), 0) + this.payments().reduce((sum, p) => sum + (p.amount ?? 0), 0);
+    return (
+      this.blocks().reduce((sum, b) => sum + b.editor.total(), 0) +
+      this.payments().reduce((sum, p) => sum + (p.amount ?? 0), 0) +
+      this.advances().reduce((sum, a) => sum + (a.amount ?? 0), 0)
+    );
   });
 
-  // "2 invoices, 1 payment".
+  // "2 invoices, 1 payment, 1 advance".
   protected readonly countLabel = computed(() => {
-    const [invoices, payments] = [this.blocks().length, this.payments().length];
-    const parts = [invoices ? `${invoices} ${invoices === 1 ? 'invoice' : 'invoices'}` : '', payments ? `${payments} ${payments === 1 ? 'payment' : 'payments'}` : ''];
+    const [invoices, payments, advances] = [this.blocks().length, this.payments().length, this.advances().length];
+    const parts = [
+      invoices ? `${invoices} ${invoices === 1 ? 'invoice' : 'invoices'}` : '',
+      payments ? `${payments} ${payments === 1 ? 'payment' : 'payments'}` : '',
+      advances ? `${advances} ${advances === 1 ? 'advance' : 'advances'}` : '',
+    ];
     return parts.filter(Boolean).join(', ') || 'Nothing yet';
   });
 
@@ -382,6 +452,7 @@ export class PurchaseBatchPage {
     this.headerVersion();
     const blocks = this.blocks();
     const payments = this.payments();
+    const advances = this.advances();
     const found: FormProblem[] = [];
     if (!this.invoiceDate) {
       found.push({ where: 'Invoice date', what: 'choose the date', field: 'Invoice date' });
@@ -390,11 +461,15 @@ export class PurchaseBatchPage {
       found.push({ where: 'Paid', what: 'choose how they were paid', field: 'How they are paid' });
     } else if (this.paymentMethod === 'DayRevenue' && !this.revenueDate) {
       found.push({ where: 'Takings of', what: 'choose the day', field: 'Takings of' });
-    } else if (this.paymentMethod === 'Credit' && payments.length) {
-      found.push({ where: 'Paid', what: "supplier payments are cash: choose the safe or a day's takings", field: 'How they are paid' });
+    } else if (this.paymentMethod === 'Credit' && (payments.length || advances.length)) {
+      found.push({
+        where: 'Paid',
+        what: `${payments.length ? 'supplier payments' : 'advances'} are cash: choose the safe or a day's takings`,
+        field: 'How they are paid',
+      });
     }
-    if (!blocks.length && !payments.length) {
-      found.push({ where: 'The batch', what: 'add an invoice or a supplier payment', field: '' });
+    if (!blocks.length && !payments.length && !advances.length) {
+      found.push({ where: 'The batch', what: 'add an invoice, a supplier payment or an advance', field: '' });
     }
     blocks.forEach((b, i) => {
       b.supplier.version();
@@ -407,6 +482,7 @@ export class PurchaseBatchPage {
       found.push(...b.editor.problems(`${name}, `));
     });
     payments.forEach((p, j) => found.push(...paymentProblems(p, this.owedBefore(j), `Supplier payment ${j + 1}`)));
+    advances.forEach((a, k) => found.push(...advanceProblems(a, `Advance ${k + 1}`)));
     return found;
   });
   protected readonly ready = computed(() => this.missing().length === 0);
@@ -455,7 +531,25 @@ export class PurchaseBatchPage {
 
   protected removePayment(index: number): void {
     this.payments.update((payments) => payments.filter((_, i) => i !== index));
-    if (!this.payments().length && !this.blocks().length) {
+    if (!this.payments().length && !this.advances().length && !this.blocks().length) {
+      this.blocks.set([this.block()]);
+    }
+    this.changed();
+  }
+
+  // An advance added: as a payment, the empty invoice the batch starts with goes.
+  protected addAdvance(): void {
+    const blocks = this.blocks();
+    if (blocks.length === 1 && this.untouched(blocks[0])) {
+      this.blocks.set([]);
+    }
+    this.advances.update((advances) => [...advances, newAdvance()]);
+    this.changed();
+  }
+
+  protected removeAdvance(index: number): void {
+    this.advances.update((advances) => advances.filter((_, i) => i !== index));
+    if (!this.payments().length && !this.advances().length && !this.blocks().length) {
       this.blocks.set([this.block()]);
     }
     this.changed();
@@ -476,12 +570,13 @@ export class PurchaseBatchPage {
       .reduce((sum, p) => sum + (p.amount ?? 0), 0);
   }
 
-  // "2 invoices posted, 1 supplier paid".
+  // "2 invoices posted, 1 supplier paid, 1 advance paid".
   protected sentLabel(result: PurchaseBatchResult): string {
-    const [invoices, payments] = [result.invoices.length, result.payments.length];
+    const [invoices, payments, advances] = [result.invoices.length, result.payments.length, result.advances?.length ?? 0];
     return [
       invoices ? `${invoices === 1 ? '1 invoice' : `${invoices} invoices`} posted` : '',
       payments ? `${payments === 1 ? '1 supplier' : `${payments} suppliers`} paid` : '',
+      advances ? `${advances === 1 ? '1 advance' : `${advances} advances`} paid` : '',
     ]
       .filter(Boolean)
       .join(', ');
@@ -491,6 +586,7 @@ export class PurchaseBatchPage {
     this.checks.clear();
     this.blocks.set([this.block()]);
     this.payments.set([]);
+    this.advances.set([]);
     this.paymentMethod = null;
     this.invoiceDate = this.today;
     this.revenueDate = this.today;
@@ -519,17 +615,21 @@ export class PurchaseBatchPage {
             lines: b.editor.toSave(),
           })),
           payments: this.payments().map((p) => ({ transactionId: p.id, supplierId: p.supplierId!, amount: p.amount!, notes: p.notes.trim() || null })),
+          advances: this.advances().map((a) => ({ transactionId: a.id, employeeId: a.employeeId!, amount: a.amount!, notes: a.notes.trim() || null })),
         }),
       );
       this.posted.set(made);
       this.checks.clear();
       const pending =
-        made.invoices.filter((i) => i.paymentStatus === 'Pending').length + made.payments.filter((p) => p.outcome === 'Requested').length;
+        made.invoices.filter((i) => i.paymentStatus === 'Pending').length +
+        made.payments.filter((p) => p.outcome === 'Requested').length +
+        (made.advances ?? []).filter((a) => a.outcome === 'Requested').length;
       this.notify.info(
         `${this.sentLabel(made)}.` + (pending ? ` ${pending === 1 ? '1 payment waits' : `${pending} payments wait`} for a manager's approval.` : ''),
       );
       this.blocks.set([this.block()]);
       this.payments.set([]);
+      this.advances.set([]);
       this.changed();
       void this.approvals.refresh();
       await Promise.all([this.catalog.loadMaterials(), this.loadBalances()]);
@@ -554,6 +654,17 @@ export class PurchaseBatchPage {
     );
   }
 
+  // Only for whoever manages HR; without them, no advance can be added.
+  private async loadEmployees(): Promise<void> {
+    if (this.canAdvance()) {
+      try {
+        this.staff.set(await firstValueFrom(this.hr.employees()));
+      } catch {
+        this.staff.set([]);
+      }
+    }
+  }
+
   private async loadBalances(): Promise<void> {
     this.balances.set(await firstValueFrom(this.api.supplierBalances()));
   }
@@ -571,10 +682,12 @@ export class PurchaseBatchPage {
         lines: b.editor.lines().map(({ entry, ...line }) => ({ ...line, ...(typeof entry === 'string' ? { typed: entry } : {}) })),
       })),
       payments: this.payments().map((p) => ({ ...p })),
+      advances: this.advances().map((a) => ({ ...a })),
     };
     try {
       const empty =
         !batch.payments?.length &&
+        !batch.advances?.length &&
         batch.blocks.length === 1 &&
         !batch.blocks[0].supplierId &&
         batch.blocks[0].lines.every((l) => !l.rawMaterialId && !l.expenseItemId);
@@ -596,9 +709,10 @@ export class PurchaseBatchPage {
     } catch {
       stored = null;
     }
-    if (!stored?.blocks?.length && !stored?.payments?.length) {
+    if (!stored?.blocks?.length && !stored?.payments?.length && !stored?.advances?.length) {
       return;
     }
+    this.advances.set((stored.advances ?? []).map((a) => ({ id: a.id, employeeId: a.employeeId ?? null, amount: a.amount ?? null, notes: a.notes ?? '' })));
     this.payments.set((stored.payments ?? []).map((p) => ({ id: p.id, supplierId: p.supplierId ?? null, amount: p.amount ?? null, notes: p.notes ?? '' })));
     this.invoiceDate = stored.invoiceDate || this.today;
     this.paymentMethod = stored.paymentMethod;
@@ -642,7 +756,7 @@ export class PurchaseBatchPage {
       this.changed();
     });
     try {
-      await Promise.all([this.catalog.load(), this.loadBalances()]);
+      await Promise.all([this.catalog.load(), this.loadBalances(), this.loadEmployees()]);
       this.restore();
     } catch (error) {
       this.error.set(errorMessage(error, 'The purchases could not be loaded.'));

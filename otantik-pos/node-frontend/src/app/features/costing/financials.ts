@@ -25,6 +25,7 @@ import {
   safeKindLabels,
 } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
+import { Employee, HrApi } from '../../core/hr/hr.api';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from './approvals';
@@ -74,6 +75,8 @@ export interface SafeVoucherDialogData {
   // The till's business day: the entry's date unless another is chosen, and the latest.
   today?: string;
   supplierId?: string;
+  // An advance's employee, chosen already.
+  employeeId?: string;
   amount?: number;
   revenueDate?: string;
   // A day's takings: the till's tax rate (null before it has one), and whether the sum counted
@@ -108,8 +111,9 @@ const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
 
 // One safe entry, as it is entered: its date and amount, and what it needs: where the money came
 // from (opening balance, funding), which day's takings (moving them in), what the expense is (an
-// expense voucher), or which supplier is paid and how much they are owed. Closes with the entry to
-// send, or nothing when cancelled.
+// expense voucher), which supplier is paid and how much they are owed, or which employee an advance
+// is for and whether the safe or a day's takings pay it. Closes with the entry to send, or nothing
+// when cancelled.
 @Component({
   selector: 'app-safe-voucher-dialog',
   imports: [
@@ -145,6 +149,33 @@ const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
               <mat-hint>Owed {{ o | money }}</mat-hint>
             }
           </mat-form-field>
+        }
+        @if (data.kind === 'EmployeeAdvance') {
+          <mat-form-field class="wide">
+            <mat-label>Employee · الموظف</mat-label>
+            <mat-select [(ngModel)]="employeeId" aria-label="Employee">
+              @for (e of payable(); track e.id) {
+                <mat-option [value]="e.id">{{ e.name }} <span class="muted">· {{ e.jobTitle }}</span></mat-option>
+              } @empty {
+                <mat-option disabled>No employees yet: add them under HR &amp; Payroll</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+          <mat-form-field>
+            <mat-label>Paid from · يُصرف من</mat-label>
+            <mat-select [(ngModel)]="paidFrom" aria-label="Paid from">
+              <mat-option value="Safe">The safe · الخزنة</mat-option>
+              <mat-option value="DayRevenue">A day’s takings · إيراد يوم</mat-option>
+            </mat-select>
+          </mat-form-field>
+          @if (paidFrom === 'DayRevenue') {
+            <mat-form-field>
+              <mat-label>Takings of · إيراد يوم</mat-label>
+              <input matInput type="date" [(ngModel)]="revenueDate" [max]="date" aria-label="Takings of" />
+            </mat-form-field>
+          } @else {
+            <span></span>
+          }
         }
         @if (data.kind === 'ExpenseVoucher') {
           <mat-form-field class="wide">
@@ -190,7 +221,7 @@ const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
               <div>
                 <dt>
                   Less paid out of them
-                  @if (p.invoices || p.supplierPayments) {
+                  @if (p.invoices || p.supplierPayments || p.employeePayments) {
                     <span class="muted small">&nbsp;· {{ paidOutCount(p) }}</span>
                   }
                   <span class="ar">المنصرف منه</span>
@@ -312,6 +343,7 @@ const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
 })
 export class SafeVoucherDialog {
   private readonly api = inject(CostingApi);
+  private readonly hr = inject(HrApi);
   private readonly ref = inject<MatDialogRef<SafeVoucherDialog, SafeVoucherInput>>(MatDialogRef);
   protected readonly data = inject<SafeVoucherDialogData>(MAT_DIALOG_DATA);
 
@@ -321,6 +353,9 @@ export class SafeVoucherDialog {
   protected readonly today = this.data.today ?? todayIso();
   protected readonly loading = signal(false);
   protected readonly expenseItems = signal<ExpenseItem[]>([]);
+  private readonly employees = signal<Employee[]>([]);
+  // Who an advance can go to: those still employed.
+  protected readonly payable = computed(() => this.employees().filter((e) => e.isActive));
   private readonly balances = signal<SupplierBalance[]>([]);
   protected readonly owedSuppliers = computed(() => this.balances().filter((b) => b.balance > 0));
   // A day's takings: what was paid out of them already, taken off what goes into the safe.
@@ -332,6 +367,8 @@ export class SafeVoucherDialog {
   protected source: FundingSource | null = this.sources[0] ?? null;
   protected supplierId: string | null = this.data.supplierId ?? null;
   protected expenseItemId: string | null = null;
+  protected employeeId: string | null = this.data.employeeId ?? null;
+  protected paidFrom: 'Safe' | 'DayRevenue' = this.data.revenueDate ? 'DayRevenue' : 'Safe';
   protected notes = '';
   protected includesTax = this.data.includesTax ?? false;
 
@@ -342,6 +379,9 @@ export class SafeVoucherDialog {
     ExpenseVoucher: 'Cash paid out of the safe for an expense: a bill, wages, petty cash. It counts on the profit and loss under its category.',
     SupplierPayment: 'Cash paid to a supplier from the safe, against what the restaurant owes them.',
     InvoicePayment: '',
+    EmployeeAdvance:
+      'Cash advanced to an employee (سلفة), from the safe or a day’s takings. It is not an expense: it comes off their pay for the month, on the payroll.',
+    SalaryPayment: 'An employee’s pay for a month, as their finalized payslip says.',
   }[this.data.kind];
 
   constructor() {
@@ -367,10 +407,16 @@ export class SafeVoucherDialog {
     void this.loadPreview();
   }
 
-  // "5 invoices, 1 supplier payment".
+  // "5 invoices, 1 supplier payment, 2 to employees".
   protected paidOutCount(p: TakingsPreview): string {
-    const count = (n: number, one: string, many: string) => (n ? `${n} ${n === 1 ? one : many}` : '');
-    return [count(p.invoices, 'invoice', 'invoices'), count(p.supplierPayments, 'supplier payment', 'supplier payments')].filter(Boolean).join(', ');
+    const count = (n: number | undefined, one: string, many: string) => (n ? `${n} ${n === 1 ? one : many}` : '');
+    return [
+      count(p.invoices, 'invoice', 'invoices'),
+      count(p.supplierPayments, 'supplier payment', 'supplier payments'),
+      count(p.employeePayments, 'to an employee', 'to employees'),
+    ]
+      .filter(Boolean)
+      .join(', ');
   }
 
   // A supplier chosen: what they are owed, to pay in full unless less is typed.
@@ -392,6 +438,14 @@ export class SafeVoucherDialog {
     }
     if (this.data.kind === 'ExpenseVoucher' && !this.expenseItemId) {
       return 'Choose what the expense is.';
+    }
+    if (this.data.kind === 'EmployeeAdvance') {
+      if (!this.employeeId) {
+        return 'Choose the employee.';
+      }
+      if (this.paidFrom === 'DayRevenue' && (!this.revenueDate || this.revenueDate > this.date)) {
+        return 'Choose the day whose takings pay it: that day or one before the advance.';
+      }
     }
     if (this.data.kind === 'SupplierPayment') {
       const owed = this.owed();
@@ -423,12 +477,14 @@ export class SafeVoucherDialog {
       amount: this.amount,
       date: this.date,
       source: this.sources.length ? this.source : null,
-      revenueDate: this.data.kind === 'RevenueTransfer' ? this.revenueDate : null,
+      revenueDate:
+        this.data.kind === 'RevenueTransfer' || (this.data.kind === 'EmployeeAdvance' && this.paidFrom === 'DayRevenue') ? this.revenueDate : null,
       supplierId: this.data.kind === 'SupplierPayment' ? this.supplierId : null,
       expenseItemId: this.data.kind === 'ExpenseVoucher' ? this.expenseItemId : null,
       notes: this.notes.trim() || null,
       reason: null,
       includesTax: this.data.kind === 'RevenueTransfer' && this.includesTax && this.data.taxPercent != null,
+      employeeId: this.data.kind === 'EmployeeAdvance' ? this.employeeId : null,
     };
     this.ref.close(voucher);
   }
@@ -437,12 +493,14 @@ export class SafeVoucherDialog {
     if (this.data.kind === 'RevenueTransfer') {
       return this.loadPreview();
     }
-    if (this.data.kind !== 'ExpenseVoucher' && this.data.kind !== 'SupplierPayment') {
+    if (this.data.kind !== 'ExpenseVoucher' && this.data.kind !== 'SupplierPayment' && this.data.kind !== 'EmployeeAdvance') {
       return;
     }
     this.loading.set(true);
     try {
-      if (this.data.kind === 'ExpenseVoucher') {
+      if (this.data.kind === 'EmployeeAdvance') {
+        this.employees.set(await firstValueFrom(this.hr.employees()));
+      } else if (this.data.kind === 'ExpenseVoucher') {
         this.expenseItems.set(await firstValueFrom(this.api.expenseItems()));
       } else {
         this.balances.set(await firstValueFrom(this.api.supplierBalances()));

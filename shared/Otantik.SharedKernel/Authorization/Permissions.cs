@@ -46,6 +46,13 @@ public static class Permissions
     // request a manager approves or rejects.
     public const string ApprovalDecide = "approvals.decide";
 
+    // HR & Payroll: employees, their attendance and their pay. Seeing it shows salaries.
+    public const string HrView = "hr.view";
+
+    // Entering employees and advances. Without ApprovalDecide, each change is a request a
+    // manager approves or rejects.
+    public const string HrManage = "hr.manage";
+
     public static string ForVoid(VoidType type) => type switch
     {
         VoidType.BeforeKitchen => VoidBeforeKitchen,

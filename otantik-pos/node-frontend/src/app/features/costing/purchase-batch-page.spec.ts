@@ -3,7 +3,10 @@ import { TestBed } from '@angular/core/testing';
 import { MatDialog } from '@angular/material/dialog';
 import { provideRouter } from '@angular/router';
 import { of, throwError } from 'rxjs';
+import { AuthService } from '../../core/auth/auth.service';
+import { Permissions } from '../../core/auth/permissions';
 import { CostingApi, MaterialCost, PurchaseBatch, PurchaseInvoice, Supplier, SupplierBalance } from '../../core/costing/costing.api';
+import { Employee, HrApi } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from './approvals';
 import { PurchaseBatchPage } from './purchase-batch-page';
@@ -29,10 +32,21 @@ describe('a day’s purchases entered together', () => {
   const notify = { info: vi.fn(), error: vi.fn() };
   const approvals = { canApprove: vi.fn(() => true), refresh: vi.fn() };
 
-  async function render() {
+  // hr: signed in as someone who manages HR, who may advance employees in the batch.
+  async function render(hr = false) {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
+        { provide: AuthService, useValue: { can: (p: string) => hr || p !== Permissions.HrManage } },
+        {
+          provide: HrApi,
+          useValue: {
+            employees: () => of([
+              { id: 'hassan', name: 'Hassan', jobTitle: 'Chef', isActive: true },
+              { id: 'old', name: 'Gone', jobTitle: 'Waiter', isActive: false },
+            ] as Employee[]),
+          },
+        },
         {
           provide: CostingApi,
           useValue: {
@@ -288,6 +302,57 @@ describe('a day’s purchases entered together', () => {
     page['changed']();
     Object.assign(page['payments']()[0], { supplierId: 'nile', amount: 100 });
     expect(page['ready']()).toBe(false);
+  });
+
+  it('advances an employee in the batch, from the day’s takings, and shows it was paid', async () => {
+    const { fixture, el, page } = await render(true);
+    const add = () => [...el.querySelectorAll<HTMLButtonElement>('button')].find((b) => text(b).startsWith('request_quote Add employee advance'));
+    expect(add()).toBeTruthy();
+
+    page['addAdvance']();
+    fixture.detectChanges();
+    // The empty invoice the batch starts with goes: a batch of advances alone can be sent.
+    expect(page['blocks']().length).toBe(0);
+    expect(page['employees']().map((e: Employee) => e.name)).toEqual(['Hassan']);
+    expect(page['missing']().map((p: { where: string; what: string }) => `${p.where}: ${p.what}`)).toEqual([
+      'Paid: choose how they were paid',
+      'Advance 1: choose the employee',
+      'Advance 1: enter the amount',
+    ]);
+
+    page['paymentMethod'] = 'DayRevenue';
+    Object.assign(page['advances']()[0], { employeeId: 'hassan', amount: 300, notes: ' Rent ' });
+    page['changed']();
+    expect(page['countLabel']()).toBe('1 advance');
+    const id = page['advances']()[0].id;
+    postPurchaseBatch.mockReturnValue(of({
+      invoices: [],
+      payments: [],
+      advances: [{ transactionId: id, employeeId: 'hassan', employee: 'Hassan', amount: 300, notes: 'Rent', outcome: 'Applied' }],
+    }));
+
+    await page['submit']();
+    fixture.detectChanges();
+
+    const sent = postPurchaseBatch.mock.lastCall![0] as PurchaseBatch;
+    expect(sent).toMatchObject({ paymentMethod: 'DayRevenue', revenueDate: '2026-10-13', invoices: [], payments: [] });
+    expect(sent.advances).toEqual([{ transactionId: id, employeeId: 'hassan', amount: 300, notes: 'Rent' }]);
+    expect(notify.info).toHaveBeenCalledWith('1 advance paid.');
+    expect([...el.querySelectorAll('.payments-made tbody td')].map(text)).toEqual(['Hassan', 'Rent', 'L.E 300.00', 'Paid, off their payصُرفت']);
+    expect(page['advances']()).toEqual([]);
+  });
+
+  it('advances no one on credit, and offers no advance to whoever does not manage HR', async () => {
+    const { page } = await render(true);
+    page['addAdvance']();
+    Object.assign(page['advances']()[0], { employeeId: 'hassan', amount: 100 });
+    page['paymentMethod'] = 'Credit';
+    page['changed']();
+    expect(page['missing']()[0]).toMatchObject({ where: 'Paid', what: "advances are cash: choose the safe or a day's takings" });
+    TestBed.resetTestingModule();
+
+    const other = await render(false);
+    expect([...other.el.querySelectorAll('button')].map(text).some((t) => t.includes('Add employee advance'))).toBe(false);
   });
 
   it('keeps the payments after a reload, until they are sent', async () => {

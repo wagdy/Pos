@@ -1,0 +1,63 @@
+using Otantik.BuildingBlocks;
+using OtantikPos.Hr.Domain.Attendance;
+using OtantikPos.Hr.Domain.Employees;
+using OtantikPos.Hr.Domain.Payroll;
+
+namespace OtantikPos.Hr.Domain;
+
+// What HR keeps, as the use cases ask for it. Read lists are not tracked; what is changed is.
+
+public interface IEmployeeRepository : IRepository<Employee>
+{
+    // Everyone, left or not, by name.
+    Task<IReadOnlyList<Employee>> GetAllAsync(CancellationToken cancellationToken = default);
+
+    Task<Employee?> GetByDeviceUserIdAsync(string deviceUserId, CancellationToken cancellationToken = default);
+}
+
+public interface IAttendanceDeviceRepository : IRepository<AttendanceDevice>
+{
+    Task<AttendanceDevice?> GetBySerialNumberAsync(string serialNumber, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<AttendanceDevice>> GetAllAsync(CancellationToken cancellationToken = default);
+}
+
+public interface IAttendanceLogRepository : IRepository<AttendanceLog>
+{
+    // A device's punches already kept from `from` to `to`, both included: a resent one is kept once.
+    Task<IReadOnlyList<AttendanceLog>> GetFromDeviceAsync(string serialNumber, DateTime from, DateTime to, CancellationToken cancellationToken = default);
+
+    // Every punch from `from` up to `to`, ignored ones and ones nobody has yet too; one
+    // employee's alone when given.
+    Task<IReadOnlyList<AttendanceLog>> GetBetweenAsync(DateTime from, DateTime to, Guid? employeeId = null, CancellationToken cancellationToken = default);
+
+    // Tracked: the punches under a user number nobody had, for the employee who has it now.
+    Task<IReadOnlyList<AttendanceLog>> GetUnassignedAsync(string deviceUserId, CancellationToken cancellationToken = default);
+}
+
+public interface IDayMarkRepository : IRepository<DayMark>
+{
+    Task<DayMark?> GetAsync(Guid employeeId, DateOnly date, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<DayMark>> GetBetweenAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default);
+
+    void Remove(DayMark mark);
+}
+
+public interface IDailyRecordRepository : IRepository<DailyRecord>
+{
+    // Tracked: worked out again when a slip is.
+    Task<IReadOnlyList<DailyRecord>> GetForEmployeeAsync(Guid employeeId, DateOnly from, DateOnly to, CancellationToken cancellationToken = default);
+}
+
+public interface IPayrollAdjustmentRepository : IRepository<PayrollAdjustment>
+{
+    Task<IReadOnlyList<PayrollAdjustment>> GetForMonthAsync(DateOnly month, CancellationToken cancellationToken = default);
+}
+
+public interface IPayrollSlipRepository : IRepository<PayrollSlip>
+{
+    Task<PayrollSlip?> GetAsync(Guid employeeId, DateOnly month, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<PayrollSlip>> GetForMonthAsync(DateOnly month, CancellationToken cancellationToken = default);
+}

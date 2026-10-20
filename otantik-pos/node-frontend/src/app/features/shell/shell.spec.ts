@@ -12,8 +12,13 @@ import { NotifyService } from '../../core/ui/notify.service';
 import { captainMe, cashierMe } from '../../../testing/fixtures';
 import { Shell } from './shell';
 
-// The shared RolePermissions table's accountant: the back office, no orders and no money.
-const accountantMe: Me = { id: 'staff-accountant', fullName: 'Mona', role: 'Accountant', permissions: ['costing.view', 'inventory.manage', 'inventory.view'] };
+// The shared RolePermissions table's accountant: the back office and HR, no orders.
+const accountantMe: Me = {
+  id: 'staff-accountant',
+  fullName: 'Mona',
+  role: 'Accountant',
+  permissions: ['costing.view', 'inventory.manage', 'inventory.view', 'hr.view', 'hr.manage'],
+};
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
@@ -49,18 +54,19 @@ describe('the till top bar', () => {
     expect(nav(el)).toEqual(['Open orders']);
   });
 
-  it('says nothing of the kind to a cashier', async () => {
+  it('says nothing of the kind to a cashier, who sees no HR', async () => {
     const el = await render(cashierMe);
 
     expect(el.querySelector('.badge')).toBeNull();
+    expect(nav(el)).not.toContain('HR & Payroll');
   });
 
   // The accountant takes no orders at all, so "order taking only" would be wrong twice over.
-  it('says nothing of the kind to the accountant, who sees costing alone', async () => {
+  it('says nothing of the kind to the accountant, who sees the back office alone', async () => {
     const el = await render(accountantMe);
 
     expect(el.querySelector('.badge')).toBeNull();
-    expect(nav(el)).toEqual(['Costing']);
+    expect(nav(el)).toEqual(['Costing', 'HR & Payroll']);
     expect(text(el.querySelector('.user-name')!)).toBe('Mona');
   });
 });

@@ -91,6 +91,14 @@ public static class DependencyInjection
         services.AddScoped<IExpenseItemRepository, ExpenseItemRepository>();
         services.AddScoped<IPrepRecipeRepository, PrepRecipeRepository>();
         services.AddScoped<IProductionOrderRepository, ProductionOrderRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IEmployeeRepository, Hr.EmployeeRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IAttendanceDeviceRepository, Hr.AttendanceDeviceRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IAttendanceLogRepository, Hr.AttendanceLogRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IDayMarkRepository, Hr.DayMarkRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IDailyRecordRepository, Hr.DailyRecordRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IPayrollAdjustmentRepository, Hr.PayrollAdjustmentRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IPayrollSlipRepository, Hr.PayrollSlipRepository>();
+        services.AddScoped<OtantikPos.Inventory.Application.Hr.IAttendanceSettings, Hr.AttendanceSettingsStore>();
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(RetryOnConflictBehavior<,>));
 
         // The delivery system. Short timeouts: a cashier is waiting on most of these calls, and

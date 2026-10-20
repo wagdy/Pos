@@ -1,8 +1,13 @@
 # HR, attendance and payroll
 
 The till's HR module: who is on the payroll, their punches on the ZKTeco K40 Pro, their days,
-and their monthly pay. This page is the design. Phase 1 (the domain, its tables and this plan)
-is built. Phases 2 and 3 are below.
+and their monthly pay. This page is the design.
+
+- **Phase 1, built:** the domain, its tables and this plan.
+- **Phase 2, built:** every endpoint below, the ADMS receiver, and these screens:
+  - HR & Payroll's Employees and Attendance devices tabs;
+  - advances in Financials and the daily batch.
+- **Next:** the Timesheet and Payroll screens, on the endpoints already built.
 
 ## The rules
 
@@ -70,7 +75,7 @@ blocks. Tables are in the `hr` schema; migration `HrFoundation`.
 | `AttendanceDevice` | `hr.AttendanceDevices` | A K40 Pro known by its serial number, approved by a manager |
 | `AttendanceLog` | `hr.AttendanceLogs` | One raw punch, from a device or by hand; ignored, never removed |
 | `DayMark` | `hr.DayMarks` | A manager's "leave" or "day off" for one day |
-| `Timesheet`, `DailyRecord` | `hr.DailyRecords` | A day's hours, lateness and overtime, worked out from its punches |
+| `Timesheet`, `DailyRecord` | `hr.DailyRecords` | A day's hours, lateness and overtime, worked out from its punches; kept as a finalized slip counted it |
 | `PayrollAdjustment` | `hr.PayrollAdjustments` | An incentive or a leave allowance for a month |
 | `PayrollCalculator`, `PayrollSlip` | `hr.PayrollSlips` | A month's payslip and every figure in it |
 | `HrSettings` | `hr.Settings` | The grace, and how close two scans are to be one |
@@ -102,10 +107,11 @@ unit with a capture of its first requests before they are fixed.
    counted once linked.
 3. The punch is inserted unless already there (the unique index).
 4. The device's stamp and last-seen time are updated.
-5. The days the punches fall in are worked out again (`Timesheet.Evaluate`, saved as
-   `DailyRecord`), and the tills are told through the existing hub.
-6. Absences show once a day is over: a background job works out each day just ended, and the
-   payroll works its month out again before it is finalized.
+5. The days are worked out from the punches whenever they are read (`Timesheet.Evaluate`).
+   So a punch arriving, one entered or ignored, a day marked, a shift moved or the grace changed
+   shows at once, with nothing stored to fall out of step. A month's days are kept
+   (`DailyRecord`) when its slip is finalized: what the pay was worked out from.
+6. A day is absent once it is over (its window has closed) with no punches on a working day.
 
 **Security.** The device names itself only by its serial number, over plain HTTP, with no key:
 - The `/iclock` endpoints are anonymous, as the device cannot sign in. The check is the serial
@@ -138,31 +144,62 @@ unit with a capture of its first requests before they are fixed.
   TCP port 4370 (ZKTeco's binary protocol) from a small client in the till. No Windows DLL is
   needed for that either.
 
-## Phase 2: the backend's use cases
+## Phase 2: the API (built)
 
-- The ADMS endpoints above, device approval, and simulated-device tests (a script that posts
-  ATTLOG lines).
-- Commands and queries:
-  - employees;
-  - manual punches and ignoring one;
-  - day marks;
-  - the month's timesheet;
-  - adjustments;
-  - working out, finalizing and paying slips.
-- An accountant's go through the existing approvals, as purchases do.
-- New permissions for viewing HR and managing it.
-- **Advances from the treasury:** a voucher kind that requires an employee and goes to their
-  open month.
-  - The daily cash and reconciliation screens count advances and salaries paid out of a day's
-    takings (they count invoices and supplier payments today, `TreasuryService`).
-  - The safe's ledger names the employee.
-- **KPIs:** wages from finalized slips (`WagesCost`). The old "سلفيات" expense item is retired
-  once advances are entered as advances; what is already entered stays as it is.
-- **To decide:** whether a day off worked makes a leave allowance by itself (the adjustment has
-  `Source = Automatic` and `ForDay` for it), and public holidays.
+**Permissions:**
+- `hr.view` sees HR and salaries; `hr.manage` enters employees and advances.
+- Managers and accountants have both. Cashiers have neither.
+- An accountant's employee changes and advances are requests a manager approves
+  (approval modules `Employee` and `Treasury`).
+- Correcting attendance, the devices and their settings, incentives and allowances, and
+  finalizing pay are a manager's alone.
 
-## Phase 3: the screens
+**Endpoints:**
 
-Employees; devices (approve); attendance (the month's timesheet per employee, with missing
-punches to fix); advances in Financials; the payroll run (draft, finalize, pay); a printable
-payslip.
+| Endpoint | What it does |
+| --- | --- |
+| `GET /api/hr/employees` | The employees, left ones too |
+| `PUT /api/hr/employees/{id}` | Add or change an employee: 200 for a manager, 202 (a request) for anyone else |
+| `POST /api/hr/employees/{id}/leave`, `…/return` | Leave on a last day; come back from a day |
+| `GET /api/hr/attendance?date=` | Everyone's day, plus punches under numbers nobody has |
+| `GET /api/hr/employees/{id}/timesheet?month=` | One employee's month, day by day, with totals |
+| `POST /api/hr/punches`, `…/{id}/ignore`, `…/{id}/restore` | A manual punch with its reason; ignoring or restoring one |
+| `PUT /api/hr/employees/{id}/days/{date}` | Leave or day off; with no kind, the mark taken off |
+| `GET`/`PUT /api/hr/settings` | The grace, and how close two scans are to be one |
+| `GET /api/hr/devices`, `POST …/{id}/approve`, `…/revoke` | The devices, approved by name |
+| `GET /api/hr/payroll?month=` | Every slip as it stands |
+| `POST /api/hr/payroll/calculate?month=` | Saves the drafts |
+| `POST /api/hr/payroll/{employeeId}/finalize?month=` | Finalizes one slip |
+| `POST /api/hr/payroll/adjustments`, `…/{id}/void` | Incentives and leave allowances |
+
+**The treasury:**
+- An advance is a safe voucher of kind `EmployeeAdvance`, from the safe or a day's takings
+  (`POST /api/financials/vouchers`), or a line of the daily batch.
+- Its pay is a `SalaryPayment` against a finalized slip, never more than is owed of it.
+- `GET /api/financials/advances` lists advances, for HR viewers only.
+- An advance deducted by a finalized slip cannot be voided. One paid after its month's slip is
+  finalized counts in the next month.
+- The daily cash, reconciliation and takings preview count advances and salaries paid out of a
+  day's takings. The safe's ledger names the employee.
+
+**KPIs:** a finalized month's slips count as its wages (`WagesCost`), on top of what is
+entered. The old "سلفيات" expense item is archived once advances are entered as advances; what
+is already entered stays as it is.
+
+**To decide:** whether a day off worked makes a leave allowance by itself (the adjustment has
+`Source = Automatic` and `ForDay` for it), and public holidays.
+
+## The screens
+
+**Built:**
+- HR & Payroll in the top bar (`hr.view`):
+  - Employees: add, change, leave and come back; an accountant's go to a manager;
+  - Attendance devices: where to point the K40, approve or refuse it, and the grace and
+    double-scan settings.
+- Financials → Advances (السلفيات): the month's advances, each employee's total, a new advance
+  from the safe or a day's takings, and voids.
+- The daily batch: an employee advance block beside the supplier payments.
+
+**Next:**
+- The timesheet: each day's punches and figures, missing punches to fix, days to mark.
+- The payroll run: draft, adjustments, finalize, pay; and a printable payslip.

@@ -80,9 +80,11 @@ public sealed class AttendanceLog : AggregateRoot
         };
     }
 
-    public static AttendanceLog Manual(Guid employeeId, DateTime punchedAt, string reason, string recordedBy) =>
+    // Its id is made by the till, so a retried one is entered once.
+    public static AttendanceLog Manual(Guid id, Guid employeeId, DateTime punchedAt, string reason, string recordedBy) =>
         new(PunchSource.Manual, employeeId, punchedAt)
         {
+            Id = id,
             Reason = Required(reason, "Say why the punch is entered by hand: the device was down, they forgot to scan."),
             RecordedBy = recordedBy,
         };
