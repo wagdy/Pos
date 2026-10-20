@@ -145,6 +145,42 @@ public class HrTests
     }
 
     [Fact]
+    public void A_weekly_day_off_marked_a_working_day_is_a_shift_like_any()
+    {
+        var chef = Chef();
+        var swapped = Timesheet.Evaluate(chef, Friday, [At(Friday, 10, 20), At(Friday, 19)], DayMarkKind.WorkingDay, TenMinutesGrace, Later);
+
+        Assert.Equal((DayStatus.Worked, 20), (swapped.Status, swapped.LateMinutes));
+        // Not worked after all: absent, as any working day.
+        Assert.Equal(DayStatus.Absent, Timesheet.Evaluate(chef, Friday, [], DayMarkKind.WorkingDay, TenMinutesGrace, Later).Status);
+    }
+
+    [Fact]
+    public void A_day_off_worked_earns_a_days_pay_from_half_a_shift_and_its_hours_before()
+    {
+        var chef = Chef();
+        var october = new DateOnly(2026, 10, 1);
+        DayEvaluation OffWorked(DateOnly d, int minutes) => new(d, DayStatus.WorkedOnDayOff, null, null, 2, minutes, 0, 0, 0, 0);
+        var days = PayrollMonth.Days(october).Select(d => d.Day switch
+        {
+            // Fridays: six hours, then three, then half a shift exactly.
+            2 => OffWorked(d, 360),
+            9 => OffWorked(d, 180),
+            16 => OffWorked(d, PayrollCalculator.HalfShiftMinutes),
+            _ when chef.IsDayOff(d) => Nothing(d, DayStatus.DayOff),
+            _ => new DayEvaluation(d, DayStatus.Worked, null, null, 2, 540, 0, 0, 0, 0),
+        }).ToList();
+
+        var figures = PayrollCalculator.Calculate(chef, october, days, [], advances: 0, broughtForward: 0);
+
+        // 180 + 3 hours at 20 + 180.
+        Assert.Equal((3, 420m), (figures.DaysOffWorked, figures.DaysOffWorkedPay));
+        Assert.Equal(5_400m + 420m, figures.Gross);
+        Assert.Equal(5_820m, figures.WagesCost);
+        Assert.Equal(270, PayrollCalculator.HalfShiftMinutes);
+    }
+
+    [Fact]
     public void An_odd_number_of_punches_is_missing_one_once_the_day_is_over()
     {
         var chef = Chef();

@@ -18,6 +18,8 @@ import { isoDay } from '../costing/financials';
 // as the formula adds them up:
 //   base salary + incentives + leave allowances + overtime − advances − last month's shortfall
 //   − lateness − absence = net payable.
+// The leave allowances are the ones entered and the days off worked, which earn theirs by
+// themselves.
 // A draft is worked out from the month's attendance as it stands now; calculating saves the
 // drafts. Each row opens the employee's payslip, where it is finalized and paid.
 @Component({
@@ -93,7 +95,12 @@ import { isoDay } from '../costing/financials';
                 </td>
                 <td class="num">{{ f.baseSalary | money }}</td>
                 <td class="num">{{ f.incentives | money }}</td>
-                <td class="num">{{ f.leaveAllowances | money }}</td>
+                <td class="num">
+                  {{ f.leaveAllowances + f.daysOffWorkedPay | money }}
+                  @if (f.daysOffWorked) {
+                    <div class="muted small">{{ f.daysOffWorked }} {{ f.daysOffWorked === 1 ? 'day' : 'days' }} off worked</div>
+                  }
+                </td>
                 <td class="num">{{ f.overtimePay | money }}</td>
                 <td class="num minus">{{ f.advances | money }}</td>
                 <td class="num minus">{{ f.latenessPenalty | money }}</td>
@@ -126,7 +133,7 @@ import { isoDay } from '../costing/financials';
                 <td>Total · الإجمالي</td>
                 <td class="num">{{ p.totals.baseSalaries | money }}</td>
                 <td class="num">{{ p.totals.incentives | money }}</td>
-                <td class="num">{{ p.totals.leaveAllowances | money }}</td>
+                <td class="num">{{ p.totals.leaveAllowances + p.totals.daysOffWorkedPay | money }}</td>
                 <td class="num">{{ p.totals.overtimePay | money }}</td>
                 <td class="num">{{ p.totals.advances | money }}</td>
                 <td class="num">{{ p.totals.latenessPenalties | money }}</td>
@@ -141,7 +148,8 @@ import { isoDay } from '../costing/financials';
       </div>
       <p class="note">
         A day costs the salary over 30, an hour a day's over 9: lateness (late, leaving early, away during the shift) and absence are
-        deducted at that rate, and overtime paid at it. When the deductions are more than the pay, nothing is paid and the rest comes off
+        deducted at that rate, and overtime paid at it. A day off worked earns a leave allowance by itself: a day's pay for half a shift
+        or more, its hours for less; a day off swapped for another is marked a working day on the attendance, and earns none. When the deductions are more than the pay, nothing is paid and the rest comes off
         next month's. Open a payslip to add incentives and leave allowances, finalize it, and pay it.
       </p>
     }

@@ -143,7 +143,7 @@ interface Row {
                 <td>
                   <span class="status" [class]="d.status">{{ labels[d.status].en }}<span class="ar">{{ labels[d.status].ar }}</span></span>
                   @if (d.mark) {
-                    <div class="muted small">{{ d.mark === 'Leave' ? 'Marked leave' : 'Marked day off' }}@if (d.markNotes) { · {{ d.markNotes }}}</div>
+                    <div class="muted small">{{ markLabels[d.mark] }}@if (d.markNotes) { · {{ d.markNotes }}}</div>
                   }
                 </td>
                 <td class="num"><mat-icon class="chevron">{{ open().has(r.key) ? 'expand_less' : 'expand_more' }}</mat-icon></td>
@@ -347,6 +347,11 @@ export class AttendancePage {
   readonly startMonth = input<string>(undefined, { alias: 'month' });
 
   protected readonly labels = dayStatusLabels;
+  protected readonly markLabels: Record<DayMarkKind, string> = {
+    Leave: 'Marked leave',
+    DayOff: 'Marked day off',
+    WorkingDay: 'Marked a working day: a swap',
+  };
   protected readonly clock = clock;
   protected readonly duration = duration;
   protected readonly canCorrect = this.approvals.canApprove;
@@ -501,6 +506,7 @@ export class AttendancePage {
       day: new Date(`${row.day.date}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }),
       mark: row.day.mark,
       notes: row.day.markNotes,
+      weeklyDayOff: row.day.isWeeklyDayOff,
     };
     const answer = await firstValueFrom(
       this.dialog

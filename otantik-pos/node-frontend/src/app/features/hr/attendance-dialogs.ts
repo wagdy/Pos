@@ -111,10 +111,13 @@ export interface MarkDayData {
   day: string;
   mark: DayMarkKind | null;
   notes: string | null;
+  // A weekly day off: one that can be marked a working day, worked in exchange for another.
+  weeklyDayOff?: boolean;
 }
 
-// A day marked as leave or a day off (not an absence), or the mark taken off. Closes with the
-// kind ('None' to take it off) and the notes.
+// A day marked as leave or a day off (not an absence), a weekly day off marked as a working day (a
+// swap: a normal shift, and no leave allowance), or the mark taken off. Closes with the kind
+// ('None' to take it off) and the notes.
 @Component({
   selector: 'app-mark-day-dialog',
   imports: [FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule, MatRadioModule],
@@ -124,7 +127,10 @@ export interface MarkDayData {
       <mat-radio-group [(ngModel)]="kind" aria-label="The day is">
         <mat-radio-button value="Leave">Leave, paid <span class="ar">إجازة</span></mat-radio-button>
         <mat-radio-button value="DayOff">A day off: swapped, or extra <span class="ar">راحة</span></mat-radio-button>
-        <mat-radio-button value="None">No mark: absent if there are no punches <span class="ar">بدون</span></mat-radio-button>
+        @if (data.weeklyDayOff) {
+          <mat-radio-button value="WorkingDay">A working day: their day off, worked in exchange for another <span class="ar">يوم عمل بدل راحة</span></mat-radio-button>
+        }
+        <mat-radio-button value="None">No mark: {{ data.weeklyDayOff ? 'their day off, with a leave allowance if they work it' : 'absent if there are no punches' }} <span class="ar">بدون</span></mat-radio-button>
       </mat-radio-group>
       @if (kind !== 'None') {
         <mat-form-field class="wide">

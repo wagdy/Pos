@@ -6,7 +6,8 @@ import { AttendanceDay, AttendanceDayReport, Employee, HrApi, Punch, Timesheet, 
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { BusinessDay } from '../costing/financials';
-import { AddPunchDialog, IgnorePunchDialog, MarkDayDialog } from './attendance-dialogs';
+import { MAT_DIALOG_DATA } from '@angular/material/dialog';
+import { AddPunchDialog, IgnorePunchDialog, MarkDayData, MarkDayDialog } from './attendance-dialogs';
 import { AttendancePage } from './attendance-page';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
@@ -143,7 +144,24 @@ describe('the attendance', () => {
     open.mockReturnValue({ afterClosed: () => of({ kind: 'None', notes: 'ignored' }) });
     await page['markDay'](page['rows']()[1]);
     expect(open.mock.lastCall![0]).toBe(MarkDayDialog);
+    expect(open.mock.lastCall![1].data).toMatchObject({ employee: 'Mona', mark: null, weeklyDayOff: false });
     expect(markDay).toHaveBeenCalledWith('mona', '2026-09-21', null, null);
+  });
+
+  it('offers a working day, a swap, only for a weekly day off', async () => {
+    async function options(data: MarkDayData): Promise<string[]> {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({ providers: [{ provide: MAT_DIALOG_DATA, useValue: data }] });
+      const fixture = TestBed.createComponent(MarkDayDialog);
+      await fixture.whenStable();
+      fixture.detectChanges();
+      return [...(fixture.nativeElement as HTMLElement).querySelectorAll('mat-radio-button')].map((r) => text(r).split(' ')[0] + ' ' + text(r).split(' ')[1]);
+    }
+
+    expect(await options({ employee: 'Hassan', day: 'Fri 25 Sept', mark: null, notes: null, weeklyDayOff: true })).toEqual([
+      'Leave, paid', 'A day', 'A working', 'No mark:',
+    ]);
+    expect(await options({ employee: 'Hassan', day: 'Mon 21 Sept', mark: null, notes: null, weeklyDayOff: false })).toEqual(['Leave, paid', 'A day', 'No mark:']);
   });
 
   it('shows an accountant the punches, with nothing to change', async () => {

@@ -16,8 +16,11 @@ public enum PayrollSlipStatus
 // One employee's pay for one month (مسير الرواتب), every figure it is made of. The minutes and days
 // are the timesheet's; the money is rounded to the piastre.
 //
-// Net = base salary + incentives + leave allowances + overtime
+// Net = base salary + incentives + leave allowances + days off worked + overtime
 //     − advances − last month's shortfall − lateness − absence.
+//
+// Leave allowances are the ones entered; a day off worked earns its own, worked out from the
+// timesheet (DaysOffWorkedPay): a day's pay for half a shift or more, its hours for less.
 // When the deductions are more than the pay, nothing is paid and the rest is carried to the next
 // month's slip (BroughtForward there).
 public sealed record PayrollFigures(
@@ -38,9 +41,10 @@ public sealed record PayrollFigures(
     int DaysWorked,
     int DaysOffWorked,
     int MissingPunchDays,
-    int OpenDays)
+    int OpenDays,
+    decimal DaysOffWorkedPay = 0)
 {
-    public decimal Gross => BaseSalary + Incentives + LeaveAllowances + OvertimePay;
+    public decimal Gross => BaseSalary + Incentives + LeaveAllowances + DaysOffWorkedPay + OvertimePay;
     public decimal Deductions => Advances + BroughtForward + LatenessPenalty + AbsencePenalty;
     public decimal Net => Gross - Deductions;
     public decimal NetPayable => Net > 0 ? Net : 0;
@@ -53,6 +57,13 @@ public sealed record PayrollFigures(
 
 public static class PayrollCalculator
 {
+    // From half a shift worked on a day off, a day's pay; less earns its hours.
+    public const int HalfShiftMinutes = Employee.ShiftHours * 60 / 2;
+
+    // A day off worked, as its leave allowance: a day's pay from half a shift, its minutes before.
+    public static decimal DayOffWorkedPay(Employee employee, int workedMinutes) =>
+        workedMinutes >= HalfShiftMinutes ? employee.DailyRate : workedMinutes * employee.MinuteRate;
+
     // `days` are the month's days as the timesheet has them; an employed day without one is not
     // worked out yet, and counts as open. `advances` are what the treasury paid them against this
     // month, less voids; `broughtForward` what last month's slip carried over.
@@ -90,6 +101,9 @@ public static class PayrollCalculator
         var overtime = counted.Sum(d => d?.OvertimeMinutes ?? 0);
         var shortMinutes = counted.Sum(d => d?.ShortMinutes ?? 0);
         var absent = Count(DayStatus.Absent);
+        var daysOffWorkedPay = counted
+            .Where(d => d?.Status == DayStatus.WorkedOnDayOff)
+            .Sum(d => DayOffWorkedPay(employee, d!.WorkedMinutes));
 
         return new PayrollFigures(
             employee.MonthlySalary,
@@ -109,7 +123,8 @@ public static class PayrollCalculator
             Count(DayStatus.Worked) + Count(DayStatus.WorkedOnDayOff),
             Count(DayStatus.WorkedOnDayOff),
             Count(DayStatus.MissingPunch),
-            counted.Count(d => d is null || d.Status == DayStatus.Open));
+            counted.Count(d => d is null || d.Status == DayStatus.Open),
+            Money(daysOffWorkedPay));
     }
 
     private static decimal Money(decimal amount) => Math.Round(amount, 2, MidpointRounding.AwayFromZero);

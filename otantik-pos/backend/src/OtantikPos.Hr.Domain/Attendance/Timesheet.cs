@@ -23,7 +23,8 @@ public enum DayStatus
     // Marked as leave, with no punches.
     Leave = 6,
 
-    // Punched on a day off or on leave: worked, with no shift to be late for.
+    // Punched on a day off or on leave: worked, with no shift to be late for, and a leave allowance
+    // for it on the payslip.
     WorkedOnDayOff = 7,
 
     // Before they started or after they left.
@@ -106,7 +107,8 @@ public static class Timesheet
         var (from, to) = Window(employee, day);
         var over = now >= to;
         var times = Scans(punches.Where(p => p >= from && p < to), policy.DoubleScanMinutes);
-        var off = mark is not null || employee.IsDayOff(day);
+        // A weekly day off marked as a working day is one: a swap.
+        var off = mark is DayMarkKind.Leave or DayMarkKind.DayOff || (mark != DayMarkKind.WorkingDay && employee.IsDayOff(day));
         if (times.Count == 0)
             return Nothing(day, mark == DayMarkKind.Leave ? DayStatus.Leave : off ? DayStatus.DayOff : over ? DayStatus.Absent : DayStatus.Open);
 

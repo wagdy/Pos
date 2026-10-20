@@ -47,7 +47,8 @@ public sealed record PayrollSlipDto(
 
 public sealed record PayrollTotals(
     decimal BaseSalaries, decimal Incentives, decimal LeaveAllowances, decimal OvertimePay, decimal Advances, decimal BroughtForward,
-    decimal LatenessPenalties, decimal AbsencePenalties, decimal NetPayable, decimal CarriedForward, decimal WagesCost, decimal SalaryPaid);
+    decimal LatenessPenalties, decimal AbsencePenalties, decimal NetPayable, decimal CarriedForward, decimal WagesCost, decimal SalaryPaid,
+    decimal DaysOffWorkedPay);
 
 public sealed record PayrollMonthDto(DateOnly Month, PayrollTotals Totals, IReadOnlyList<PayrollSlipDto> Slips);
 
@@ -106,7 +107,7 @@ internal sealed class PayrollWorker(
             new PayrollTotals(
                 Sum(f => f.BaseSalary), Sum(f => f.Incentives), Sum(f => f.LeaveAllowances), Sum(f => f.OvertimePay), Sum(f => f.Advances),
                 Sum(f => f.BroughtForward), Sum(f => f.LatenessPenalty), Sum(f => f.AbsencePenalty), Sum(f => f.NetPayable), Sum(f => f.CarriedForward),
-                Sum(f => f.WagesCost), slipDtos.Sum(s => s.SalaryPaid)),
+                Sum(f => f.WagesCost), slipDtos.Sum(s => s.SalaryPaid), Sum(f => f.DaysOffWorkedPay)),
             slipDtos);
     }
 

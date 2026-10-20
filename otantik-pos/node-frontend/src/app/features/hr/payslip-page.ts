@@ -33,14 +33,14 @@ export interface AdjustmentInput {
     <mat-dialog-content>
       <mat-radio-group [(ngModel)]="kind" aria-label="What it is">
         <mat-radio-button value="Incentive">Incentive or bonus <span class="ar">حوافز</span></mat-radio-button>
-        <mat-radio-button value="LeaveAllowance">Leave allowance: a holiday or day off worked <span class="ar">بدل إجازات</span></mat-radio-button>
+        <mat-radio-button value="LeaveAllowance">Leave allowance: a holiday worked, or other <span class="ar">بدل إجازات</span></mat-radio-button>
       </mat-radio-group>
       <mat-form-field class="wide">
         <mat-label>Amount · المبلغ</mat-label>
         <input matInput type="number" min="0" step="any" [(ngModel)]="amount" aria-label="Amount" />
         <span matTextSuffix>&nbsp;L.E</span>
         @if (kind === 'LeaveAllowance') {
-          <mat-hint>A day’s pay is {{ data.dailyRate | number: '1.2-2' }}</mat-hint>
+          <mat-hint>A day’s pay is {{ data.dailyRate | number: '1.2-2' }}. Days off worked are counted by themselves.</mat-hint>
         }
       </mat-form-field>
       <mat-form-field class="wide">
@@ -158,7 +158,13 @@ export class FinalizeDialog {
               <td>{{ f.incentives | money }}</td>
             </tr>
             <tr class="plus">
-              <th>+ Leave allowances <span class="ar">بدل إجازات</span></th>
+              <th>+ Days off worked <span class="ar">بدل أيام الراحة</span>
+                <div class="how">{{ f.daysOffWorked }} {{ f.daysOffWorked === 1 ? 'day' : 'days' }}: a day's pay for half a shift or more, the hours for less</div>
+              </th>
+              <td>{{ f.daysOffWorkedPay | money }}</td>
+            </tr>
+            <tr class="plus">
+              <th>+ Leave allowances <span class="ar">بدل إجازات</span><div class="how">as entered below</div></th>
               <td>{{ f.leaveAllowances | money }}</td>
             </tr>
             <tr class="plus">

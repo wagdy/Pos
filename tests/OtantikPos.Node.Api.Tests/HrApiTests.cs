@@ -271,6 +271,10 @@ public class HrApiTests
         Assert.Equal("MissingPunch", Of(await Attendance(), "Hassan").GetProperty("status").GetString());
         await Json(await manager.PostAsync($"/api/hr/punches/{evening}/restore", null, Cancel));
 
+        // A working day (a swap) is only ever a weekly day off; Hassan has none.
+        Assert.Contains("only a weekly day off is marked as one", await Problem(await manager.PutAsJsonAsync(
+            $"/api/hr/employees/{hassan}/days/{Iso(day)}", new { kind = "WorkingDay" }, Cancel)));
+
         // Ten minutes' grace: four minutes late is on time.
         await Json(await manager.PutAsJsonAsync("/api/hr/settings", new { graceMinutes = 10, doubleScanMinutes = 3 }, Cancel));
         Assert.Equal(0, Of(await Attendance(), "Hassan").GetProperty("lateMinutes").GetInt32());

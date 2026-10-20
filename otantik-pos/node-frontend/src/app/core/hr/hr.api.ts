@@ -63,7 +63,8 @@ export const dayStatusLabels: Record<DayStatus, { en: string; ar: string }> = {
   NotEmployed: { en: 'Not employed', ar: 'غير معيّن' },
 };
 
-export type DayMarkKind = 'Leave' | 'DayOff';
+// WorkingDay: a weekly day off worked in exchange for another, counted as a normal shift.
+export type DayMarkKind = 'Leave' | 'DayOff' | 'WorkingDay';
 
 export interface Punch {
   id: string;
@@ -150,8 +151,9 @@ export const adjustmentLabels: Record<AdjustmentKind, { en: string; ar: string }
   LeaveAllowance: { en: 'Leave allowance', ar: 'بدل إجازات' },
 };
 
-// Every figure of a month's slip. Net = base + incentives + leave allowances + overtime − advances
-// − last month's shortfall − lateness − absence.
+// Every figure of a month's slip. Net = base + incentives + leave allowances + days off worked +
+// overtime − advances − last month's shortfall − lateness − absence. Days off worked earn their
+// allowance by themselves: a day's pay from half a shift, their hours before.
 export interface PayrollFigures {
   monthlySalary: number;
   daysInMonth: number;
@@ -171,6 +173,7 @@ export interface PayrollFigures {
   daysOffWorked: number;
   missingPunchDays: number;
   openDays: number;
+  daysOffWorkedPay: number;
   gross: number;
   deductions: number;
   net: number;
@@ -238,6 +241,7 @@ export interface PayrollMonth {
     carriedForward: number;
     wagesCost: number;
     salaryPaid: number;
+    daysOffWorkedPay: number;
   };
   slips: PayrollSlip[];
 }

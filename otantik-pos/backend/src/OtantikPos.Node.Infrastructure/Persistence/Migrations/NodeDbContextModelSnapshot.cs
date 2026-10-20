@@ -956,6 +956,10 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                             b1.Property<int>("DaysOffWorked")
                                 .HasColumnType("integer");
 
+                            b1.Property<decimal>("DaysOffWorkedPay")
+                                .HasPrecision(10, 2)
+                                .HasColumnType("numeric(10,2)");
+
                             b1.Property<int>("DaysWorked")
                                 .HasColumnType("integer");
 

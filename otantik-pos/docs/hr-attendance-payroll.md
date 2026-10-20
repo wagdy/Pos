@@ -36,7 +36,12 @@ and their monthly pay. This page is the design.
   - no punches on a working day is an **absence**, unless a manager marked it as leave or a
     day off;
   - weekly days off are per employee;
-  - punches on a day off or on leave are hours worked, with nothing late or overtime;
+  - punches on a day off or on leave are hours worked, with nothing late or overtime, and earn
+    a **leave allowance** by themselves: a day's pay for half a shift (4½ hours) or more, the
+    hours at the hourly rate for less;
+  - a weekly day off worked in exchange for another is marked a **working day** (a swap): a
+    normal shift, late and overtime counted, no allowance; the day taken instead is marked a
+    day off;
   - an odd number of punches is a **missing punch**: the month's slip cannot be finalized
     until a manager enters the missing one (a manual punch, with a reason) or ignores the
     extra one.
@@ -51,7 +56,7 @@ and their monthly pay. This page is the design.
 - **The payslip (مسير الرواتب)**, per employee per month:
 
   ```
-  Net = base salary + incentives + leave allowances + overtime pay
+  Net = base salary + incentives + leave allowances + days off worked + overtime pay
         − advances − last month's shortfall − lateness − absence
   ```
 
@@ -186,8 +191,11 @@ unit with a capture of its first requests before they are fixed.
 entered. The old "سلفيات" expense item is archived once advances are entered as advances; what
 is already entered stays as it is.
 
-**To decide:** whether a day off worked makes a leave allowance by itself (the adjustment has
-`Source = Automatic` and `ForDay` for it), and public holidays.
+A day off worked earns its leave allowance by itself (the slip's `DaysOffWorkedPay`, migration
+`DaysOffWorkedPay`); leave allowances entered by a manager are for anything else, a public
+holiday worked say.
+
+**To decide:** public holidays.
 
 ## The screens
 

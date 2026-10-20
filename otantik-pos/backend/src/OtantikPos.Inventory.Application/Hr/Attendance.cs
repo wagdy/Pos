@@ -247,7 +247,8 @@ internal sealed class IgnorePunchHandler(
     }
 }
 
-// A day marked as leave or a day off, or the mark taken off (Kind null).
+// A day marked as leave or a day off, a weekly day off marked as a working day (a swap), or the
+// mark taken off (Kind null).
 public sealed record SetDayMarkCommand(Guid EmployeeId, DateOnly Date, DayMarkKind? Kind, string? Notes, string StaffName) : IRequest, IRetryOnConflict;
 
 internal sealed class SetDayMarkHandler(IEmployeeRepository employees, IDayMarkRepository marks, IPayrollSlipRepository slips, IUnitOfWork unitOfWork)
@@ -259,6 +260,8 @@ internal sealed class SetDayMarkHandler(IEmployeeRepository employees, IDayMarkR
         if (!employee.IsEmployedOn(request.Date))
             throw new DomainException($"{employee.Name} is not employed on {request.Date:d MMM yyyy}.");
         await slips.EnsureOpenAsync(employee, request.Date, cancellationToken);
+        if (request.Kind == DayMarkKind.WorkingDay && !employee.IsDayOff(request.Date))
+            throw new DomainException($"{request.Date:dddd} is a working day for {employee.Name} already: only a weekly day off is marked as one.");
         var mark = await marks.GetAsync(employee.Id, request.Date, cancellationToken);
         if (request.Kind is not { } kind)
         {

@@ -9,10 +9,15 @@ public enum DayMarkKind
 
     // A day off outside their weekly ones, one swapped for another: not an absence.
     DayOff = 2,
+
+    // A weekly day off worked in exchange for another day off: a normal shift, late and overtime
+    // counted, and no leave allowance. The day taken instead is marked DayOff.
+    WorkingDay = 3,
 }
 
 // A manager's word on one employee's day: that a day without punches was leave or a day off, not
-// an absence. One a day; changed or taken off as the manager decides.
+// an absence; or that a weekly day off was a working day, swapped for another. One a day; changed
+// or taken off as the manager decides.
 public sealed class DayMark : AggregateRoot
 {
     public const int MaxNotesLength = 300;
@@ -36,7 +41,7 @@ public sealed class DayMark : AggregateRoot
     public void Change(DayMarkKind kind, string? notes, string markedBy)
     {
         if (!Enum.IsDefined(kind))
-            throw new DomainException("Say whether the day was leave or a day off.");
+            throw new DomainException("Say whether the day was leave, a day off or a working day.");
         if (notes?.Trim().Length > MaxNotesLength)
             throw new DomainException($"Keep the notes under {MaxNotesLength} characters.");
         Kind = kind;
