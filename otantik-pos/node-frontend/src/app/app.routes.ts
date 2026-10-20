@@ -69,10 +69,8 @@ export const routes: Routes = [
                 path: 'suppliers',
                 loadComponent: () => import('./features/costing/suppliers-page').then((m) => m.SuppliersPage),
               },
-              {
-                path: 'spending',
-                loadComponent: () => import('./features/costing/spending-page').then((m) => m.SpendingPage),
-              },
+              // Where the spending was before the reports had a tab of their own.
+              { path: 'spending', redirectTo: '/costing/reports/spending' },
               // Where the expense items were before they had a tab of their own.
               { path: 'expense-items', redirectTo: '/costing/expense-items' },
               {
@@ -190,21 +188,38 @@ export const routes: Routes = [
             ],
           },
           {
-            path: 'theoretical',
-            loadComponent: () => import('./features/costing/theoretical-page').then((m) => m.TheoreticalPage),
+            // Reports (التقارير): where the money went, and the food cost reports.
+            path: 'reports',
+            loadComponent: () => import('./features/costing/costing-reports-shell').then((m) => m.CostingReportsShell),
+            children: [
+              { path: '', pathMatch: 'full', redirectTo: 'spending' },
+              {
+                path: 'spending',
+                loadComponent: () => import('./features/costing/spending-page').then((m) => m.SpendingPage),
+              },
+              {
+                path: 'theoretical',
+                loadComponent: () => import('./features/costing/theoretical-page').then((m) => m.TheoreticalPage),
+              },
+              {
+                path: 'variance',
+                loadComponent: () => import('./features/costing/variance-page').then((m) => m.VariancePage),
+              },
+              {
+                path: 'kpis',
+                loadComponent: () => import('./features/costing/kpis-page').then((m) => m.KpisPage),
+              },
+              {
+                path: 'break-even',
+                loadComponent: () => import('./features/costing/break-even-page').then((m) => m.BreakEvenPage),
+              },
+            ],
           },
-          {
-            path: 'variance',
-            loadComponent: () => import('./features/costing/variance-page').then((m) => m.VariancePage),
-          },
-          {
-            path: 'kpis',
-            loadComponent: () => import('./features/costing/kpis-page').then((m) => m.KpisPage),
-          },
-          {
-            path: 'break-even',
-            loadComponent: () => import('./features/costing/break-even-page').then((m) => m.BreakEvenPage),
-          },
+          // Where the reports were before they had a tab of their own.
+          { path: 'theoretical', redirectTo: 'reports/theoretical' },
+          { path: 'variance', redirectTo: 'reports/variance' },
+          { path: 'kpis', redirectTo: 'reports/kpis' },
+          { path: 'break-even', redirectTo: 'reports/break-even' },
           {
             path: 'settings',
             loadComponent: () => import('./features/costing/settings-page').then((m) => m.SettingsPage),

@@ -11,13 +11,14 @@ import { firstValueFrom } from 'rxjs';
 import { CategorySpending, CostingApi, SpendingReport, expenseLineLabels } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
+import { PieSlice, SpendingPie, pieColors } from './spending-pie';
 
 type Period = 'month' | 'last-month' | 'quarter' | 'year' | 'custom';
 
-// Purchases by category (المشتريات حسب الفئة) over any period: how the money went, stock and
-// expenses, from the posted invoices, each on its own date. A bar per category, split into what
-// went into stock and what was expenses, largest first; the table below has the figures and, opened,
-// what was bought under each.
+// Spending analysis (تحليل الإنفاق) over any period: how the money went, stock and expenses, from
+// the posted invoices, each on its own date. Three pies first: stock against expenses, then each
+// split by category. Then a bar per category, split into what went into stock and what was
+// expenses, largest first; the table below has the figures and, opened, what was bought under each.
 @Component({
   selector: 'app-spending-page',
   imports: [
@@ -31,6 +32,7 @@ type Period = 'month' | 'last-month' | 'quarter' | 'year' | 'custom';
     MatInputModule,
     MatProgressBarModule,
     MoneyPipe,
+    SpendingPie,
   ],
   template: `
     <div class="toolbar">
@@ -59,7 +61,7 @@ type Period = 'month' | 'last-month' | 'quarter' | 'year' | 'custom';
       <p class="error">{{ error() }}</p>
     } @else if (report(); as r) {
       <header class="report-head">
-        <h2>Purchases by category <span class="inline-ar">المشتريات حسب الفئة</span></h2>
+        <h2>Spending analysis <span class="inline-ar">تحليل الإنفاق</span></h2>
         <div class="muted">{{ r.from | date: 'd MMM y' }} – {{ r.to | date: 'd MMM y' }} · posted invoices, each on its own date</div>
       </header>
       <div class="tiles">
@@ -84,6 +86,30 @@ type Period = 'month' | 'last-month' | 'quarter' | 'year' | 'custom';
       </div>
 
       @if (r.categories.length) {
+        <div class="pies">
+          <app-spending-pie
+            heading="Stock and expenses"
+            headingAr="الخامات والمصروفات"
+            [slices]="split()"
+            shareOf="of all spending"
+            empty="Nothing was spent in these days."
+          />
+          <app-spending-pie
+            heading="Into stock, by category"
+            headingAr="الخامات حسب القسم"
+            [slices]="stockByCategory()"
+            shareOf="of what went into stock"
+            empty="Nothing went into stock in these days."
+          />
+          <app-spending-pie
+            heading="Expenses, by category"
+            headingAr="المصروفات حسب القسم"
+            [slices]="expensesByCategory()"
+            shareOf="of the expenses"
+            empty="No expenses in these days."
+          />
+        </div>
+
         <section class="chart" aria-label="Spending by category, stock and expenses">
           <div class="legend" aria-hidden="true">
             <span><span class="swatch stock"></span>Into stock</span>
@@ -259,6 +285,12 @@ type Period = 'month' | 'last-month' | 'quarter' | 'year' | 'custom';
         background: var(--series-expense);
       }
     }
+    .pies {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 8px;
+      margin-bottom: 16px;
+    }
     .chart {
       padding: 12px 14px;
       margin-bottom: 16px;
@@ -409,6 +441,20 @@ export class SpendingPage {
   protected readonly hovered = signal<string | null>(null);
   protected readonly open = signal(new Set<string>());
 
+  // The pies: stock against expenses, then what each category put into each. The first two
+  // colours are the bars' own.
+  protected readonly split = computed<PieSlice[]>(() => {
+    const r = this.report();
+    return r
+      ? [
+          { key: 'stock', en: 'Into stock', ar: 'خامات', amount: r.inventory, color: pieColors[0] },
+          { key: 'expenses', en: 'Expenses', ar: 'مصروفات', amount: r.expenses, color: pieColors[1] },
+        ]
+      : [];
+  });
+  protected readonly stockByCategory = computed(() => this.byCategory('inventory'));
+  protected readonly expensesByCategory = computed(() => this.byCategory('expenses'));
+
   // The bars are drawn against the largest category, which fills the track.
   private readonly largest = computed(() => Math.max(0, ...(this.report()?.categories ?? []).map((c) => c.total)));
 
@@ -452,6 +498,10 @@ export class SpendingPage {
 
   protected describe(c: CategorySpending): string {
     return `${c.category}: ${c.total.toFixed(2)} L.E, ${c.inventory.toFixed(2)} into stock and ${c.expenses.toFixed(2)} expenses, ${c.sharePercent ?? 0}% of all spending`;
+  }
+
+  private byCategory(part: 'inventory' | 'expenses'): PieSlice[] {
+    return (this.report()?.categories ?? []).map((c) => ({ key: c.categoryId, en: c.category, ar: c.categoryAr, amount: c[part] }));
   }
 
   protected toggle(categoryId: string): void {
@@ -499,7 +549,7 @@ export class SpendingPage {
     const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
     link.href = url;
-    link.download = `purchases-by-category-${r.from}-to-${r.to}.csv`;
+    link.download = `spending-analysis-${r.from}-to-${r.to}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   }

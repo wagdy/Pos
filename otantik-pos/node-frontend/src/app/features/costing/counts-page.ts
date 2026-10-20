@@ -38,7 +38,7 @@ import { Approvals, pendingLabel } from './approvals';
         }
         <span class="spacer"></span>
         @if (posted().length >= 2) {
-          <a mat-button routerLink="/costing/variance"><mat-icon>compare_arrows</mat-icon> Variance since the last count</a>
+          <a mat-button routerLink="/costing/reports/variance"><mat-icon>compare_arrows</mat-icon> Variance since the last count</a>
         }
       </div>
       <div class="table-wrap">

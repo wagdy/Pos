@@ -3,7 +3,7 @@ import { MatTabsModule } from '@angular/material/tabs';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { Approvals } from './approvals';
 
-// The manager's costing section: what ingredients and dishes cost, and the food cost reports.
+// The manager's costing section: what ingredients and dishes cost, and the reports on it.
 // Managers and accountants (CostingView); a cashier neither sees the link nor gets the data. A
 // manager also has the requests waiting for approval, with how many.
 @Component({
@@ -65,10 +65,7 @@ export class CostingPage {
     { path: 'waste', en: 'Waste', ar: 'الهالك' },
     { path: 'counts', en: 'Stock counts', ar: 'الجرد' },
     { path: 'recipes', en: 'Recipes', ar: 'الوصفات' },
-    { path: 'theoretical', en: 'Theoretical cost', ar: 'التكلفة النظرية' },
-    { path: 'variance', en: 'Variance', ar: 'الانحراف' },
-    { path: 'kpis', en: 'KPIs', ar: 'المؤشرات' },
-    { path: 'break-even', en: 'Break-even', ar: 'نقطة التعادل' },
+    { path: 'reports', en: 'Reports', ar: 'التقارير' },
     { path: 'settings', en: 'Settings', ar: 'الإعدادات' },
     { path: 'approvals', en: 'Pending approvals', ar: 'طلبات معلقة' },
   ];

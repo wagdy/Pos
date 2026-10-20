@@ -33,7 +33,7 @@ const report: SpendingReport = {
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-describe('purchases by category', () => {
+describe('the spending analysis', () => {
   const spending = vi.fn();
 
   async function render() {
@@ -84,6 +84,41 @@ describe('purchases by category', () => {
     await refresh();
     const items = [...el.querySelectorAll('tr.item')].map((r) => text(r.querySelector('td')!));
     expect(items).toEqual(['Electricity Expense · مصروف', 'Cleaning, "pro" spray Expense · مصروف']);
+  });
+
+  it('shows stock against expenses, then each split by category, in three pies above the bars', async () => {
+    const { el } = await render();
+
+    expect(text(el.querySelector('h2')!)).toBe('Spending analysis تحليل الإنفاق');
+    const pies = [...el.querySelectorAll('app-spending-pie')];
+    expect(pies.map((p) => text(p.querySelector('h3')!))).toEqual([
+      'Stock and expenses الخامات والمصروفات',
+      'Into stock, by category الخامات حسب القسم',
+      'Expenses, by category المصروفات حسب القسم',
+    ]);
+    const legend = (pie: Element) => [...pie.querySelectorAll('.legend li')].map((li) => [...li.querySelectorAll('.name, .amount, .percent')].map(text));
+    expect(legend(pies[0])).toEqual([
+      ['Expenses مصروفات', 'L.E 10,300.00', '97.2%'],
+      ['Into stock خامات', 'L.E 300.00', '2.8%'],
+    ]);
+    // The bars' own colours: stock blue, expenses orange.
+    expect([...pies[0].querySelectorAll('path')].map((p) => p.getAttribute('fill'))).toEqual(['#eb6834', '#2a78d6']);
+    expect(legend(pies[1])).toEqual([['Dairy', 'L.E 300.00', '100.0%']]);
+    expect(legend(pies[2])).toEqual([
+      ['Rent إيجار', 'L.E 8,000.00', '77.7%'],
+      ['Utilities', 'L.E 2,000.00', '19.4%'],
+      ['Dairy', 'L.E 300.00', '2.9%'],
+    ]);
+    expect(pies[2].compareDocumentPosition(el.querySelector('.bars')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('says a pie has nothing when nothing of its kind was bought', async () => {
+    spending.mockReturnValue(of({ ...report, inventory: 0, categories: report.categories.slice(0, 2) }));
+    const { el } = await render();
+
+    const pies = [...el.querySelectorAll('app-spending-pie')];
+    expect(text(pies[1].querySelector('.none')!)).toBe('Nothing went into stock in these days.');
+    expect(pies[0].querySelectorAll('.legend li').length).toBe(1);
   });
 
   it('takes a preset or any two days', async () => {

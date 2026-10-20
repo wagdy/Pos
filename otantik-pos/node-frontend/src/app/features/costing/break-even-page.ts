@@ -74,7 +74,7 @@ const chart = { width: 680, height: 320, left: 78, right: 16, top: 16, bottom: 4
       @if (s.monthsWithoutCosts.length) {
         <p class="note warn">
           No costs entered for {{ s.monthsWithoutCosts.join(', ') }}: the fixed costs come from the other months.
-          Enter them on the <a routerLink="/costing/kpis">KPIs</a> tab.
+          Enter them on the <a routerLink="/costing/reports/kpis">KPIs</a> tab.
         </p>
       }
 
@@ -173,7 +173,7 @@ const chart = { width: 680, height: 320, left: 78, right: 16, top: 16, bottom: 4
             <span><i class="key negative"></i>Loss · خسارة</span>
           </div>
         } @else if (s.monthsWithoutCosts.length && s.totalFixedCosts === 0) {
-          <p class="note">Enter the months' costs on the <a routerLink="/costing/kpis">KPIs</a> tab: break-even needs the fixed costs.</p>
+          <p class="note">Enter the months' costs on the <a routerLink="/costing/reports/kpis">KPIs</a> tab: break-even needs the fixed costs.</p>
         } @else {
           <p class="error">Every sale costs more than it brings in at these months' cost of sales: no level of sales breaks even.</p>
         }

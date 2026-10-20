@@ -198,7 +198,7 @@ const expenseFields: { key: keyof MonthlyExpenses; en: string; ar: string; hours
                   <span class="num">{{ e.amount | money }}</span>
                 </div>
               }
-              <a routerLink="/costing/purchases/spending" class="small">Purchases by category →</a>
+              <a routerLink="/costing/reports/spending" class="small">Spending analysis →</a>
             </div>
           }
         </section>

@@ -3,9 +3,8 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 
-// Purchases: entering a supplier's invoice, the invoices entered, what was spent by category, the
-// suppliers they are from, the expense items they can carry, and the categories everything is
-// filed under.
+// Purchases: entering a supplier's invoice, the invoices entered, the suppliers they are from, and
+// the categories everything is filed under. What was spent is under Reports.
 @Component({
   selector: 'app-purchases-shell',
   imports: [MatButtonModule, MatIconModule, RouterLink, RouterLinkActive, RouterOutlet],
@@ -39,7 +38,6 @@ export class PurchasesShell {
     { path: 'new', icon: 'add_shopping_cart', en: 'New invoice', ar: 'فاتورة جديدة' },
     { path: 'batch', icon: 'library_add', en: 'Daily batch', ar: 'يومية المشتريات' },
     { path: 'invoices', icon: 'history', en: 'Invoices', ar: 'أرشيف الفواتير' },
-    { path: 'spending', icon: 'pie_chart', en: 'Spending by category', ar: 'المشتريات حسب الفئة' },
     { path: 'suppliers', icon: 'local_shipping', en: 'Suppliers', ar: 'إدارة الموردين' },
     { path: 'categories', icon: 'category', en: 'Categories', ar: 'الأقسام' },
   ];

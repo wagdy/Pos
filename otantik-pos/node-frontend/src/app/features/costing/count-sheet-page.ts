@@ -88,7 +88,7 @@ const autosaveAfterMs = 1500;
       </div>
       <p class="note">
         Stock was set to what was counted. Why the records were out is in the
-        <a routerLink="/costing/variance">variance report</a>, which sets it against sales, deliveries and waste.
+        <a routerLink="/costing/reports/variance">variance report</a>, which sets it against sales, deliveries and waste.
       </p>
     } @else {
       <div class="toolbar sticky">

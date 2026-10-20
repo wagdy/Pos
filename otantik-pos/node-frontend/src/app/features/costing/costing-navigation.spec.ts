@@ -3,6 +3,7 @@ import { Route, provideRouter } from '@angular/router';
 import { routes } from '../../app.routes';
 import { Approvals } from './approvals';
 import { CostingPage } from './costing-page';
+import { CostingReportsShell } from './costing-reports-shell';
 import { PurchasesShell } from './purchases-shell';
 
 // The route of that path, anywhere under these.
@@ -29,7 +30,27 @@ describe('the costing navigation', () => {
     expect(purchases.children!.find((r) => r.path === 'expense-items')!.redirectTo).toBe('/costing/expense-items');
   });
 
-  it('puts Expense items after Raw materials, before Purchases', async () => {
+  it('gathers the reports under Reports, the spending first, and sends their old addresses there', () => {
+    const costing = find(routes, 'costing')!;
+    const reports = costing.children!.find((r) => r.path === 'reports')!;
+    expect(reports.loadComponent).toBeDefined();
+    expect(reports.children!.map((r) => [r.path, r.redirectTo ?? (r.loadComponent ? 'page' : undefined)])).toEqual([
+      ['', 'spending'],
+      ['spending', 'page'],
+      ['theoretical', 'page'],
+      ['variance', 'page'],
+      ['kpis', 'page'],
+      ['break-even', 'page'],
+    ]);
+
+    for (const old of ['theoretical', 'variance', 'kpis', 'break-even']) {
+      expect(costing.children!.find((r) => r.path === old)).toEqual({ path: old, redirectTo: `reports/${old}` });
+    }
+    const purchases = costing.children!.find((r) => r.path === 'purchases')!;
+    expect(purchases.children!.find((r) => r.path === 'spending')!.redirectTo).toBe('/costing/reports/spending');
+  });
+
+  it('puts Expense items after Raw materials, before Purchases, and the reports on one tab after Recipes', async () => {
     TestBed.configureTestingModule({
       providers: [provideRouter([]), { provide: Approvals, useValue: { canApprove: () => true, pending: () => [], refresh: vi.fn() } }],
     });
@@ -42,15 +63,38 @@ describe('the costing navigation', () => {
       ['expense-items', 'Expense items', 'المصروفات العمومية'],
       ['purchases', 'Purchases', 'المشتريات'],
     ]);
+    expect(tabs.map((t) => t.path)).toEqual(['materials', 'expense-items', 'purchases', 'financials', 'waste', 'counts', 'recipes', 'reports', 'settings', 'approvals']);
+    expect(tabs.find((t) => t.path === 'reports')).toMatchObject({ en: 'Reports', ar: 'التقارير' });
   });
 
-  it('keeps Purchases to buying: no expense items there, and the categories called simply Categories', async () => {
+  it('opens Reports on the spending analysis, then the food cost reports', async () => {
+    TestBed.configureTestingModule({ providers: [provideRouter([])] });
+    const fixture = TestBed.createComponent(CostingReportsShell);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    // Its address, icon, and name in English and Arabic.
+    const link = (a: Element) => {
+      const icon = a.querySelector('mat-icon')!.textContent!.trim();
+      const ar = a.querySelector('.inline-ar')!.textContent!.trim();
+      return [a.getAttribute('href'), icon, a.textContent!.replace(icon, '').replace(ar, '').trim(), ar];
+    };
+    expect([...(fixture.nativeElement as HTMLElement).querySelectorAll('nav a')].map(link)).toEqual([
+      ['/spending', 'pie_chart', 'Spending analysis', 'تحليل الإنفاق'],
+      ['/theoretical', 'calculate', 'Theoretical cost', 'التكلفة النظرية'],
+      ['/variance', 'compare_arrows', 'Variance', 'الانحراف'],
+      ['/kpis', 'insights', 'KPIs', 'المؤشرات'],
+      ['/break-even', 'balance', 'Break-even', 'نقطة التعادل'],
+    ]);
+  });
+
+  it('keeps Purchases to buying: no expense items or spending there, and the categories called simply Categories', async () => {
     TestBed.configureTestingModule({ providers: [provideRouter([])] });
     const fixture = TestBed.createComponent(PurchasesShell);
     await fixture.whenStable();
     const tabs = (fixture.componentInstance as unknown as Record<string, any>)['tabs'] as { path: string; en: string; ar: string }[];
 
-    expect(tabs.map((t) => t.path)).not.toContain('expense-items');
+    expect(tabs.map((t) => t.path)).toEqual(['new', 'batch', 'invoices', 'suppliers', 'categories']);
     expect(tabs.find((t) => t.path === 'categories')).toMatchObject({ en: 'Categories', ar: 'الأقسام' });
   });
 });
