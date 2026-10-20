@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using OtantikPos.Hr.Domain.Employees;
 using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.Expenses;
@@ -208,12 +209,15 @@ internal sealed class SafeTransactionConfiguration : IEntityTypeConfiguration<Sa
         builder.HasOne<Supplier>().WithMany().HasForeignKey(t => t.SupplierId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne<PurchaseInvoice>().WithMany().HasForeignKey(t => t.PurchaseInvoiceId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne<ExpenseItem>().WithMany().HasForeignKey(t => t.ExpenseItemId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<Employee>().WithMany().HasForeignKey(t => t.EmployeeId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne<SafeTransaction>().WithMany().HasForeignKey(t => t.ReversalOf).OnDelete(DeleteBehavior.Restrict);
         // One reversal for each entry.
         builder.HasIndex(t => t.ReversalOf).IsUnique().HasFilter("\"ReversalOf\" IS NOT NULL");
         builder.HasIndex(t => new { t.Fund, t.BusinessDate });
         builder.HasIndex(t => t.RevenueDate);
         builder.HasIndex(t => t.PurchaseInvoiceId);
+        // An employee's advances and salaries, month by month.
+        builder.HasIndex(t => new { t.EmployeeId, t.PayrollMonth }).HasFilter("\"EmployeeId\" IS NOT NULL");
     }
 }
 

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- HR as its own module: employees, their attendance and their monthly pay. It references the
+       building blocks and nothing else. The cash an advance or a salary takes is the treasury's
+       (Inventory.Domain's SafeTransaction), which names the employee by id. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\shared\Otantik.BuildingBlocks\Otantik.BuildingBlocks.csproj" />
+  </ItemGroup>
+
+</Project>

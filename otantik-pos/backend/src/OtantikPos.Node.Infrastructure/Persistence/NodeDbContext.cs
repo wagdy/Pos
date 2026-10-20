@@ -4,6 +4,9 @@ using Otantik.BuildingBlocks;
 using Otantik.SharedKernel.Auditing;
 using Otantik.SharedKernel.Catalog;
 using Otantik.SharedKernel.Orders;
+using OtantikPos.Hr.Domain.Attendance;
+using OtantikPos.Hr.Domain.Employees;
+using OtantikPos.Hr.Domain.Payroll;
 using OtantikPos.Inventory.Domain.Approvals;
 using OtantikPos.Inventory.Domain.Categories;
 using OtantikPos.Inventory.Domain.Expenses;
@@ -18,6 +21,7 @@ using OtantikPos.Inventory.Domain.Treasury;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Costing;
 using OtantikPos.Node.Infrastructure.DeliverySystem;
+using OtantikPos.Node.Infrastructure.Hr;
 using OtantikPos.Node.Infrastructure.Identity;
 using OtantikPos.Node.Infrastructure.Messaging;
 using OtantikPos.Node.Infrastructure.Printing;
@@ -25,18 +29,20 @@ using OtantikPos.Node.Infrastructure.Printing;
 namespace OtantikPos.Node.Infrastructure.Persistence;
 
 // The restaurant machine's database. It stores the shared Order exactly as the delivery system
-// defines it, a copy of the delivery system's menu, and the POS's own data: inventory, the
+// defines it, a copy of the delivery system's menu, and the POS's own data: inventory, HR, the
 // outbox, print jobs and staff PINs.
 public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, OutboxSignal outboxSignal)
     : DbContext(options), IUnitOfWork
 {
     // One schema per area. Nothing in pos has a foreign key into inventory or the other way
-    // round: Inventory knows orders only through events, and recipes only by catalog id.
+    // round: Inventory knows orders only through events, and recipes only by catalog id. The
+    // treasury's advances and salaries name an employee: inventory's one key into hr.
     public const string PosSchema = "pos";
     public const string CatalogSchema = "catalog";
     public const string InventorySchema = "inventory";
     public const string MessagingSchema = "messaging";
     public const string IdentitySchema = "identity";
+    public const string HrSchema = "hr";
 
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<OrderAuditEntry> OrderAudit => Set<OrderAuditEntry>();
@@ -74,6 +80,15 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
     public DbSet<CashReceived> CashReceived => Set<CashReceived>();
     public DbSet<OnlineSale> OnlineSales => Set<OnlineSale>();
     public DbSet<SyncState> SyncState => Set<SyncState>();
+
+    public DbSet<Employee> Employees => Set<Employee>();
+    public DbSet<AttendanceDevice> AttendanceDevices => Set<AttendanceDevice>();
+    public DbSet<AttendanceLog> AttendanceLogs => Set<AttendanceLog>();
+    public DbSet<DayMark> DayMarks => Set<DayMark>();
+    public DbSet<DailyRecord> DailyRecords => Set<DailyRecord>();
+    public DbSet<PayrollAdjustment> PayrollAdjustments => Set<PayrollAdjustment>();
+    public DbSet<PayrollSlip> PayrollSlips => Set<PayrollSlip>();
+    public DbSet<HrSettings> HrSettings => Set<HrSettings>();
 
     public DbSet<StaffMember> Staff => Set<StaffMember>();
 

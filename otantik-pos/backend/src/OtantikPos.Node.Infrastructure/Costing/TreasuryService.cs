@@ -665,6 +665,7 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
     private static SafeEntryRow Row(SafeTransaction t, Names names, decimal? balance)
     {
         string Supplier() => t.SupplierId is { } id ? names.Suppliers.GetValueOrDefault(id) ?? "a removed supplier" : "no supplier";
+        string Takings() => t.RevenueDate is { } day ? $" · from the takings of {day.ToString("d MMM", Invariant)}" : "";
         var what = t.Kind switch
         {
             SafeTransactionKind.OpeningBalance => $"Opening balance · {SourceName(t.Source)}",
@@ -674,6 +675,8 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
             SafeTransactionKind.ExpenseVoucher => t.ExpenseItemId is { } e ? names.Expenses.GetValueOrDefault(e) ?? "A removed expense" : "An expense",
             SafeTransactionKind.SupplierPayment => $"Payment to {Supplier()}" +
                 (t.RevenueDate is { } paidFrom ? $" · from the takings of {paidFrom.ToString("d MMM", Invariant)}" : ""),
+            SafeTransactionKind.EmployeeAdvance => "Employee advance" + Takings(),
+            SafeTransactionKind.SalaryPayment => "Salary" + Takings(),
             _ => (t.PurchaseInvoiceId is { } i && names.Invoices.GetValueOrDefault(i) is { } number ? $"Invoice {number}" : "Invoice") +
                  (t.SupplierId is null ? "" : $" · {Supplier()}") +
                  (t.RevenueDate is { } day ? $" · from the takings of {day.ToString("d MMM", Invariant)}" : ""),

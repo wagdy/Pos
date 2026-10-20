@@ -35,6 +35,14 @@ public enum SafeTransactionKind
 
     // A purchase invoice paid in cash when it was posted, from the safe or a day's takings.
     InvoicePayment = 6,
+
+    // A cash advance to an employee (سلفة), from the safe or a day's takings. Not an expense: it
+    // is owed by the employee until the payslip of its month (PayrollMonth) deducts it, and the
+    // wages are counted there.
+    EmployeeAdvance = 7,
+
+    // An employee's salary paid (صرف راتب): their payslip's net for a month, or part of it.
+    SalaryPayment = 8,
 }
 
 // Where money put into the safe came from (مصدر التمويل).
@@ -97,6 +105,11 @@ public sealed class SafeTransaction : AggregateRoot
     public Guid? SupplierId { get; private set; }
     public Guid? PurchaseInvoiceId { get; private set; }
     public Guid? ExpenseItemId { get; private set; }
+
+    // An advance's or a salary's: whose, and the payroll month it counts in (its first day).
+    public Guid? EmployeeId { get; private set; }
+    public DateOnly? PayrollMonth { get; private set; }
+
     public string? Notes { get; private set; }
 
     // A day's takings: the POS's gross for the day, as entered (إجمالي الإيراد). Amount is what
@@ -225,6 +238,45 @@ public sealed class SafeTransaction : AggregateRoot
         };
     }
 
+    // Out of the safe, or of a day's takings, as a supplier is paid. Deducted from the pay of
+    // payrollMonth: the month it is paid in, or a later one when that month's payroll is closed.
+    public static SafeTransaction EmployeeAdvance(
+        Guid id, decimal amount, DateOnly date, Guid employeeId, DateOnly payrollMonth, string? notes, string recordedBy,
+        string? approvedBy = null, DateOnly? revenueDate = null, bool takingsInSafe = false)
+    {
+        if (revenueDate > date)
+            throw new DomainException("An advance is paid from the takings of its day or a day before it.");
+        if (Month(payrollMonth) < new DateOnly(date.Year, date.Month, 1))
+            throw new DomainException("An advance is deducted from the pay of the month it is paid in, or a later one.");
+        return new SafeTransaction(
+            id, SafeTransactionKind.EmployeeAdvance, revenueDate is null || takingsInSafe ? CashFund.Safe : CashFund.DayRevenue, -Positive(amount),
+            date, notes, recordedBy, approvedBy)
+        {
+            EmployeeId = employeeId,
+            PayrollMonth = payrollMonth,
+            RevenueDate = revenueDate,
+        };
+    }
+
+    // A month's pay, on or after the month starts.
+    public static SafeTransaction SalaryPayment(
+        Guid id, decimal amount, DateOnly date, Guid employeeId, DateOnly payrollMonth, string? notes, string recordedBy,
+        string? approvedBy = null, DateOnly? revenueDate = null, bool takingsInSafe = false)
+    {
+        if (revenueDate > date)
+            throw new DomainException("A salary is paid from the takings of its day or a day before it.");
+        if (Month(payrollMonth) > date)
+            throw new DomainException("A month's salary is paid once the month has started.");
+        return new SafeTransaction(
+            id, SafeTransactionKind.SalaryPayment, revenueDate is null || takingsInSafe ? CashFund.Safe : CashFund.DayRevenue, -Positive(amount),
+            date, notes, recordedBy, approvedBy)
+        {
+            EmployeeId = employeeId,
+            PayrollMonth = payrollMonth,
+            RevenueDate = revenueDate,
+        };
+    }
+
     // Voids it: the opposite amount, entered on `today`, naming it. Voiding again is refused. A
     // payment out of a day's takings made before they were entered goes back into the safe when
     // they are in it now (takingsInSafe): it was taken off what went in.
@@ -248,12 +300,17 @@ public sealed class SafeTransaction : AggregateRoot
             SupplierId = SupplierId,
             PurchaseInvoiceId = PurchaseInvoiceId,
             ExpenseItemId = ExpenseItemId,
+            EmployeeId = EmployeeId,
+            PayrollMonth = PayrollMonth,
             ReversalOf = Id,
         };
     }
 
     private static decimal Positive(decimal amount) =>
         amount > 0 ? Math.Round(amount, 2, MidpointRounding.AwayFromZero) : throw new DomainException("Enter an amount more than nothing.");
+
+    private static DateOnly Month(DateOnly month) =>
+        month.Day == 1 ? month : throw new DomainException("A payroll month is named by its first day.");
 
     private static FundingSource Defined(FundingSource source) =>
         Enum.IsDefined(source) ? source : throw new DomainException("Say where the money came from.");

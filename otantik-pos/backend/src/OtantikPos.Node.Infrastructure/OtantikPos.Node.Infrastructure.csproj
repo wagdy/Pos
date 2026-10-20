@@ -13,6 +13,7 @@
   <ItemGroup>
     <ProjectReference Include="..\OtantikPos.Ordering.Application\OtantikPos.Ordering.Application.csproj" />
     <ProjectReference Include="..\OtantikPos.Inventory.Application\OtantikPos.Inventory.Application.csproj" />
+    <ProjectReference Include="..\OtantikPos.Hr.Domain\OtantikPos.Hr.Domain.csproj" />
   </ItemGroup>
 
   <ItemGroup>

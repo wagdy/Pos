@@ -18,6 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\shared\Otantik.SharedKernel\Otantik.SharedKernel.csproj" />
     <ProjectReference Include="..\..\otantik-pos\backend\src\OtantikPos.Inventory.Domain\OtantikPos.Inventory.Domain.csproj" />
+    <ProjectReference Include="..\..\otantik-pos\backend\src\OtantikPos.Hr.Domain\OtantikPos.Hr.Domain.csproj" />
   </ItemGroup>
 
   <ItemGroup>

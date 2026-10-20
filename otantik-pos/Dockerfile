@@ -28,6 +28,7 @@ COPY otantik-pos/backend/src/OtantikPos.Ordering.Domain/OtantikPos.Ordering.Doma
 COPY otantik-pos/backend/src/OtantikPos.Ordering.Application/OtantikPos.Ordering.Application.csproj otantik-pos/backend/src/OtantikPos.Ordering.Application/
 COPY otantik-pos/backend/src/OtantikPos.Inventory.Domain/OtantikPos.Inventory.Domain.csproj otantik-pos/backend/src/OtantikPos.Inventory.Domain/
 COPY otantik-pos/backend/src/OtantikPos.Inventory.Application/OtantikPos.Inventory.Application.csproj otantik-pos/backend/src/OtantikPos.Inventory.Application/
+COPY otantik-pos/backend/src/OtantikPos.Hr.Domain/OtantikPos.Hr.Domain.csproj otantik-pos/backend/src/OtantikPos.Hr.Domain/
 COPY otantik-pos/backend/src/OtantikPos.Node.Infrastructure/OtantikPos.Node.Infrastructure.csproj otantik-pos/backend/src/OtantikPos.Node.Infrastructure/
 COPY otantik-pos/backend/src/OtantikPos.Node.Api/OtantikPos.Node.Api.csproj otantik-pos/backend/src/OtantikPos.Node.Api/
 RUN dotnet restore otantik-pos/backend/src/OtantikPos.Node.Api/OtantikPos.Node.Api.csproj
