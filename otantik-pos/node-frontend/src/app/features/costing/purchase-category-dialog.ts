@@ -11,7 +11,8 @@ import { CategoryKind, CostingApi, ExpenseLine, PurchaseCategory, categoryKindLa
 import { errorMessage } from '../../core/http/error-message';
 
 // A category to change, or none for a new one; fromItem when added from a material's or an
-// expense's form, which then goes into it, and kind the kind that form files (then not asked).
+// expense's form, which then goes into it. kind: the kind a new one is, given by that form or by
+// the categories page's tab, and then not asked.
 export interface PurchaseCategoryDialogData {
   category?: PurchaseCategory;
   fromItem?: boolean;
@@ -29,6 +30,10 @@ export interface PurchaseCategoryDialogData {
     <h2 mat-dialog-title>
       @if (data.category) {
         Edit category <span class="ar">تعديل الفئة</span>
+      } @else if (data.kind === 'Expenses') {
+        Add a general expenses category <span class="ar">إضافة قسم مصروفات</span>
+      } @else if (data.kind === 'RawMaterials') {
+        Add a raw materials category <span class="ar">إضافة قسم خامات</span>
       } @else {
         Add a purchase category <span class="ar">إضافة فئة مشتريات</span>
       }
@@ -38,17 +43,19 @@ export interface PurchaseCategoryDialogData {
         <p class="hint">Added now, the item goes into it.</p>
       }
       <form [formGroup]="form" (ngSubmit)="save()" id="purchase-category-form" class="form">
-        <div class="kind">
-          <span class="kind-label" id="category-kind-label">Is this category for · هذا القسم لـ</span>
-          <mat-radio-group formControlName="kind" aria-labelledby="category-kind-label">
-            @for (k of kinds; track k) {
-              <mat-radio-button [value]="k">{{ kindLabels[k].en }} · {{ kindLabels[k].ar }}</mat-radio-button>
+        @if (!data.kind || data.category) {
+          <div class="kind">
+            <span class="kind-label" id="category-kind-label">Is this category for · هذا القسم لـ</span>
+            <mat-radio-group formControlName="kind" aria-labelledby="category-kind-label">
+              @for (k of kinds; track k) {
+                <mat-radio-button [value]="k">{{ kindLabels[k].en }} · {{ kindLabels[k].ar }}</mat-radio-button>
+              }
+            </mat-radio-group>
+            @if (data.category?.isGeneral) {
+              <span class="hint">Where anything not yet sorted goes: it stays {{ kindLabels[data.category!.kind].en.toLowerCase() }}.</span>
             }
-          </mat-radio-group>
-          @if (data.category?.isGeneral) {
-            <span class="hint">Where anything not yet sorted goes: it stays {{ kindLabels[data.category!.kind].en.toLowerCase() }}.</span>
-          }
-        </div>
+          </div>
+        }
         <mat-form-field>
           <mat-label>Name · الاسم</mat-label>
           <input matInput formControlName="name" maxlength="100" placeholder="Utilities" cdkFocusInitial />

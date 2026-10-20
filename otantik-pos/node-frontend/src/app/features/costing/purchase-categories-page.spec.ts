@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { MatDialog } from '@angular/material/dialog';
+import { Router, provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { CostingApi, PurchaseCategory } from '../../core/costing/costing.api';
 import { NotifyService } from '../../core/ui/notify.service';
@@ -25,62 +26,94 @@ const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
 describe('the purchase categories', () => {
   const purchaseCategories = vi.fn();
-  const deletePurchaseCategory = vi.fn();
   const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
   const approvals = { refresh: vi.fn(), pendingFor: vi.fn() };
 
-  async function render() {
+  // On a tab: none given is raw materials.
+  async function render(tab?: string) {
     TestBed.configureTestingModule({
       providers: [
-        { provide: CostingApi, useValue: { purchaseCategories, deletePurchaseCategory } },
+        provideRouter([]),
+        { provide: CostingApi, useValue: { purchaseCategories } },
         { provide: MatDialog, useValue: { open } },
         { provide: NotifyService, useValue: notify },
         { provide: Approvals, useValue: approvals },
       ],
     });
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     const fixture = TestBed.createComponent(PurchaseCategoriesPage);
+    if (tab) {
+      fixture.componentRef.setInput('tab', tab);
+    }
+    await fixture.whenStable();
+    fixture.detectChanges();
     await fixture.whenStable();
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
     const rows = () => {
       fixture.detectChanges();
-      return [...el.querySelectorAll('tbody tr')];
+      return [...el.querySelectorAll('mat-tab-body.mat-mdc-tab-body-active tbody tr')];
     };
+    const cells = () => rows().map((r) => [...r.querySelectorAll('td')].slice(0, -1).map(text));
+    const headings = () => [...el.querySelectorAll('mat-tab-body.mat-mdc-tab-body-active thead th')].map(text);
     const button = (row: Element, label: string) =>
       [...row.querySelectorAll('button')].find((b) => text(b).includes(label) || b.getAttribute('aria-label')?.startsWith(label));
-    return { rows, button, page: fixture.componentInstance as unknown as Record<string, any> };
+    const tabs = () => [...el.querySelectorAll('[role=tab]')].map(text);
+    return { el, rows, cells, headings, button, tabs, navigate, page: fixture.componentInstance as unknown as Record<string, any> };
   }
 
   beforeEach(() => {
     purchaseCategories.mockReset().mockReturnValue(of([general, dairy, rent, empty]));
-    deletePurchaseCategory.mockReset().mockReturnValue(of(undefined));
     open.mockReset();
     notify.info.mockReset();
     approvals.pendingFor.mockReset();
   });
 
-  it('lists each with its kind, where its expenses count and what is filed under it; General is never deleted', async () => {
-    const { rows, button } = await render();
+  it('puts the raw materials categories on one tab, with what they hold; General is never deleted', async () => {
+    const { cells, headings, tabs, rows, button } = await render();
 
-    expect(rows().map((r) => [...r.querySelectorAll('td')].slice(0, 6).map(text))).toEqual([
-      ['General Default · افتراضي', 'عام', 'Raw materialsخامات ومشتريات', '—', '2', '0'],
-      ['Dairy', '—', 'Raw materialsخامات ومشتريات', '—', '3', '0'],
-      ['Rent', 'إيجار', 'General expensesمصروفات عمومية', 'Occupation (rent)الإشغال (الإيجار)', '0', '1'],
-      ['Packaging', '—', 'Raw materialsخامات ومشتريات', '—', '0', '0'],
+    expect(tabs()).toEqual(['Purchases & raw materialsمشتريات وخامات3', 'General expensesمصروفات عمومية1']);
+    expect(headings()).toEqual(['Categoryالفئة', 'Arabic nameالاسم بالعربية', 'Raw materialsالخامات', 'Actions']);
+    expect(cells()).toEqual([
+      ['General Default · افتراضي', 'عام', '2'],
+      ['Dairy', '—', '3'],
+      ['Packaging', '—', '0'],
     ]);
     expect(button(rows()[0], 'Delete')).toBeUndefined();
     expect(button(rows()[1], 'Delete')).toBeDefined();
   });
 
-  it('adds and edits in the category dialog', async () => {
-    open.mockReturnValue({ afterClosed: () => of(rent) });
-    const { page, rows, button } = await render();
+  it('puts the general expenses categories on the other, with where their expenses count', async () => {
+    const { cells, headings } = await render('expenses');
 
-    await page['add']();
-    expect(open).toHaveBeenLastCalledWith(PurchaseCategoryDialog, expect.objectContaining({ data: {} }));
-    button(rows()[2], 'Edit')!.click();
-    expect(open).toHaveBeenLastCalledWith(PurchaseCategoryDialog, expect.objectContaining({ data: { category: rent } }));
+    expect(headings()).toEqual([
+      'Categoryالفئة', 'Arabic nameالاسم بالعربية', 'Expenses count asتُحتسب المصروفات ضمن', 'Expense itemsبنود المصروفات', 'Actions',
+    ]);
+    expect(cells()).toEqual([['Rent', 'إيجار', 'Occupation (rent)الإشغال (الإيجار)', '1']]);
+  });
+
+  it('keeps the tab in the address', async () => {
+    const { page, navigate } = await render();
+
+    page['selectTab'](1);
+    expect(navigate).toHaveBeenLastCalledWith([], expect.objectContaining({ queryParams: { tab: 'expenses' }, replaceUrl: true }));
+    page['selectTab'](0);
+    expect(navigate).toHaveBeenLastCalledWith([], expect.objectContaining({ queryParams: { tab: null } }));
+  });
+
+  it('adds one of the tab’s kind, and edits in the category dialog', async () => {
+    open.mockReturnValue({ afterClosed: () => of(rent) });
+    const raw = await render();
+    [...raw.el.querySelectorAll<HTMLButtonElement>('mat-tab-body.mat-mdc-tab-body-active button')].find((b) => text(b).includes('Add category'))!.click();
+    expect(open).toHaveBeenLastCalledWith(PurchaseCategoryDialog, expect.objectContaining({ data: { kind: 'RawMaterials' } }));
+    raw.button(raw.rows()[1], 'Edit')!.click();
+    expect(open).toHaveBeenLastCalledWith(PurchaseCategoryDialog, expect.objectContaining({ data: { category: dairy } }));
+    TestBed.resetTestingModule();
+
+    const expenses = await render('expenses');
+    [...expenses.el.querySelectorAll<HTMLButtonElement>('mat-tab-body.mat-mdc-tab-body-active button')].find((b) => text(b).includes('Add category'))!.click();
+    expect(open).toHaveBeenLastCalledWith(PurchaseCategoryDialog, expect.objectContaining({ data: { kind: 'Expenses' } }));
   });
 
   it('deletes one in the delete dialog, with the rest of the list to move what is in it to, and reads the list again', async () => {
@@ -112,10 +145,12 @@ describe('the purchase categories', () => {
 
   it('says when one holds items of the other kind, filed there before the kinds were kept apart', async () => {
     purchaseCategories.mockReturnValue(of([general, { ...dairy, expenseItems: 1, misplaced: 1 }, { ...rent, materials: 2, misplaced: 2 }]));
-    const { rows } = await render();
+    const raw = await render();
+    expect(text(raw.rows()[1].querySelector('.misplaced')!)).toBe('1 expense item does not belong here: move or convert it.');
+    expect(raw.rows()[0].querySelector('.misplaced')).toBeNull();
+    TestBed.resetTestingModule();
 
-    expect(text(rows()[1].querySelector('.misplaced')!)).toBe('1 expense item does not belong here: move or convert it.');
-    expect(text(rows()[2].querySelector('.misplaced')!)).toBe('2 raw materials do not belong here: move or convert them.');
-    expect(rows()[0].querySelector('.misplaced')).toBeNull();
+    const expenses = await render('expenses');
+    expect(text(expenses.rows()[0].querySelector('.misplaced')!)).toBe('2 raw materials do not belong here: move or convert them.');
   });
 });
