@@ -210,6 +210,55 @@ public class HrApiTests
     }
 
     [Fact]
+    public async Task A_suspended_day_waits_for_the_managers_punch_out_and_a_penalty_comes_off_the_pay()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var today = await TodayAsync(manager);
+        var day = today.AddDays(-3);
+        var month = new DateOnly(day.Year, day.Month, 1);
+        var hassan = await HireAsync(manager, "Hassan", today.AddMonths(-2));
+        await Json(await manager.PostAsJsonAsync("/api/hr/punches", new
+        {
+            punchId = Guid.NewGuid(), employeeId = hassan, punchedAt = $"{Iso(day)}T10:00:00", reason = "The device was down",
+        }, Cancel));
+
+        // In at 10:00, never out: three days on, suspended, and listed for a manager.
+        string Suspended = $"/api/hr/attendance/suspended?from={Iso(day.AddDays(-1))}&to={Iso(today)}";
+        var waiting = (await Json(await accountant.GetAsync(Suspended, Cancel))).EnumerateArray().Single();
+        Assert.Equal(("Hassan", Iso(day), "Suspended"), (waiting.GetProperty("employee").GetProperty("name").GetString(),
+            waiting.GetProperty("day").GetProperty("date").GetString(), waiting.GetProperty("day").GetProperty("status").GetString()));
+
+        // Resolved by the punch-out: after the punch-in, by a manager.
+        Task<HttpResponseMessage> Resolve(HttpClient client, string time) => client.PostAsJsonAsync("/api/hr/attendance/resolve", new
+        {
+            punchId = Guid.NewGuid(), employeeId = hassan, date = Iso(day), punchedOutAt = $"{Iso(day)}T{time}", reason = "Forgot to scan out",
+        }, Cancel);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Resolve(accountant, "19:00:00")).StatusCode);
+        Assert.Contains("comes after the punch-in at 10:00", await Problem(await Resolve(manager, "09:30:00")));
+        var resolved = await Json(await Resolve(manager, "19:00:00"));
+        Assert.Equal(("Worked", 540), (resolved.GetProperty("status").GetString(), resolved.GetProperty("workedMinutes").GetInt32()));
+        Assert.Contains("is not suspended", await Problem(await Resolve(manager, "20:00:00")));
+        Assert.Empty((await Json(await accountant.GetAsync(Suspended, Cancel))).EnumerateArray());
+
+        // Two hours' administrative penalty, a manager's: on the day, and off the pay at 20 an hour.
+        string Penalty = $"/api/hr/employees/{hassan}/days/{Iso(day)}/penalty";
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.PutAsJsonAsync(Penalty, new { hours = 2, reason = "Left the walk-in open" }, Cancel)).StatusCode);
+        Assert.Contains("Say why", await Problem(await manager.PutAsJsonAsync(Penalty, new { hours = 2 }, Cancel)));
+        Assert.Equal(HttpStatusCode.NoContent, (await manager.PutAsJsonAsync(Penalty, new { hours = 2, reason = "Left the walk-in open" }, Cancel)).StatusCode);
+        var marked = (await Json(await accountant.GetAsync($"/api/hr/attendance?date={Iso(day)}", Cancel))).GetProperty("employees")[0].GetProperty("day");
+        Assert.Equal((2m, "Left the walk-in open"), (marked.GetProperty("penaltyHours").GetDecimal(), marked.GetProperty("penaltyReason").GetString()));
+        async Task<JsonElement> Figures() => (await Json(await accountant.GetAsync($"/api/hr/payroll?month={Iso(month)}", Cancel))).GetProperty("slips")[0].GetProperty("figures");
+        var figures = await Figures();
+        Assert.Equal((2m, 40m), (figures.GetProperty("administrativePenaltyHours").GetDecimal(), figures.GetProperty("administrativePenalty").GetDecimal()));
+
+        // Taken off again.
+        Assert.Equal(HttpStatusCode.NoContent, (await manager.PutAsJsonAsync(Penalty, new { hours = (decimal?)null }, Cancel)).StatusCode);
+        Assert.Equal(0m, (await Figures()).GetProperty("administrativePenalty").GetDecimal());
+    }
+
+    [Fact]
     public async Task The_attendance_device_is_refused_until_approved_and_its_punches_make_the_day()
     {
         await using var api = await TestApi.StartAsync();
@@ -247,8 +296,8 @@ public class HrApiTests
             report.GetProperty("employees").EnumerateArray().Single(e => e.GetProperty("employee").GetProperty("name").GetString() == name).GetProperty("day");
         var report = await Attendance();
         var hassanDay = Of(report, "Hassan");
-        // Four minutes late with no grace; half an hour over at the end.
-        Assert.Equal(("Worked", 566, 4, 30, 2), (hassanDay.GetProperty("status").GetString(), hassanDay.GetProperty("workedMinutes").GetInt32(),
+        // Four minutes late with no grace; past nine hours worked, 26 minutes over.
+        Assert.Equal(("Worked", 566, 4, 26, 2), (hassanDay.GetProperty("status").GetString(), hassanDay.GetProperty("workedMinutes").GetInt32(),
             hassanDay.GetProperty("lateMinutes").GetInt32(), hassanDay.GetProperty("overtimeMinutes").GetInt32(), hassanDay.GetProperty("punches").GetArrayLength()));
         Assert.Equal(["99"], report.GetProperty("unassigned").EnumerateArray().Select(p => p.GetProperty("deviceUserId").GetString()));
 
@@ -256,7 +305,7 @@ public class HrApiTests
         var karim = await HireAsync(manager, "Karim", today.AddMonths(-2), "99");
         report = await Attendance();
         Assert.Empty(report.GetProperty("unassigned").EnumerateArray());
-        Assert.Equal("MissingPunch", Of(report, "Karim").GetProperty("status").GetString());
+        Assert.Equal("Suspended", Of(report, "Karim").GetProperty("status").GetString());
 
         // The missing one entered by a manager, with the reason; an accountant cannot.
         object Punch(string time) => new { punchId = Guid.NewGuid(), employeeId = karim, punchedAt = $"{Iso(day)}T{time}", reason = "Forgot to scan out" };
@@ -268,7 +317,7 @@ public class HrApiTests
         // A punch ignored stops counting, and counts again restored.
         var evening = hassanDay.GetProperty("punches").EnumerateArray().Single(p => p.GetProperty("punchedAt").GetString()!.EndsWith("19:30:00")).GetProperty("id").GetGuid();
         await Json(await manager.PostAsJsonAsync($"/api/hr/punches/{evening}/ignore", new { reason = "Test scan" }, Cancel));
-        Assert.Equal("MissingPunch", Of(await Attendance(), "Hassan").GetProperty("status").GetString());
+        Assert.Equal("Suspended", Of(await Attendance(), "Hassan").GetProperty("status").GetString());
         await Json(await manager.PostAsync($"/api/hr/punches/{evening}/restore", null, Cancel));
 
         // A working day (a swap) is only ever a weekly day off; Hassan has none.

@@ -82,6 +82,20 @@ internal sealed class DayMarkConfiguration : IEntityTypeConfiguration<DayMark>
     }
 }
 
+internal sealed class AdministrativePenaltyConfiguration : IEntityTypeConfiguration<AdministrativePenalty>
+{
+    public void Configure(EntityTypeBuilder<AdministrativePenalty> builder)
+    {
+        builder.ToTable("AdministrativePenalties", NodeDbContext.HrSchema);
+        builder.Property(p => p.Hours).HasPrecision(5, 2);
+        builder.Property(p => p.Reason).HasMaxLength(AdministrativePenalty.MaxReasonLength);
+        builder.Property(p => p.SetBy).HasMaxLength(200);
+        builder.HasOne<Employee>().WithMany().HasForeignKey(p => p.EmployeeId).OnDelete(DeleteBehavior.Restrict);
+        // One a day: changed, not added to.
+        builder.HasIndex(p => new { p.EmployeeId, p.Date }).IsUnique();
+    }
+}
+
 internal sealed class DailyRecordConfiguration : IEntityTypeConfiguration<DailyRecord>
 {
     public void Configure(EntityTypeBuilder<DailyRecord> builder)
@@ -90,6 +104,7 @@ internal sealed class DailyRecordConfiguration : IEntityTypeConfiguration<DailyR
         builder.Property(r => r.Status).IsEnumName();
         builder.Property(r => r.FirstIn).HasColumnType("timestamp without time zone");
         builder.Property(r => r.LastOut).HasColumnType("timestamp without time zone");
+        builder.Property(r => r.AdministrativePenaltyHours).HasPrecision(5, 2);
         builder.HasOne<Employee>().WithMany().HasForeignKey(r => r.EmployeeId).OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(r => new { r.EmployeeId, r.Date }).IsUnique();
     }

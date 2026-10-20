@@ -17,7 +17,7 @@ public enum PayrollSlipStatus
 // are the timesheet's; the money is rounded to the piastre.
 //
 // Net = base salary + incentives + leave allowances + days off worked + overtime
-//     − advances − last month's shortfall − lateness − absence.
+//     − advances − last month's shortfall − lateness − absence − administrative penalties.
 //
 // Leave allowances are the ones entered; a day off worked earns its own, worked out from the
 // timesheet (DaysOffWorkedPay): a day's pay for half a shift or more, its hours for less.
@@ -40,19 +40,25 @@ public sealed record PayrollFigures(
     decimal BroughtForward,
     int DaysWorked,
     int DaysOffWorked,
+    // Days suspended: a punch-in with no punch-out, for a manager to put right.
     int MissingPunchDays,
     int OpenDays,
-    decimal DaysOffWorkedPay = 0)
+    decimal DaysOffWorkedPay = 0,
+    // A manager's administrative penalties (جزاءات إدارية), in hours, and their deduction at the
+    // hourly rate.
+    decimal AdministrativePenaltyHours = 0,
+    decimal AdministrativePenalty = 0)
 {
     public decimal Gross => BaseSalary + Incentives + LeaveAllowances + DaysOffWorkedPay + OvertimePay;
-    public decimal Deductions => Advances + BroughtForward + LatenessPenalty + AbsencePenalty;
+    public decimal Deductions => Advances + BroughtForward + LatenessPenalty + AbsencePenalty + AdministrativePenalty;
     public decimal Net => Gross - Deductions;
     public decimal NetPayable => Net > 0 ? Net : 0;
     public decimal CarriedForward => Net < 0 ? -Net : 0;
 
     // What the month's work cost the restaurant: the pay less what was deducted for time not
-    // worked. Advances and last month's shortfall settle what was owed; they cost nothing.
-    public decimal WagesCost => Gross - LatenessPenalty - AbsencePenalty;
+    // worked and for penalties. Advances and last month's shortfall settle what was owed; they
+    // cost nothing.
+    public decimal WagesCost => Gross - LatenessPenalty - AbsencePenalty - AdministrativePenalty;
 }
 
 public static class PayrollCalculator
@@ -101,6 +107,7 @@ public static class PayrollCalculator
         var overtime = counted.Sum(d => d?.OvertimeMinutes ?? 0);
         var shortMinutes = counted.Sum(d => d?.ShortMinutes ?? 0);
         var absent = Count(DayStatus.Absent);
+        var penaltyHours = counted.Sum(d => d?.PenaltyHours ?? 0);
         var daysOffWorkedPay = counted
             .Where(d => d?.Status == DayStatus.WorkedOnDayOff)
             .Sum(d => DayOffWorkedPay(employee, d!.WorkedMinutes));
@@ -122,9 +129,11 @@ public static class PayrollCalculator
             Money(broughtForward),
             Count(DayStatus.Worked) + Count(DayStatus.WorkedOnDayOff),
             Count(DayStatus.WorkedOnDayOff),
-            Count(DayStatus.MissingPunch),
+            Count(DayStatus.Suspended),
             counted.Count(d => d is null || d.Status == DayStatus.Open),
-            Money(daysOffWorkedPay));
+            Money(daysOffWorkedPay),
+            penaltyHours,
+            Money(penaltyHours * employee.HourlyRate));
     }
 
     private static decimal Money(decimal amount) => Math.Round(amount, 2, MidpointRounding.AwayFromZero);
@@ -180,7 +189,7 @@ public sealed class PayrollSlip : AggregateRoot
             throw new DomainException("The month is not over yet: a slip is finalized once all its days are.");
         if (Figures.MissingPunchDays > 0)
             throw new DomainException(
-                $"{Figures.MissingPunchDays} {(Figures.MissingPunchDays == 1 ? "day is" : "days are")} missing a punch: enter it, or ignore the extra one, first.");
+                $"{Figures.MissingPunchDays} {(Figures.MissingPunchDays == 1 ? "day is" : "days are")} suspended, a punch-in with no punch-out: enter the punch-out, or ignore the stray punch, first.");
         Status = PayrollSlipStatus.Finalized;
         FinalizedAtUtc = DateTime.UtcNow;
         FinalizedBy = finalizedBy;

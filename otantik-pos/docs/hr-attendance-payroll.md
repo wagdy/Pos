@@ -26,11 +26,14 @@ and their monthly pay. This page is the design.
     but not relied on.
   - Two scans within 3 minutes count as one (a setting).
 - **Measured against the shift:**
-  - **late**: from the shift's start to the first punch, unless within the grace (a setting,
-    0 by default). Past the grace, it counts from the shift's start;
+  - **late**: from the shift's start (the employee's scheduled start) to the first punch,
+    unless within the grace (a setting, 0 by default). Past the grace, it counts from the
+    shift's start, however many hours are worked;
   - **leaving early**: from the last punch to the shift's end;
   - **away**: time punched out between pairs while the shift ran;
-  - **overtime**: time worked after the shift's end. Coming in early is not overtime.
+  - **overtime**: time worked after the shift's end, once nine hours are worked. Coming in
+    early is not overtime, and neither is staying late to make up for coming in late (in at
+    10:00 for 08:00, out at 19:00: two hours late, no overtime).
   - So late, early, away and the time worked within the shift add up to nine hours.
 - **Days:**
   - no punches on a working day is an **absence**, unless a manager marked it as leave or a
@@ -42,9 +45,12 @@ and their monthly pay. This page is the design.
   - a weekly day off worked in exchange for another is marked a **working day** (a swap): a
     normal shift, late and overtime counted, no allowance; the day taken instead is marked a
     day off;
-  - an odd number of punches is a **missing punch**: the month's slip cannot be finalized
-    until a manager enters the missing one (a manual punch, with a reason) or ignores the
-    extra one.
+  - a punch-in left **18 hours** without its punch-out is an abandoned shift: the day is
+    **Suspended**, pending a manager, and its hours are not worked out. A manager resolves it by
+    entering the punch-out (after the punch-in, within the day), or by ignoring the stray punch.
+    The month's slip cannot be finalized while a day is suspended;
+  - a manager can put an **administrative penalty** (جزاء إداري) on a day: hours, with the
+    reason, one a day. It is deducted on the payslip at the hourly rate.
 - **Advances (سلفيات)** leave the safe or a day's takings at once, as a safe entry of kind
   `EmployeeAdvance` that names the employee and the payroll month it is deducted in.
   - **Not an expense:** the employee owes it until their payslip deducts it. The wages are
@@ -57,7 +63,7 @@ and their monthly pay. This page is the design.
 
   ```
   Net = base salary + incentives + leave allowances + days off worked + overtime pay
-        − advances − last month's shortfall − lateness − absence
+        − advances − last month's shortfall − lateness − absence − administrative penalties
   ```
 
   - Overtime and lateness (late + early + away) are at the minute rate; an absence costs a
@@ -169,7 +175,10 @@ unit with a capture of its first requests before they are fixed.
 | `GET /api/hr/attendance?date=` | Everyone's day, plus punches under numbers nobody has |
 | `GET /api/hr/employees/{id}/timesheet?month=` | One employee's month, day by day, with totals |
 | `POST /api/hr/punches`, `…/{id}/ignore`, `…/{id}/restore` | A manual punch with its reason; ignoring or restoring one |
-| `PUT /api/hr/employees/{id}/days/{date}` | Leave or day off; with no kind, the mark taken off |
+| `PUT /api/hr/employees/{id}/days/{date}` | Leave, day off or working day (a swap); with no kind, the mark taken off |
+| `GET /api/hr/attendance/suspended?from=&to=` | The suspended days, everyone's: the corrections dashboard |
+| `POST /api/hr/attendance/resolve` | A suspended day's punch-out, from a manager: the day worked out again |
+| `PUT /api/hr/employees/{id}/days/{date}/penalty` | An administrative penalty in hours, with the reason; with no hours, taken off |
 | `GET`/`PUT /api/hr/settings` | The grace, and how close two scans are to be one |
 | `GET /api/hr/devices`, `POST …/{id}/approve`, `…/revoke` | The devices, approved by name |
 | `GET /api/hr/payroll?month=` | Every slip as it stands |

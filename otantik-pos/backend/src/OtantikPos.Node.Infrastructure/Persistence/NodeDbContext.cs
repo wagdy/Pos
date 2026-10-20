@@ -85,6 +85,7 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
     public DbSet<AttendanceDevice> AttendanceDevices => Set<AttendanceDevice>();
     public DbSet<AttendanceLog> AttendanceLogs => Set<AttendanceLog>();
     public DbSet<DayMark> DayMarks => Set<DayMark>();
+    public DbSet<AdministrativePenalty> AdministrativePenalties => Set<AdministrativePenalty>();
     public DbSet<DailyRecord> DailyRecords => Set<DailyRecord>();
     public DbSet<PayrollAdjustment> PayrollAdjustments => Set<PayrollAdjustment>();
     public DbSet<PayrollSlip> PayrollSlips => Set<PayrollSlip>();

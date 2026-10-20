@@ -44,6 +44,15 @@ public interface IDayMarkRepository : IRepository<DayMark>
     void Remove(DayMark mark);
 }
 
+public interface IAdministrativePenaltyRepository : IRepository<AdministrativePenalty>
+{
+    Task<AdministrativePenalty?> GetAsync(Guid employeeId, DateOnly date, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<AdministrativePenalty>> GetBetweenAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default);
+
+    void Remove(AdministrativePenalty penalty);
+}
+
 public interface IDailyRecordRepository : IRepository<DailyRecord>
 {
     // Tracked: worked out again when a slip is.

@@ -76,6 +76,22 @@ internal sealed class DayMarkRepository(NodeDbContext db) : IDayMarkRepository
         await db.DayMarks.AsNoTracking().Where(m => m.Date >= from && m.Date <= to).ToListAsync(cancellationToken);
 }
 
+internal sealed class AdministrativePenaltyRepository(NodeDbContext db) : IAdministrativePenaltyRepository
+{
+    public Task<AdministrativePenalty?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.AdministrativePenalties.SingleOrDefaultAsync(p => p.Id == id, cancellationToken);
+
+    public void Add(AdministrativePenalty aggregate) => db.AdministrativePenalties.Add(aggregate);
+
+    public void Remove(AdministrativePenalty penalty) => db.AdministrativePenalties.Remove(penalty);
+
+    public Task<AdministrativePenalty?> GetAsync(Guid employeeId, DateOnly date, CancellationToken cancellationToken = default) =>
+        db.AdministrativePenalties.SingleOrDefaultAsync(p => p.EmployeeId == employeeId && p.Date == date, cancellationToken);
+
+    public async Task<IReadOnlyList<AdministrativePenalty>> GetBetweenAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default) =>
+        await db.AdministrativePenalties.AsNoTracking().Where(p => p.Date >= from && p.Date <= to).ToListAsync(cancellationToken);
+}
+
 internal sealed class DailyRecordRepository(NodeDbContext db) : IDailyRecordRepository
 {
     public Task<DailyRecord?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>

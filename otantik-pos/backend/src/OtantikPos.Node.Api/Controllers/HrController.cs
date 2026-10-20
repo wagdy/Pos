@@ -83,6 +83,31 @@ public sealed class HrController(ISender sender) : ControllerBase
         return NoContent();
     }
 
+    // The days suspended for a manager: a punch-in left 18 hours without its punch-out. From the
+    // first of last month to today unless asked otherwise.
+    [HttpGet("attendance/suspended")]
+    public Task<IReadOnlyList<EmployeeDayDto>> GetSuspended([FromQuery] DateOnly? from, [FromQuery] DateOnly? to, CancellationToken cancellationToken)
+    {
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        return sender.Send(new GetSuspendedDaysQuery(from ?? new DateOnly(today.Year, today.Month, 1).AddMonths(-1), to ?? today), cancellationToken);
+    }
+
+    // A suspended day resolved by the manager's punch-out: the day worked out again from it.
+    [HttpPost("attendance/resolve")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<AttendanceDayDto> Resolve(ResolveDayRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new ResolveSuspendedDayCommand(
+            request.PunchId, request.EmployeeId, request.Date, request.PunchedOutAt, request.Reason, StaffName), cancellationToken);
+
+    // A manager's administrative penalty on a day, in hours, with the reason; with no hours, taken off.
+    [HttpPut("employees/{employeeId:guid}/days/{date}/penalty")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public async Task<IActionResult> SetPenalty(Guid employeeId, DateOnly date, PenaltyRequest request, CancellationToken cancellationToken)
+    {
+        await sender.Send(new SetAdministrativePenaltyCommand(employeeId, date, request.Hours, request.Reason, StaffName), cancellationToken);
+        return NoContent();
+    }
+
     [HttpGet("settings")]
     public Task<AttendancePolicyDto> GetSettings(CancellationToken cancellationToken) => sender.Send(new GetAttendanceSettingsQuery(), cancellationToken);
 
@@ -170,6 +195,10 @@ public sealed record ManualPunchRequest(Guid PunchId, Guid EmployeeId, DateTime 
 public sealed record IgnorePunchRequest(string Reason);
 
 public sealed record DayMarkRequest(DayMarkKind? Kind, string? Notes = null);
+
+public sealed record ResolveDayRequest(Guid PunchId, Guid EmployeeId, DateOnly Date, DateTime PunchedOutAt, string Reason);
+
+public sealed record PenaltyRequest(decimal? Hours, string? Reason = null);
 
 public sealed record ApproveDeviceRequest(string? Name);
 

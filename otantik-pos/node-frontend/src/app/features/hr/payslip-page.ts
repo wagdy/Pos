@@ -193,6 +193,12 @@ export class FinalizeDialog {
               <th>− Absence <span class="ar">خصم الغياب</span><div class="how">{{ f.absentDays }} {{ f.absentDays === 1 ? 'day' : 'days' }} at {{ s.employee.dailyRate | money }}</div></th>
               <td>{{ f.absencePenalty | money }}</td>
             </tr>
+            @if (f.administrativePenalty) {
+              <tr class="minus">
+                <th>− Administrative penalties <span class="ar">جزاءات إدارية</span><div class="how">{{ f.administrativePenaltyHours }} hours at {{ s.employee.hourlyRate | money }}</div></th>
+                <td>{{ f.administrativePenalty | money }}</td>
+              </tr>
+            }
             <tr class="total">
               <th>= Net payable <span class="ar">صافي المستحق</span></th>
               <td>{{ f.netPayable | money }}</td>
@@ -210,7 +216,7 @@ export class FinalizeDialog {
           <div><dt>Days worked</dt><dd>{{ f.daysWorked }}</dd></div>
           <div><dt>Days off worked</dt><dd>{{ f.daysOffWorked }}</dd></div>
           <div><dt>Absent</dt><dd>{{ f.absentDays }}</dd></div>
-          <div><dt>Missing a punch</dt><dd [class.warn]="f.missingPunchDays > 0">{{ f.missingPunchDays }}</dd></div>
+          <div><dt>Suspended</dt><dd [class.warn]="f.missingPunchDays > 0">{{ f.missingPunchDays }}</dd></div>
           @if (f.openDays) {
             <div><dt>Not over yet</dt><dd>{{ f.openDays }}</dd></div>
           }
@@ -476,7 +482,7 @@ export class PayslipPage {
     }
     if (s.figures.missingPunchDays > 0) {
       const n = s.figures.missingPunchDays;
-      return `${n} ${n === 1 ? 'day is' : 'days are'} missing a punch: put ${n === 1 ? 'it' : 'them'} right on the timesheet first.`;
+      return `${n} ${n === 1 ? 'day is' : 'days are'} suspended, a punch-in with no punch-out: enter the punch-out on the attendance first.`;
     }
     return null;
   }

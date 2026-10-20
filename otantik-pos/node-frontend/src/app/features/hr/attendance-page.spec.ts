@@ -33,7 +33,8 @@ function day(date: string, extra: Partial<AttendanceDay> = {}): AttendanceDay {
   return {
     date, status: 'Worked', shiftStartsAt: `${date}T16:00:00`, shiftEndsAt: `${tomorrow}T01:00:00`, firstIn: `${date}T16:12:00`,
     lastOut: `${tomorrow}T01:20:00`, workedMinutes: 548, lateMinutes: 12, earlyLeaveMinutes: 0, awayMinutes: 0, overtimeMinutes: 20, shortMinutes: 12,
-    isWeeklyDayOff: false, mark: null, markNotes: null, punches: [punch('p1', `${date}T16:12:00`), punch('p2', `${tomorrow}T01:20:00`)], ...extra,
+    isWeeklyDayOff: false, mark: null, markNotes: null, punches: [punch('p1', `${date}T16:12:00`), punch('p2', `${tomorrow}T01:20:00`)],
+    penaltyHours: 0, penaltyReason: null, penaltySetBy: null, ...extra,
   };
 }
 
@@ -45,7 +46,7 @@ const report: AttendanceDayReport = {
   policy: { graceMinutes: 0, doubleScanMinutes: 3 },
   totals: { present: 1, late: 1, absent: 1, missingPunch: 0, offOrOnLeave: 0, overtimeMinutes: 20 },
   employees: [
-    { employee: hassan, day: day('2026-09-21') },
+    { employee: hassan, day: day('2026-09-21', { penaltyHours: 2, penaltyReason: 'Left the walk-in open', penaltySetBy: 'Omar' }) },
     { employee: mona, day: day('2026-09-21', { status: 'Absent', firstIn: null, lastOut: null, workedMinutes: 0, lateMinutes: 0, overtimeMinutes: 0, punches: [] }) },
   ],
   unassigned: [punch('u1', '2026-09-21T11:00:00', { employeeId: null, deviceUserId: '99' })],
@@ -112,11 +113,12 @@ describe('the attendance', () => {
 
     expect(attendance).toHaveBeenCalledWith('2026-09-21');
     expect([...el.querySelectorAll('.totals .chip')].map(text)).toEqual([
-      '1 came in · حضور', '1 late · تأخير', '1 absent · غياب', '0 missing a punch · بصمة ناقصة', '0 off or on leave · راحة وإجازات', '20m overtime · إضافي',
+      '1 came in · حضور', '1 late · تأخير', '1 absent · غياب', '0 suspended · موقوف للمراجعة', '0 off or on leave · راحة وإجازات', '20m overtime · إضافي',
     ]);
     const rows = [...el.querySelectorAll('tbody tr')];
     expect(cells(rows[0])).toEqual(['16:00–01:00 +1', '16:12', '01:20 +1', '9h 08m', '12m', '—', '—', '20m']);
     expect(rows[1].classList).toContain('status-Absent');
+    expect(text(rows[0].querySelector('.bad-text')!)).toBe('Penalty 2h: Left the walk-in open');
     expect(text(el.querySelector('.unassigned')!)).toContain('no. 99 at 11:00');
     expect(text(el.querySelector('.note')!)).toContain("Late counts from the shift's start: no grace is set");
   });

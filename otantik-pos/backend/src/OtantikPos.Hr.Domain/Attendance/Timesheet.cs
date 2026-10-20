@@ -10,9 +10,10 @@ public enum DayStatus
 
     Worked = 2,
 
-    // An odd number of punches once the day is over: one is missing. A manager enters it, or
-    // ignores the extra one; the month's pay waits for that.
-    MissingPunch = 3,
+    // Suspended, pending a manager (موقوف للمراجعة): a punch-in with no punch-out 18 hours on, an
+    // abandoned shift. Its hours are not worked out until a manager enters the punch-out (or
+    // ignores the stray punch); the month's pay waits for that.
+    Suspended = 3,
 
     // A working day with no punches and no mark.
     Absent = 4,
@@ -65,7 +66,10 @@ public sealed record DayEvaluation(
     int LateMinutes,
     int EarlyLeaveMinutes,
     int AwayMinutes,
-    int OvertimeMinutes)
+    int OvertimeMinutes,
+    // A manager's administrative penalty on the day (جزاء إداري), in hours: deducted at the hourly
+    // rate. Not the timesheet's: set beside it.
+    decimal PenaltyHours = 0)
 {
     // Of the shift's nine hours, the minutes not worked: what is deducted.
     public int ShortMinutes => LateMinutes + EarlyLeaveMinutes + AwayMinutes;
@@ -79,12 +83,20 @@ public sealed record DayEvaluation(
 // - late: from the shift's start to the first punch, unless that is within the grace;
 // - leaving early: from the last punch to the shift's end;
 // - away: time punched out between pairs while the shift ran;
-// - overtime: time worked after the shift's end. Coming in early is not overtime.
+// - overtime: time worked after the shift's end, once nine hours are worked. Coming in early is
+//   not overtime, and neither is staying late to make up for coming in late: 10:00 to 19:00 on an
+//   08:00 shift is two hours late, and no overtime.
 // So late, early, away and the shift's time worked add up to its nine hours. On a day off or
 // leave there is no shift: the time is worked, and nothing is late or overtime.
+//
+// A punch-in left without its punch-out stays open for 18 hours from it, then the day is
+// suspended for a manager: an abandoned shift is never closed by guessing.
 public static class Timesheet
 {
     public static readonly TimeSpan DayStartsBeforeShift = TimeSpan.FromHours(6);
+
+    // A punch-in this long without its punch-out is an abandoned shift: suspended for a manager.
+    public static readonly TimeSpan AbandonedAfter = TimeSpan.FromHours(18);
 
     // The punches of `day` are the ones from From, up to but not including To.
     public static (DateTime From, DateTime To) Window(Employee employee, DateOnly day)
@@ -115,7 +127,7 @@ public static class Timesheet
         var complete = times.Count % 2 == 0;
         var pairs = Enumerable.Range(0, times.Count / 2).Select(i => (In: times[2 * i], Out: times[2 * i + 1])).ToList();
         var worked = Minutes(pairs.Aggregate(TimeSpan.Zero, (sum, p) => sum + (p.Out - p.In)));
-        var status = !complete ? (over ? DayStatus.MissingPunch : DayStatus.Open)
+        var status = !complete ? (now >= times[^1] + AbandonedAfter ? DayStatus.Suspended : DayStatus.Open)
             : !over ? DayStatus.Open
             : off ? DayStatus.WorkedOnDayOff
             : DayStatus.Worked;
@@ -134,8 +146,9 @@ public static class Timesheet
         var away = TimeSpan.Zero;
         for (var i = 0; i < pairs.Count - 1; i++)
             away += Overlap(pairs[i].Out, pairs[i + 1].In, start, end);
-        var overtime = pairs.Aggregate(TimeSpan.Zero, (sum, p) => sum + Overlap(p.In, p.Out, end, DateTime.MaxValue));
-        return new DayEvaluation(day, status, first, lastOut, times.Count, worked, Minutes(late), Minutes(early), Minutes(away), Minutes(overtime));
+        var afterShift = Minutes(pairs.Aggregate(TimeSpan.Zero, (sum, p) => sum + Overlap(p.In, p.Out, end, DateTime.MaxValue)));
+        var overtime = Math.Max(0, Math.Min(afterShift, worked - Employee.ShiftHours * 60));
+        return new DayEvaluation(day, status, first, lastOut, times.Count, worked, Minutes(late), Minutes(early), Minutes(away), overtime);
     }
 
     // In order, a scan within that many minutes of the one before it dropped.
@@ -190,6 +203,7 @@ public sealed class DailyRecord : AggregateRoot
     public int EarlyLeaveMinutes { get; private set; }
     public int AwayMinutes { get; private set; }
     public int OvertimeMinutes { get; private set; }
+    public decimal AdministrativePenaltyHours { get; private set; }
     public DateTime CalculatedAtUtc { get; private set; }
 
     public void Update(DayEvaluation evaluation)
@@ -205,9 +219,10 @@ public sealed class DailyRecord : AggregateRoot
         EarlyLeaveMinutes = evaluation.EarlyLeaveMinutes;
         AwayMinutes = evaluation.AwayMinutes;
         OvertimeMinutes = evaluation.OvertimeMinutes;
+        AdministrativePenaltyHours = evaluation.PenaltyHours;
         CalculatedAtUtc = DateTime.UtcNow;
     }
 
     public DayEvaluation ToEvaluation() =>
-        new(Date, Status, FirstIn, LastOut, Punches, WorkedMinutes, LateMinutes, EarlyLeaveMinutes, AwayMinutes, OvertimeMinutes);
+        new(Date, Status, FirstIn, LastOut, Punches, WorkedMinutes, LateMinutes, EarlyLeaveMinutes, AwayMinutes, OvertimeMinutes, AdministrativePenaltyHours);
 }

@@ -145,6 +145,9 @@ interface Row {
                   @if (d.mark) {
                     <div class="muted small">{{ markLabels[d.mark] }}@if (d.markNotes) { · {{ d.markNotes }}}</div>
                   }
+                  @if (d.penaltyHours) {
+                    <div class="small bad-text">Penalty {{ d.penaltyHours }}h: {{ d.penaltyReason }}</div>
+                  }
                 </td>
                 <td class="num"><mat-icon class="chevron">{{ open().has(r.key) ? 'expand_less' : 'expand_more' }}</mat-icon></td>
               </tr>
@@ -263,7 +266,7 @@ interface Row {
       &.WorkedOnDayOff {
         background: color-mix(in srgb, var(--mat-sys-primary) 16%, transparent);
       }
-      &.MissingPunch {
+      &.Suspended {
         background: color-mix(in srgb, var(--till-warn) 24%, transparent);
       }
       &.Absent {
@@ -276,7 +279,8 @@ interface Row {
     tr.status-Leave td {
       color: var(--mat-sys-on-surface-variant);
     }
-    td.bad {
+    td.bad,
+    .bad-text {
       color: var(--mat-sys-error);
     }
     td.good {
@@ -395,7 +399,7 @@ export class AttendancePage {
             { label: 'came in · حضور', value: String(t.present), tone: 'good' },
             { label: 'late · تأخير', value: String(t.late), tone: t.late ? 'warn' : '' },
             { label: 'absent · غياب', value: String(t.absent), tone: t.absent ? 'bad' : '' },
-            { label: 'missing a punch · بصمة ناقصة', value: String(t.missingPunch), tone: t.missingPunch ? 'warn' : '' },
+            { label: 'suspended · موقوف للمراجعة', value: String(t.missingPunch), tone: t.missingPunch ? 'warn' : '' },
             { label: 'off or on leave · راحة وإجازات', value: String(t.offOrOnLeave), tone: '' },
             { label: 'overtime · إضافي', value: duration(t.overtimeMinutes), tone: '' },
           ]
@@ -409,7 +413,7 @@ export class AttendancePage {
           { label: 'late, early and away · تأخير', value: duration(t.lateMinutes + t.earlyLeaveMinutes + t.awayMinutes), tone: t.lateMinutes + t.earlyLeaveMinutes + t.awayMinutes ? 'warn' : '' },
           { label: 'overtime · إضافي', value: duration(t.overtimeMinutes), tone: '' },
           { label: 'absent · غياب', value: String(t.absentDays), tone: t.absentDays ? 'bad' : '' },
-          { label: 'missing a punch · بصمة ناقصة', value: String(t.missingPunchDays), tone: t.missingPunchDays ? 'warn' : '' },
+          { label: 'suspended · موقوف للمراجعة', value: String(t.missingPunchDays), tone: t.missingPunchDays ? 'warn' : '' },
         ]
       : [];
   });

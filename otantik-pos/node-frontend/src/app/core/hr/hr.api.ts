@@ -50,12 +50,13 @@ export interface EmployeeInput {
   reason: string | null;
 }
 
-export type DayStatus = 'Open' | 'Worked' | 'MissingPunch' | 'Absent' | 'DayOff' | 'Leave' | 'WorkedOnDayOff' | 'NotEmployed';
+// Suspended: a punch-in left 18 hours without its punch-out, waiting for a manager.
+export type DayStatus = 'Open' | 'Worked' | 'Suspended' | 'Absent' | 'DayOff' | 'Leave' | 'WorkedOnDayOff' | 'NotEmployed';
 
 export const dayStatusLabels: Record<DayStatus, { en: string; ar: string }> = {
   Open: { en: 'Today so far', ar: 'جارٍ' },
   Worked: { en: 'Worked', ar: 'حضور' },
-  MissingPunch: { en: 'Missing a punch', ar: 'بصمة ناقصة' },
+  Suspended: { en: 'Suspended: no punch-out', ar: 'موقوف للمراجعة' },
   Absent: { en: 'Absent', ar: 'غياب' },
   DayOff: { en: 'Day off', ar: 'راحة' },
   Leave: { en: 'Leave', ar: 'إجازة' },
@@ -99,6 +100,10 @@ export interface AttendanceDay {
   mark: DayMarkKind | null;
   markNotes: string | null;
   punches: Punch[];
+  // A manager's administrative penalty on the day (جزاء إداري), in hours, and why.
+  penaltyHours: number;
+  penaltyReason: string | null;
+  penaltySetBy: string | null;
 }
 
 export interface AttendancePolicy {
@@ -174,6 +179,9 @@ export interface PayrollFigures {
   missingPunchDays: number;
   openDays: number;
   daysOffWorkedPay: number;
+  // A manager's administrative penalties, in hours, and their deduction at the hourly rate.
+  administrativePenaltyHours: number;
+  administrativePenalty: number;
   gross: number;
   deductions: number;
   net: number;

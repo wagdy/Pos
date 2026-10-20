@@ -14,8 +14,9 @@ namespace OtantikPos.Inventory.Application.Hr;
 // punches as they stand, so a punch entered or ignored, a day marked or a shift moved shows at
 // once. A finalized month's slip keeps the days it was worked out from (DailyRecord).
 //
-// Correcting attendance (a manual punch, ignoring one, marking a day) and the devices and their
-// settings are a manager's; the API keeps them to managers.
+// Correcting attendance (a manual punch, ignoring one, marking a day, resolving a suspended day,
+// an administrative penalty) and the devices and their settings are a manager's; the API keeps
+// them to managers.
 
 // How punches are read, as a manager set it.
 public interface IAttendanceSettings
@@ -68,7 +69,11 @@ public sealed record AttendanceDayDto(
     bool IsWeeklyDayOff,
     DayMarkKind? Mark,
     string? MarkNotes,
-    IReadOnlyList<PunchDto> Punches)
+    IReadOnlyList<PunchDto> Punches,
+    // A manager's administrative penalty on the day: its hours, why, and who set it.
+    decimal PenaltyHours = 0,
+    string? PenaltyReason = null,
+    string? PenaltySetBy = null)
 {
     public static AttendanceDayDto From(Employee employee, TimesheetDay day)
     {
@@ -76,7 +81,8 @@ public sealed record AttendanceDayDto(
         var start = e.Day.ToDateTime(employee.ShiftStartsAt);
         return new AttendanceDayDto(
             e.Day, e.Status, start, start + Employee.ShiftLength, e.FirstIn, e.LastOut, e.WorkedMinutes, e.LateMinutes, e.EarlyLeaveMinutes, e.AwayMinutes,
-            e.OvertimeMinutes, e.ShortMinutes, employee.IsDayOff(e.Day), day.Mark?.Kind, day.Mark?.Notes, day.Punches.Select(PunchDto.From).ToList());
+            e.OvertimeMinutes, e.ShortMinutes, employee.IsDayOff(e.Day), day.Mark?.Kind, day.Mark?.Notes, day.Punches.Select(PunchDto.From).ToList(),
+            e.PenaltyHours, day.Penalty?.Reason, day.Penalty?.SetBy);
     }
 }
 
@@ -95,12 +101,13 @@ public sealed record TimesheetTotals(
 // One employee's month, day by day.
 public sealed record TimesheetDto(EmployeeDto Employee, DateOnly Month, AttendancePolicyDto Policy, TimesheetTotals Totals, IReadOnlyList<AttendanceDayDto> Days);
 
-public sealed record TimesheetDay(DayEvaluation Evaluation, IReadOnlyList<AttendanceLog> Punches, DayMark? Mark);
+public sealed record TimesheetDay(DayEvaluation Evaluation, IReadOnlyList<AttendanceLog> Punches, DayMark? Mark, AdministrativePenalty? Penalty = null);
 
 public sealed record EmployeeSheet(Employee Employee, IReadOnlyList<TimesheetDay> Days);
 
 // Works the days out from the punches, the marks and the settings, as they are now.
-internal sealed class Timesheets(IAttendanceLogRepository logs, IDayMarkRepository marks, IAttendanceSettings settings, IRecordDescriptions clock)
+internal sealed class Timesheets(
+    IAttendanceLogRepository logs, IDayMarkRepository marks, IAdministrativePenaltyRepository penalties, IAttendanceSettings settings, IRecordDescriptions clock)
 {
     public async Task<(AttendancePolicy Policy, IReadOnlyList<EmployeeSheet> Sheets)> ReadAsync(
         IReadOnlyList<Employee> people, DateOnly from, DateOnly to, CancellationToken cancellationToken)
@@ -112,6 +119,7 @@ internal sealed class Timesheets(IAttendanceLogRepository logs, IDayMarkReposito
             from.AddDays(-1).ToDateTime(TimeOnly.MinValue), to.AddDays(2).ToDateTime(TimeOnly.MinValue), people.Count == 1 ? people[0].Id : null,
             cancellationToken);
         var dayMarks = (await marks.GetBetweenAsync(from, to, cancellationToken)).ToDictionary(m => (m.EmployeeId, m.Date));
+        var dayPenalties = (await penalties.GetBetweenAsync(from, to, cancellationToken)).ToDictionary(p => (p.EmployeeId, p.Date));
 
         var sheets = new List<EmployeeSheet>();
         foreach (var person in people)
@@ -123,8 +131,10 @@ internal sealed class Timesheets(IAttendanceLogRepository logs, IDayMarkReposito
                 var (windowFrom, windowTo) = Timesheet.Window(person, day);
                 var inDay = theirs.Where(p => p.PunchedAt >= windowFrom && p.PunchedAt < windowTo).ToList();
                 var mark = dayMarks.GetValueOrDefault((person.Id, day));
-                var evaluation = Timesheet.Evaluate(person, day, inDay.Where(p => !p.IsIgnored).Select(p => p.PunchedAt), mark?.Kind, policy, now);
-                days.Add(new TimesheetDay(evaluation, inDay, mark));
+                var penalty = dayPenalties.GetValueOrDefault((person.Id, day));
+                var evaluation = Timesheet.Evaluate(person, day, inDay.Where(p => !p.IsIgnored).Select(p => p.PunchedAt), mark?.Kind, policy, now)
+                    with { PenaltyHours = penalty is not null && person.IsEmployedOn(day) ? penalty.Hours : 0 };
+                days.Add(new TimesheetDay(evaluation, inDay, mark, penalty));
             }
 
             sheets.Add(new EmployeeSheet(person, days));
@@ -139,7 +149,7 @@ internal sealed class Timesheets(IAttendanceLogRepository logs, IDayMarkReposito
         return new TimesheetTotals(
             list.Count(d => d.Status is DayStatus.Worked or DayStatus.WorkedOnDayOff), list.Sum(d => d.WorkedMinutes), list.Sum(d => d.LateMinutes),
             list.Sum(d => d.EarlyLeaveMinutes), list.Sum(d => d.AwayMinutes), list.Sum(d => d.OvertimeMinutes), list.Count(d => d.Status == DayStatus.Absent),
-            list.Count(d => d.Status == DayStatus.MissingPunch));
+            list.Count(d => d.Status == DayStatus.Suspended));
     }
 }
 
@@ -163,7 +173,7 @@ internal sealed class GetAttendanceDayHandler(IEmployeeRepository employees, IAt
             days.Count(d => d.Punches > 0 && d.Status is not DayStatus.NotEmployed),
             days.Count(d => d.LateMinutes > 0),
             days.Count(d => d.Status == DayStatus.Absent),
-            days.Count(d => d.Status == DayStatus.MissingPunch),
+            days.Count(d => d.Status == DayStatus.Suspended),
             days.Count(d => d.Status is DayStatus.DayOff or DayStatus.Leave),
             days.Sum(d => d.OvertimeMinutes));
         return new AttendanceDayReport(request.Date, AttendancePolicyDto.From(policy), totals, rows, unassigned);
@@ -298,5 +308,101 @@ internal sealed class SaveAttendanceSettingsHandler(IAttendanceSettings settings
         var policy = new AttendancePolicy(request.GraceMinutes, request.DoubleScanMinutes);
         await settings.SaveAsync(policy, cancellationToken);
         return AttendancePolicyDto.From(policy);
+    }
+}
+
+// A manager's administrative penalty on a day (جزاء إداري): its hours and why, or taken off
+// (Hours null), while the month's pay is not finalized.
+public sealed record SetAdministrativePenaltyCommand(Guid EmployeeId, DateOnly Date, decimal? Hours, string? Reason, string StaffName)
+    : IRequest, IRetryOnConflict;
+
+internal sealed class SetAdministrativePenaltyHandler(
+    IEmployeeRepository employees, IAdministrativePenaltyRepository penalties, IPayrollSlipRepository slips, IUnitOfWork unitOfWork)
+    : IRequestHandler<SetAdministrativePenaltyCommand>
+{
+    public async Task Handle(SetAdministrativePenaltyCommand request, CancellationToken cancellationToken)
+    {
+        var employee = await employees.GetRequiredAsync(request.EmployeeId, cancellationToken);
+        if (!employee.IsEmployedOn(request.Date))
+            throw new DomainException($"{employee.Name} is not employed on {request.Date:d MMM yyyy}.");
+        await slips.EnsureOpenAsync(employee, request.Date, cancellationToken);
+        var penalty = await penalties.GetAsync(employee.Id, request.Date, cancellationToken);
+        if (request.Hours is not { } hours)
+        {
+            if (penalty is not null)
+                penalties.Remove(penalty);
+        }
+        else if (penalty is null)
+        {
+            penalties.Add(new AdministrativePenalty(employee.Id, request.Date, hours, request.Reason ?? string.Empty, request.StaffName));
+        }
+        else
+        {
+            penalty.Change(hours, request.Reason ?? string.Empty, request.StaffName);
+        }
+
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+}
+
+// The days suspended for a manager (موقوف للمراجعة): a punch-in left 18 hours without its
+// punch-out, everyone's, from `From` to `To`, oldest first.
+public sealed record GetSuspendedDaysQuery(DateOnly From, DateOnly To) : IRequest<IReadOnlyList<EmployeeDayDto>>;
+
+internal sealed class GetSuspendedDaysHandler(IEmployeeRepository employees, Timesheets timesheets)
+    : IRequestHandler<GetSuspendedDaysQuery, IReadOnlyList<EmployeeDayDto>>
+{
+    public const int MaxDays = 400;
+
+    public async Task<IReadOnlyList<EmployeeDayDto>> Handle(GetSuspendedDaysQuery request, CancellationToken cancellationToken)
+    {
+        if (request.To < request.From)
+            throw new DomainException("The first day must come before the last.");
+        if (request.To.DayNumber - request.From.DayNumber > MaxDays)
+            throw new DomainException($"Look at {MaxDays} days at most.");
+        var people = (await employees.GetAllAsync(cancellationToken))
+            .Where(e => e.HiredOn <= request.To && (e.LeftOn is null || e.LeftOn >= request.From))
+            .ToList();
+        if (people.Count == 0)
+            return [];
+        var (_, sheets) = await timesheets.ReadAsync(people, request.From, request.To, cancellationToken);
+        return sheets
+            .SelectMany(s => s.Days.Where(d => d.Evaluation.Status == DayStatus.Suspended)
+                .Select(d => new EmployeeDayDto(EmployeeDto.From(s.Employee), AttendanceDayDto.From(s.Employee, d))))
+            .OrderBy(d => d.Day.Date).ThenBy(d => d.Employee.Name)
+            .ToList();
+    }
+}
+
+// A suspended day resolved: the manager's punch-out for the punch-in left without one, after it
+// and within the day, and the day worked out again from it. PunchId is made by the till.
+public sealed record ResolveSuspendedDayCommand(Guid PunchId, Guid EmployeeId, DateOnly Date, DateTime PunchedOutAt, string Reason, string StaffName)
+    : IRequest<AttendanceDayDto>, IRetryOnConflict;
+
+internal sealed class ResolveSuspendedDayHandler(
+    IEmployeeRepository employees, IAttendanceLogRepository logs, IPayrollSlipRepository slips, Timesheets timesheets, IUnitOfWork unitOfWork)
+    : IRequestHandler<ResolveSuspendedDayCommand, AttendanceDayDto>
+{
+    public async Task<AttendanceDayDto> Handle(ResolveSuspendedDayCommand request, CancellationToken cancellationToken)
+    {
+        var employee = await employees.GetRequiredAsync(request.EmployeeId, cancellationToken);
+        if (await logs.GetByIdAsync(request.PunchId, cancellationToken) is null)
+        {
+            var day = (await timesheets.ReadAsync([employee], request.Date, request.Date, cancellationToken)).Sheets[0].Days[0];
+            if (day.Evaluation.Status != DayStatus.Suspended)
+                throw new DomainException($"{employee.Name}'s {request.Date:d MMM} is not suspended: there is no punch-out to enter.");
+            await slips.EnsureOpenAsync(employee, request.Date, cancellationToken);
+            var punchedIn = day.Punches.Where(p => !p.IsIgnored).Max(p => p.PunchedAt);
+            var (_, windowTo) = Timesheet.Window(employee, request.Date);
+            if (request.PunchedOutAt <= punchedIn)
+                throw new DomainException($"The punch-out comes after the punch-in at {punchedIn:HH:mm}.");
+            if (request.PunchedOutAt >= windowTo || request.PunchedOutAt - punchedIn > Timesheet.AbandonedAfter)
+                throw new DomainException($"The punch-out is within {Timesheet.AbandonedAfter.TotalHours:0} hours of the punch-in, on the same day's shift.");
+            logs.Add(AttendanceLog.Manual(request.PunchId, employee.Id, request.PunchedOutAt, request.Reason, request.StaffName));
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        var resolved = (await timesheets.ReadAsync([employee], request.Date, request.Date, cancellationToken)).Sheets[0].Days[0];
+        return AttendanceDayDto.From(employee, resolved);
     }
 }

@@ -74,11 +74,25 @@ public class HrTests
     }
 
     [Fact]
-    public void Late_past_the_grace_counts_from_the_start_and_time_after_the_shift_is_overtime()
+    public void Late_past_the_grace_counts_from_the_start_and_only_time_past_nine_hours_worked_is_overtime()
     {
         var day = Day(Chef(), Monday, At(Monday, 10, 25), At(Monday, 19, 30));
 
-        Assert.Equal((25, 0, 30, 545), (day.LateMinutes, day.EarlyLeaveMinutes, day.OvertimeMinutes, day.WorkedMinutes));
+        // 25 minutes late; of the half hour after the shift's end, five minutes are past nine hours.
+        Assert.Equal((25, 0, 5, 545), (day.LateMinutes, day.EarlyLeaveMinutes, day.OvertimeMinutes, day.WorkedMinutes));
+    }
+
+    [Fact]
+    public void Coming_in_late_and_staying_to_make_up_is_late_all_the_same_and_no_overtime()
+    {
+        var early = Chef(new TimeOnly(8, 0));
+
+        // 08:00 shift, in at 10:00, out at 19:00: nine hours worked, two hours late, nothing over.
+        var madeUp = Day(early, Monday, At(Monday, 10), At(Monday, 19));
+        Assert.Equal((540, 120, 0, 120), (madeUp.WorkedMinutes, madeUp.LateMinutes, madeUp.OvertimeMinutes, madeUp.ShortMinutes));
+
+        // On time and staying to 19:00: two hours past the nine.
+        Assert.Equal(120, Day(early, Monday, At(Monday, 8), At(Monday, 19)).OvertimeMinutes);
     }
 
     [Fact]
@@ -118,7 +132,7 @@ public class HrTests
     {
         var day = Day(Chef(), Monday, At(Monday, 20), At(Monday, 22));
 
-        Assert.Equal((540, 0, 120, 540), (day.LateMinutes, day.EarlyLeaveMinutes, day.OvertimeMinutes, day.ShortMinutes));
+        Assert.Equal((540, 0, 0, 540), (day.LateMinutes, day.EarlyLeaveMinutes, day.OvertimeMinutes, day.ShortMinutes));
     }
 
     [Fact]
@@ -181,13 +195,46 @@ public class HrTests
     }
 
     [Fact]
-    public void An_odd_number_of_punches_is_missing_one_once_the_day_is_over()
+    public void A_punch_in_left_18_hours_without_its_punch_out_suspends_the_day_for_a_manager()
     {
         var chef = Chef();
 
-        var over = Day(chef, Monday, At(Monday, 10, 30));
-        Assert.Equal((DayStatus.MissingPunch, 30, (DateTime?)null), (over.Status, over.LateMinutes, over.LastOut));
-        Assert.Equal(DayStatus.Open, Timesheet.Evaluate(chef, Monday, [At(Monday, 10)], null, TenMinutesGrace, At(Monday, 15)).Status);
+        var abandoned = Day(chef, Monday, At(Monday, 10, 30));
+        Assert.Equal((DayStatus.Suspended, 0, (DateTime?)null), (abandoned.Status, abandoned.WorkedMinutes, abandoned.LastOut));
+        DayStatus At_(DateTime now) => Timesheet.Evaluate(chef, Monday, [At(Monday, 10)], null, TenMinutesGrace, now).Status;
+        Assert.Equal(DayStatus.Open, At_(At(Monday, 15)));
+        Assert.Equal(DayStatus.Open, At_(At(Monday, 10).AddHours(18).AddMinutes(-1)));
+        Assert.Equal(DayStatus.Suspended, At_(At(Monday, 10).AddHours(18)));
+
+        // In at 23:00 for a 10:00 shift: the day's window closes at 04:00, but it stays open till
+        // 17:00 the next day, 18 hours on.
+        var tuesday = Monday.AddDays(1);
+        DayStatus Late(DateTime now) => Timesheet.Evaluate(chef, Monday, [At(Monday, 23)], null, TenMinutesGrace, now).Status;
+        Assert.Equal(DayStatus.Open, Late(At(tuesday, 10)));
+        Assert.Equal(DayStatus.Suspended, Late(At(tuesday, 17)));
+    }
+
+    [Fact]
+    public void An_administrative_penalty_is_hours_with_a_reason_deducted_at_the_hourly_rate()
+    {
+        var chef = Chef();
+        Assert.Throws<DomainException>(() => new AdministrativePenalty(chef.Id, Monday, 0, "Late again", "Omar"));
+        Assert.Throws<DomainException>(() => new AdministrativePenalty(chef.Id, Monday, 73, "Late again", "Omar"));
+        Assert.Throws<DomainException>(() => new AdministrativePenalty(chef.Id, Monday, 1.255m, "Late again", "Omar"));
+        Assert.Throws<DomainException>(() => new AdministrativePenalty(chef.Id, Monday, 2, " ", "Omar"));
+        var penalty = new AdministrativePenalty(chef.Id, Monday, 2, " Left the walk-in open ", "Omar");
+        Assert.Equal((2m, "Left the walk-in open"), (penalty.Hours, penalty.Reason));
+
+        var october = new DateOnly(2026, 10, 1);
+        var days = PayrollMonth.Days(october).Select(d =>
+            chef.IsDayOff(d) ? Nothing(d, DayStatus.DayOff)
+            : d == Monday ? new DayEvaluation(d, DayStatus.Worked, null, null, 2, 540, 0, 0, 0, 0, PenaltyHours: 2)
+            : d.Day == 13 ? new DayEvaluation(d, DayStatus.Worked, null, null, 2, 540, 0, 0, 0, 0, PenaltyHours: 0.5m)
+            : new DayEvaluation(d, DayStatus.Worked, null, null, 2, 540, 0, 0, 0, 0)).ToList();
+        var figures = PayrollCalculator.Calculate(chef, october, days, [], advances: 0, broughtForward: 0);
+
+        // Two and a half hours at 20.
+        Assert.Equal((2.5m, 50m, 5_350m, 5_350m), (figures.AdministrativePenaltyHours, figures.AdministrativePenalty, figures.Net, figures.WagesCost));
     }
 
     [Fact]
@@ -293,9 +340,11 @@ public class HrTests
         Assert.Equal(1, open.Figures.OpenDays);
         Assert.Throws<DomainException>(() => open.Finalize("Omar"));
 
-        var missing = PayrollCalculator.Calculate(chef, october, [.. allButOne, Nothing(new DateOnly(2026, 10, 31), DayStatus.MissingPunch)], [], 0, 0);
+        var missing = PayrollCalculator.Calculate(chef, october, [.. allButOne, Nothing(new DateOnly(2026, 10, 31), DayStatus.Suspended)], [], 0, 0);
         var slip = new PayrollSlip(Guid.NewGuid(), chef.Id, october, missing);
-        Assert.Equal("1 day is missing a punch: enter it, or ignore the extra one, first.", Assert.Throws<DomainException>(() => slip.Finalize("Omar")).Message);
+        Assert.Equal(
+            "1 day is suspended, a punch-in with no punch-out: enter the punch-out, or ignore the stray punch, first.",
+            Assert.Throws<DomainException>(() => slip.Finalize("Omar")).Message);
 
         Assert.Throws<DomainException>(() => PayrollCalculator.Calculate(chef, october, [Nothing(new DateOnly(2026, 11, 1), DayStatus.Absent)], [], 0, 0));
         Assert.Throws<DomainException>(() => PayrollCalculator.Calculate(

@@ -14,6 +14,7 @@ public sealed class HrStore
     public DeviceStore Devices { get; } = new();
     public PunchStore Punches { get; } = new();
     public DayMarkStore Marks { get; } = new();
+    public PenaltyStore Penalties { get; } = new();
     public DailyRecordStore Records { get; } = new();
     public AdjustmentStore Adjustments { get; } = new();
     public SlipStore Slips { get; } = new();
@@ -72,6 +73,17 @@ public sealed class DayMarkStore : ListStore<DayMark>, IDayMarkRepository
         Task.FromResult<IReadOnlyList<DayMark>>(Items.Where(m => m.Date >= from && m.Date <= to).ToList());
 
     public void Remove(DayMark mark) => Items.Remove(mark);
+}
+
+public sealed class PenaltyStore : ListStore<AdministrativePenalty>, IAdministrativePenaltyRepository
+{
+    public Task<AdministrativePenalty?> GetAsync(Guid employeeId, DateOnly date, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Items.SingleOrDefault(p => p.EmployeeId == employeeId && p.Date == date));
+
+    public Task<IReadOnlyList<AdministrativePenalty>> GetBetweenAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<AdministrativePenalty>>(Items.Where(p => p.Date >= from && p.Date <= to).ToList());
+
+    public void Remove(AdministrativePenalty penalty) => Items.Remove(penalty);
 }
 
 public sealed class DailyRecordStore : ListStore<DailyRecord>, IDailyRecordRepository

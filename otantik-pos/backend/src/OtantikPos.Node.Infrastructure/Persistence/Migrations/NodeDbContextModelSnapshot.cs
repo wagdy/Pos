@@ -530,6 +530,48 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.ToTable("OrderItemAddOns", "pos");
                 });
 
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Attendance.AdministrativePenalty", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Hours")
+                        .HasPrecision(5, 2)
+                        .HasColumnType("numeric(5,2)");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<DateTime>("SetAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("SetBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EmployeeId", "Date")
+                        .IsUnique();
+
+                    b.ToTable("AdministrativePenalties", "hr");
+                });
+
             modelBuilder.Entity("OtantikPos.Hr.Domain.Attendance.AttendanceDevice", b =>
                 {
                     b.Property<Guid>("Id")
@@ -655,6 +697,10 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                 {
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
+
+                    b.Property<decimal>("AdministrativePenaltyHours")
+                        .HasPrecision(5, 2)
+                        .HasColumnType("numeric(5,2)");
 
                     b.Property<int>("AwayMinutes")
                         .HasColumnType("integer");
@@ -934,6 +980,14 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
 
                             b1.Property<int>("AbsentDays")
                                 .HasColumnType("integer");
+
+                            b1.Property<decimal>("AdministrativePenalty")
+                                .HasPrecision(10, 2)
+                                .HasColumnType("numeric(10,2)");
+
+                            b1.Property<decimal>("AdministrativePenaltyHours")
+                                .HasPrecision(10, 2)
+                                .HasColumnType("numeric(10,2)");
 
                             b1.Property<decimal>("Advances")
                                 .HasPrecision(10, 2)
@@ -2586,6 +2640,15 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("OrderItem");
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Attendance.AdministrativePenalty", b =>
+                {
+                    b.HasOne("OtantikPos.Hr.Domain.Employees.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("EmployeeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("OtantikPos.Hr.Domain.Attendance.AttendanceLog", b =>

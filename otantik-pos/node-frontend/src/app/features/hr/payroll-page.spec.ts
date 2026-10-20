@@ -30,14 +30,14 @@ function figures(extra: Partial<PayrollFigures> = {}): PayrollFigures {
   const f = {
     monthlySalary: 5_400, daysInMonth: 30, daysEmployed: 30, baseSalary: 5_400, incentives: 500, leaveAllowances: 0, overtimeMinutes: 120, overtimePay: 40,
     shortMinutes: 101, latenessPenalty: 33.67, absentDays: 1, absencePenalty: 180, advances: 200, broughtForward: 0, daysWorked: 25, daysOffWorked: 0,
-    missingPunchDays: 0, openDays: 0, daysOffWorkedPay: 0, ...extra,
+    missingPunchDays: 0, openDays: 0, daysOffWorkedPay: 0, administrativePenaltyHours: 0, administrativePenalty: 0, ...extra,
   };
   const gross = f.baseSalary + f.incentives + f.leaveAllowances + f.daysOffWorkedPay + f.overtimePay;
-  const deductions = f.advances + f.broughtForward + f.latenessPenalty + f.absencePenalty;
+  const deductions = f.advances + f.broughtForward + f.latenessPenalty + f.absencePenalty + f.administrativePenalty;
   const net = Math.round((gross - deductions) * 100) / 100;
   return {
     ...f, gross, deductions, net, netPayable: Math.max(0, net), carriedForward: Math.max(0, -net),
-    wagesCost: Math.round((gross - f.latenessPenalty - f.absencePenalty) * 100) / 100,
+    wagesCost: Math.round((gross - f.latenessPenalty - f.absencePenalty - f.administrativePenalty) * 100) / 100,
   };
 }
 
@@ -86,7 +86,7 @@ describe('the monthly payroll', () => {
 
   beforeEach(() => {
     payroll.mockReset().mockReturnValue(of(month([
-      slip(hassan, { status: 'Finalized', salaryOwed: 5_000, salaryPaid: 1_006.33 }),
+      slip(hassan, { status: 'Finalized', salaryOwed: 5_000, salaryPaid: 1_006.33 }, { administrativePenaltyHours: 2, administrativePenalty: 40 }),
       slip(mona, { status: null }, { monthlySalary: 4_050, daysEmployed: 16, baseSalary: 2_160, incentives: 0, overtimePay: 0, latenessPenalty: 0, absencePenalty: 0, advances: 3_000, missingPunchDays: 2 }),
     ])));
     calculatePayroll.mockReset().mockImplementation(() => payroll());
@@ -98,14 +98,14 @@ describe('the monthly payroll', () => {
     expect(payroll).toHaveBeenCalledWith('2026-09-01');
     const rows = [...el.querySelectorAll('tbody tr')].map((r) => [...r.querySelectorAll('td')].map(cell));
     expect(rows[0]).toEqual([
-      'Hassan Chef', 'L.E 5,400.00', 'L.E 500.00', 'L.E 0.00', 'L.E 40.00', 'L.E 200.00', 'L.E 33.67', 'L.E 180.00', 'L.E 0.00', 'L.E 5,526.33',
-      'Finalized نهائي L.E 5,000.00 to pay',
+      'Hassan Chef', 'L.E 5,400.00', 'L.E 500.00', 'L.E 0.00', 'L.E 40.00', 'L.E 200.00', 'L.E 33.67', 'L.E 180.00', 'L.E 40.00', 'L.E 0.00',
+      'L.E 5,486.33', 'Finalized نهائي L.E 5,000.00 to pay',
     ]);
     // More owed than paid: nothing is paid, and the rest goes to next month.
     expect(rows[1][0]).toBe('Mona Waiter · 16 of 30 days');
-    expect(rows[1][9]).toBe('L.E 0.00 L.E 840.00 to next month');
-    expect(rows[1][10]).toBe('Not calculated لم يُحتسب 2 days missing a punch');
-    expect(text(el.querySelector('tfoot tr')!)).toContain('L.E 5,526.33');
+    expect(rows[1][10]).toBe('L.E 0.00 L.E 840.00 to next month');
+    expect(rows[1][11]).toBe('Not calculated لم يُحتسب 2 days suspended');
+    expect(text(el.querySelector('tfoot tr')!)).toContain('L.E 5,486.33');
     expect(el.querySelector('tbody a')!.getAttribute('href')).toBe('/hassan?month=2026-09-01');
   });
 
@@ -197,11 +197,23 @@ describe('a payslip', () => {
     expect([...el.querySelectorAll('.lists .line')].map(cell)).toEqual(['Incentive حوافز · Best month L.E 500.00 delete', '10 Sep · from the safe L.E 200.00']);
   });
 
+  it('shows a manager’s administrative penalties as their own deduction', async () => {
+    payroll.mockReturnValue(of(month([slip(hassan, { status: 'Draft' }, { administrativePenaltyHours: 2.5, administrativePenalty: 50 })])));
+    const { el } = await render();
+
+    const line = [...el.querySelectorAll('.breakdown tr')].find((r) => text(r.querySelector('th')!).startsWith('− Administrative penalties'))!;
+    expect(text(line.querySelector('.how')!)).toBe('2.5 hours at L.E 20.00');
+    expect(text(line.querySelector('td')!)).toBe('L.E 50.00');
+    expect(text(el.querySelector('.breakdown tr.total td')!)).toBe('L.E 5,476.33');
+  });
+
   it('is finalized by a manager once the month is over and every day is settled, after asking', async () => {
     const { page } = await render();
 
     expect(page['finalizeBlocked'](slip(hassan, {}, { openDays: 10 }))).toBe('The month is not over yet: a payslip is finalized once all its days are.');
-    expect(page['finalizeBlocked'](slip(hassan, {}, { missingPunchDays: 2 }))).toBe('2 days are missing a punch: put them right on the timesheet first.');
+    expect(page['finalizeBlocked'](slip(hassan, {}, { missingPunchDays: 2 }))).toBe(
+      '2 days are suspended, a punch-in with no punch-out: enter the punch-out on the attendance first.',
+    );
     expect(page['finalizeBlocked'](draft)).toBeNull();
 
     open.mockReturnValue({ afterClosed: () => of(true) });

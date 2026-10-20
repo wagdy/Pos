@@ -22,7 +22,7 @@ public class HrPersistenceTests
     {
         await using var node = await TestNode.StartAsync();
         var chef = new Employee(Guid.NewGuid(), "حسن", "Chef", 5_400, new TimeOnly(10, 0), WeekDays.Friday | WeekDays.Saturday, new DateOnly(2026, 1, 1), "7");
-        var day = Timesheet.Evaluate(chef, Monday, [PunchIn, PunchIn.AddHours(9)], null, AttendancePolicy.Default, new DateTime(2026, 10, 20));
+        var day = Timesheet.Evaluate(chef, Monday, [PunchIn, PunchIn.AddHours(9)], null, AttendancePolicy.Default, new DateTime(2026, 10, 20)) with { PenaltyHours = 1.5m };
         var incentive = new PayrollAdjustment(Guid.NewGuid(), chef.Id, October, AdjustmentKind.Incentive, 500, "Best month", "Omar");
         var figures = PayrollCalculator.Calculate(chef, October, [day], [incentive], advances: 300, broughtForward: 0);
         await node.Db(async db =>
@@ -35,6 +35,7 @@ public class HrPersistenceTests
             db.AttendanceLogs.Add(AttendanceLog.FromDevice(Serial, "7", PunchIn, 0, 1, chef.Id));
             db.AttendanceLogs.Add(AttendanceLog.FromDevice(Serial, "99", PunchIn, 0, 15, null));
             db.DayMarks.Add(new DayMark(chef.Id, Monday.AddDays(1), DayMarkKind.Leave, "Wedding", "Omar"));
+            db.AdministrativePenalties.Add(new AdministrativePenalty(chef.Id, Monday, 1.5m, "Left the kitchen open", "Omar"));
             db.DailyRecords.Add(new DailyRecord(chef.Id, day));
             db.PayrollAdjustments.Add(incentive);
             db.SafeTransactions.Add(SafeTransaction.EmployeeAdvance(Guid.NewGuid(), 300, Monday, chef.Id, October, null, "Omar", revenueDate: Monday));
@@ -56,10 +57,13 @@ public class HrPersistenceTests
             var device = await db.AttendanceDevices.SingleAsync();
             Assert.Equal(("Kitchen door", true, "9999"), (device.Name, device.IsApproved, device.AttendanceStamp));
 
-            // Four minutes late with no grace, so four minutes over at the end.
+            // Four minutes late with no grace, made up at the end: no overtime, as nine hours were not
+            // passed. The day's administrative penalty kept with it.
             var record = await db.DailyRecords.SingleAsync();
             Assert.Equal(day, record.ToEvaluation());
-            Assert.Equal((DayStatus.Worked, 540, 4, 4), (record.Status, record.WorkedMinutes, record.LateMinutes, record.OvertimeMinutes));
+            Assert.Equal((DayStatus.Worked, 540, 4, 0, 1.5m), (record.Status, record.WorkedMinutes, record.LateMinutes, record.OvertimeMinutes, record.AdministrativePenaltyHours));
+            var penalty = await db.AdministrativePenalties.SingleAsync();
+            Assert.Equal((1.5m, "Left the kitchen open"), (penalty.Hours, penalty.Reason));
 
             Assert.Equal(DayMarkKind.Leave, (await db.DayMarks.SingleAsync()).Kind);
 

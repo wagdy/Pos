@@ -96,6 +96,7 @@ public sealed class TestPos
         services.AddSingleton<OtantikPos.Hr.Domain.IAttendanceDeviceRepository>(Hr.Devices);
         services.AddSingleton<OtantikPos.Hr.Domain.IAttendanceLogRepository>(Hr.Punches);
         services.AddSingleton<OtantikPos.Hr.Domain.IDayMarkRepository>(Hr.Marks);
+        services.AddSingleton<OtantikPos.Hr.Domain.IAdministrativePenaltyRepository>(Hr.Penalties);
         services.AddSingleton<OtantikPos.Hr.Domain.IDailyRecordRepository>(Hr.Records);
         services.AddSingleton<OtantikPos.Hr.Domain.IPayrollAdjustmentRepository>(Hr.Adjustments);
         services.AddSingleton<OtantikPos.Hr.Domain.IPayrollSlipRepository>(Hr.Slips);

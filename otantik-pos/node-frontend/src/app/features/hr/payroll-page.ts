@@ -17,7 +17,7 @@ import { isoDay } from '../costing/financials';
 // The monthly payroll (مسير الرواتب): every employee's pay for the month, each part of it a column,
 // as the formula adds them up:
 //   base salary + incentives + leave allowances + overtime − advances − last month's shortfall
-//   − lateness − absence = net payable.
+//   − lateness − absence − administrative penalties = net payable.
 // The leave allowances are the ones entered and the days off worked, which earn theirs by
 // themselves.
 // A draft is worked out from the month's attendance as it stands now; calculating saves the
@@ -80,6 +80,7 @@ import { isoDay } from '../costing/financials';
               <th class="num">− Advances<span class="ar">السلفيات</span></th>
               <th class="num">− Lateness<span class="ar">خصم التأخير</span></th>
               <th class="num">− Absence<span class="ar">خصم الغياب</span></th>
+              <th class="num">− Penalties<span class="ar">جزاءات إدارية</span></th>
               <th class="num">− Last month<span class="ar">مرحل</span></th>
               <th class="num">= Net payable<span class="ar">صافي المستحق</span></th>
               <th>Status<span class="ar">الحالة</span></th>
@@ -105,6 +106,7 @@ import { isoDay } from '../costing/financials';
                 <td class="num minus">{{ f.advances | money }}</td>
                 <td class="num minus">{{ f.latenessPenalty | money }}</td>
                 <td class="num minus">{{ f.absencePenalty | money }}</td>
+                <td class="num minus">{{ f.administrativePenalty | money }}</td>
                 <td class="num minus">{{ f.broughtForward | money }}</td>
                 <td class="num net">
                   <strong>{{ f.netPayable | money }}</strong>
@@ -117,14 +119,14 @@ import { isoDay } from '../costing/financials';
                   @if (s.status === 'Finalized') {
                     <div class="muted small">{{ s.salaryOwed > 0 ? (s.salaryOwed | money) + ' to pay' : 'Paid' }}</div>
                   } @else if (f.missingPunchDays) {
-                    <div class="small warn">{{ f.missingPunchDays }} {{ f.missingPunchDays === 1 ? 'day' : 'days' }} missing a punch</div>
+                    <div class="small warn">{{ f.missingPunchDays }} {{ f.missingPunchDays === 1 ? 'day' : 'days' }} suspended</div>
                   } @else if (f.openDays) {
                     <div class="muted small">The month is not over</div>
                   }
                 </td>
               </tr>
             } @empty {
-              <tr><td colspan="11" class="muted">No one was employed this month.</td></tr>
+              <tr><td colspan="12" class="muted">No one was employed this month.</td></tr>
             }
           </tbody>
           @if (p.slips.length) {
@@ -138,6 +140,7 @@ import { isoDay } from '../costing/financials';
                 <td class="num">{{ p.totals.advances | money }}</td>
                 <td class="num">{{ p.totals.latenessPenalties | money }}</td>
                 <td class="num">{{ p.totals.absencePenalties | money }}</td>
+                <td class="num">{{ penalties() | money }}</td>
                 <td class="num">{{ p.totals.broughtForward | money }}</td>
                 <td class="num">{{ p.totals.netPayable | money }}</td>
                 <td></td>
@@ -233,6 +236,7 @@ export class PayrollPage {
   protected readonly calculating = signal(false);
   protected readonly error = signal<string | null>(null);
   protected readonly canCalculate = computed(() => this.auth.can(Permissions.HrManage));
+  protected readonly penalties = computed(() => (this.payroll()?.slips ?? []).reduce((sum, s) => sum + s.figures.administrativePenalty, 0));
   protected readonly finalized = computed(() => (this.payroll()?.slips ?? []).filter((s) => s.status === 'Finalized').length);
 
   constructor() {
