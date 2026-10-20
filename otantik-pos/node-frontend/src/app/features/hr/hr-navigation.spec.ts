@@ -29,13 +29,16 @@ describe('the HR navigation', () => {
     expect(hr.children!.map((r) => [r.path, r.redirectTo ?? (r.loadComponent ? 'page' : undefined)])).toEqual([
       ['', 'employees'],
       ['employees', 'page'],
+      ['attendance', 'page'],
+      ['payroll', 'page'],
+      ['payroll/:employeeId', 'page'],
       ['devices', 'page'],
     ]);
     // Advances in Financials are HR's too: guarded the same way.
     expect(find(find(routes, 'financials')!.children, 'advances')!.canActivate?.length).toBe(1);
   });
 
-  it('has a tab each for the employees and the attendance devices', async () => {
+  it('has a tab each for the employees, attendance, payroll and the attendance devices', async () => {
     TestBed.configureTestingModule({ providers: [provideRouter([])] });
     const fixture = TestBed.createComponent(HrShell);
     await fixture.whenStable();
@@ -43,7 +46,7 @@ describe('the HR navigation', () => {
     const el = fixture.nativeElement as HTMLElement;
 
     expect(text(el.querySelector('h1')!)).toBe('HR & Payroll الموارد البشرية والرواتب');
-    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('href'))).toEqual(['/employees', '/devices']);
+    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('href'))).toEqual(['/employees', '/attendance', '/payroll', '/devices']);
   });
 
   it('shows the Advances tab in Financials only to whoever sees HR', async () => {

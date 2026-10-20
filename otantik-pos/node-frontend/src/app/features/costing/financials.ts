@@ -75,8 +75,9 @@ export interface SafeVoucherDialogData {
   // The till's business day: the entry's date unless another is chosen, and the latest.
   today?: string;
   supplierId?: string;
-  // An advance's employee, chosen already.
+  // An advance's or a salary's employee, chosen already; a salary's month (its first day).
   employeeId?: string;
+  payrollMonth?: string;
   amount?: number;
   revenueDate?: string;
   // A day's takings: the till's tax rate (null before it has one), and whether the sum counted
@@ -150,10 +151,13 @@ const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
             }
           </mat-form-field>
         }
-        @if (data.kind === 'EmployeeAdvance') {
+        @if (forEmployee) {
+          @if (data.kind === 'SalaryPayment' && data.payrollMonth) {
+            <p class="wide muted">The pay of {{ monthName(data.payrollMonth) }}, as their finalized payslip says.</p>
+          }
           <mat-form-field class="wide">
             <mat-label>Employee · الموظف</mat-label>
-            <mat-select [(ngModel)]="employeeId" aria-label="Employee">
+            <mat-select [(ngModel)]="employeeId" aria-label="Employee" [disabled]="data.kind === 'SalaryPayment'">
               @for (e of payable(); track e.id) {
                 <mat-option [value]="e.id">{{ e.name }} <span class="muted">· {{ e.jobTitle }}</span></mat-option>
               } @empty {
@@ -354,8 +358,8 @@ export class SafeVoucherDialog {
   protected readonly loading = signal(false);
   protected readonly expenseItems = signal<ExpenseItem[]>([]);
   private readonly employees = signal<Employee[]>([]);
-  // Who an advance can go to: those still employed.
-  protected readonly payable = computed(() => this.employees().filter((e) => e.isActive));
+  // Who an advance can go to: those still employed. A salary is anyone's, left or not.
+  protected readonly payable = computed(() => this.employees().filter((e) => e.isActive || this.data.kind === 'SalaryPayment'));
   private readonly balances = signal<SupplierBalance[]>([]);
   protected readonly owedSuppliers = computed(() => this.balances().filter((b) => b.balance > 0));
   // A day's takings: what was paid out of them already, taken off what goes into the safe.
@@ -368,6 +372,8 @@ export class SafeVoucherDialog {
   protected supplierId: string | null = this.data.supplierId ?? null;
   protected expenseItemId: string | null = null;
   protected employeeId: string | null = this.data.employeeId ?? null;
+  // An advance's or a salary's: who it is for, and the safe or a day's takings paying it.
+  protected readonly forEmployee = this.data.kind === 'EmployeeAdvance' || this.data.kind === 'SalaryPayment';
   protected paidFrom: 'Safe' | 'DayRevenue' = this.data.revenueDate ? 'DayRevenue' : 'Safe';
   protected notes = '';
   protected includesTax = this.data.includesTax ?? false;
@@ -381,11 +387,16 @@ export class SafeVoucherDialog {
     InvoicePayment: '',
     EmployeeAdvance:
       'Cash advanced to an employee (سلفة), from the safe or a day’s takings. It is not an expense: it comes off their pay for the month, on the payroll.',
-    SalaryPayment: 'An employee’s pay for a month, as their finalized payslip says.',
+    SalaryPayment: 'Cash paid to an employee, from the safe or a day’s takings.',
   }[this.data.kind];
 
   constructor() {
     void this.load();
+  }
+
+  // "October 2026", from its first day.
+  protected monthName(month: string): string {
+    return new Date(`${month}T12:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
   }
 
   protected owed(): number | null {
@@ -439,12 +450,12 @@ export class SafeVoucherDialog {
     if (this.data.kind === 'ExpenseVoucher' && !this.expenseItemId) {
       return 'Choose what the expense is.';
     }
-    if (this.data.kind === 'EmployeeAdvance') {
+    if (this.forEmployee) {
       if (!this.employeeId) {
         return 'Choose the employee.';
       }
       if (this.paidFrom === 'DayRevenue' && (!this.revenueDate || this.revenueDate > this.date)) {
-        return 'Choose the day whose takings pay it: that day or one before the advance.';
+        return `Choose the day whose takings pay it: that day or one before the ${this.data.kind === 'SalaryPayment' ? 'payment' : 'advance'}.`;
       }
     }
     if (this.data.kind === 'SupplierPayment') {
@@ -478,13 +489,14 @@ export class SafeVoucherDialog {
       date: this.date,
       source: this.sources.length ? this.source : null,
       revenueDate:
-        this.data.kind === 'RevenueTransfer' || (this.data.kind === 'EmployeeAdvance' && this.paidFrom === 'DayRevenue') ? this.revenueDate : null,
+        this.data.kind === 'RevenueTransfer' || (this.forEmployee && this.paidFrom === 'DayRevenue') ? this.revenueDate : null,
       supplierId: this.data.kind === 'SupplierPayment' ? this.supplierId : null,
       expenseItemId: this.data.kind === 'ExpenseVoucher' ? this.expenseItemId : null,
       notes: this.notes.trim() || null,
       reason: null,
       includesTax: this.data.kind === 'RevenueTransfer' && this.includesTax && this.data.taxPercent != null,
-      employeeId: this.data.kind === 'EmployeeAdvance' ? this.employeeId : null,
+      employeeId: this.forEmployee ? this.employeeId : null,
+      payrollMonth: this.data.kind === 'SalaryPayment' ? (this.data.payrollMonth ?? null) : null,
     };
     this.ref.close(voucher);
   }
@@ -493,12 +505,12 @@ export class SafeVoucherDialog {
     if (this.data.kind === 'RevenueTransfer') {
       return this.loadPreview();
     }
-    if (this.data.kind !== 'ExpenseVoucher' && this.data.kind !== 'SupplierPayment' && this.data.kind !== 'EmployeeAdvance') {
+    if (this.data.kind !== 'ExpenseVoucher' && this.data.kind !== 'SupplierPayment' && !this.forEmployee) {
       return;
     }
     this.loading.set(true);
     try {
-      if (this.data.kind === 'EmployeeAdvance') {
+      if (this.forEmployee) {
         this.employees.set(await firstValueFrom(this.hr.employees()));
       } else if (this.data.kind === 'ExpenseVoucher') {
         this.expenseItems.set(await firstValueFrom(this.api.expenseItems()));

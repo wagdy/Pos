@@ -85,6 +85,17 @@ describe('entering a safe entry', () => {
     expect(close.mock.lastCall![0]).toMatchObject({ employeeId: 'hassan', revenueDate: '2026-10-19', supplierId: null, expenseItemId: null });
   });
 
+  it('pays a finalized month’s salary to the employee it is for, left or not', async () => {
+    const { el, page } = await dialog({ kind: 'SalaryPayment', canApprove: true, today: '2026-10-20', employeeId: 'old', payrollMonth: '2026-09-01', amount: 5_526.33 });
+
+    expect(text(el)).toContain('The pay of September 2026, as their finalized payslip says.');
+    expect(page['payable']().map((e: Employee) => e.name)).toEqual(['Hassan', 'Left Already']);
+    page['done']();
+    expect(close.mock.lastCall![0]).toMatchObject({
+      kind: 'SalaryPayment', amount: 5_526.33, employeeId: 'old', payrollMonth: '2026-09-01', revenueDate: null, date: '2026-10-20',
+    });
+  });
+
   it('asks where the money came from, and tells an accountant that a manager approves it', async () => {
     const { el, page } = await dialog({ kind: 'Funding', canApprove: false });
 

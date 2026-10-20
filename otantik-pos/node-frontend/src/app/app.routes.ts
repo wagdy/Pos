@@ -250,6 +250,20 @@ export const routes: Routes = [
             loadComponent: () => import('./features/hr/employees-page').then((m) => m.EmployeesPage),
           },
           {
+            // ?date=, or ?employee=&month= for one employee's month.
+            path: 'attendance',
+            loadComponent: () => import('./features/hr/attendance-page').then((m) => m.AttendancePage),
+          },
+          {
+            // ?month= its first day.
+            path: 'payroll',
+            loadComponent: () => import('./features/hr/payroll-page').then((m) => m.PayrollPage),
+          },
+          {
+            path: 'payroll/:employeeId',
+            loadComponent: () => import('./features/hr/payslip-page').then((m) => m.PayslipPage),
+          },
+          {
             path: 'devices',
             loadComponent: () => import('./features/hr/devices-page').then((m) => m.DevicesPage),
           },

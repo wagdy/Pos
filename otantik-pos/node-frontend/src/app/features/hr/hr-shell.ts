@@ -2,9 +2,10 @@ import { Component } from '@angular/core';
 import { MatTabsModule } from '@angular/material/tabs';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 
-// HR & Payroll (الموارد البشرية والرواتب): the employees, and the attendance devices that send their
-// punches. Managers and accountants (HrView); an accountant's changes go to a manager. Advances are
-// paid in Financials and in the daily batch, from the safe or a day's takings.
+// HR & Payroll (الموارد البشرية والرواتب): the employees, their attendance, the monthly payroll, and
+// the attendance devices that send their punches. Managers and accountants (HrView); an
+// accountant's changes go to a manager. Advances are paid in Financials and in the daily batch,
+// from the safe or a day's takings.
 @Component({
   selector: 'app-hr-shell',
   imports: [MatTabsModule, RouterLink, RouterLinkActive, RouterOutlet],
@@ -42,6 +43,8 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 export class HrShell {
   protected readonly tabs = [
     { path: 'employees', en: 'Employees', ar: 'الموظفين' },
+    { path: 'attendance', en: 'Attendance', ar: 'الحضور والانصراف' },
+    { path: 'payroll', en: 'Payroll', ar: 'مسير الرواتب' },
     { path: 'devices', en: 'Attendance devices', ar: 'أجهزة البصمة' },
   ];
 }

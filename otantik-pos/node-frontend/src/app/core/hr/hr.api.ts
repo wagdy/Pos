@@ -328,3 +328,23 @@ export class HrApi {
     return this.http.post<PayrollAdjustment>(`/api/hr/payroll/adjustments/${id}/void`, {});
   }
 }
+
+// Minutes as hours and minutes: "9h 08m", "45m", "—" for none.
+export function duration(minutes: number): string {
+  if (!minutes) {
+    return '—';
+  }
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`;
+}
+
+// A wall-clock time as the till sends it ('2026-10-19T16:12:05'), as "16:12"; a day after `day`
+// as "01:20 +1". Read from the text, never through Date, so no time zone can move it.
+export function clock(time: string | null, day?: string): string {
+  if (!time) {
+    return '—';
+  }
+  const hm = time.slice(11, 16);
+  return day && time.slice(0, 10) > day ? `${hm} +1` : hm;
+}
