@@ -59,6 +59,7 @@ export class CostingPage {
 
   private readonly allTabs = [
     { path: 'materials', en: 'Raw materials', ar: 'الخامات' },
+    { path: 'expense-items', en: 'Expense items', ar: 'المصروفات العمومية' },
     { path: 'purchases', en: 'Purchases', ar: 'المشتريات' },
     { path: 'financials', en: 'Financials', ar: 'الماليات' },
     { path: 'waste', en: 'Waste', ar: 'الهالك' },

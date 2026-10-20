@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { MatDialog } from '@angular/material/dialog';
+import { provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { CostingApi, ExpenseItem } from '../../core/costing/costing.api';
 import { NotifyService } from '../../core/ui/notify.service';
@@ -28,6 +29,7 @@ describe('the expense items', () => {
   async function render() {
     TestBed.configureTestingModule({
       providers: [
+        provideRouter([]),
         { provide: CostingApi, useValue: { expenseItems, deleteExpenseItem, restoreExpenseItem } },
         { provide: MatDialog, useValue: { open } },
         { provide: NotifyService, useValue: notify },
@@ -41,7 +43,7 @@ describe('the expense items', () => {
       fixture.detectChanges();
       return [...el.querySelectorAll('tbody tr')];
     };
-    return { rows, page: fixture.componentInstance as unknown as Record<string, any> };
+    return { el, rows, page: fixture.componentInstance as unknown as Record<string, any> };
   }
 
   beforeEach(() => {
@@ -90,5 +92,12 @@ describe('the expense items', () => {
     expect(open).toHaveBeenLastCalledWith(ExpenseItemDialog, expect.objectContaining({ data: { item: spray } }));
     await page['restore'](old);
     expect(restoreExpenseItem).toHaveBeenCalledWith('old');
+  });
+
+  it('leads to the categories, on their general expenses tab', async () => {
+    const { el } = await render();
+
+    const link = [...el.querySelectorAll<HTMLAnchorElement>('a')].find((a) => a.textContent!.includes('Categories'))!;
+    expect(link.getAttribute('href')).toBe('/costing/purchases/categories?tab=expenses');
   });
 });

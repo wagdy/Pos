@@ -8,6 +8,7 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { CostingApi, ExpenseItem } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
@@ -31,6 +32,7 @@ import { ExpenseItemDialog, ExpenseItemDialogData } from './expense-item-dialog'
     MatInputModule,
     MatProgressBarModule,
     MoneyPipe,
+    RouterLink,
   ],
   template: `
     @if (loading()) {
@@ -53,6 +55,7 @@ import { ExpenseItemDialog, ExpenseItemDialogData } from './expense-item-dialog'
           Show archived <span class="inline-ar">المؤرشفة</span>
         </mat-checkbox>
         <span class="spacer"></span>
+        <a mat-button routerLink="/costing/purchases/categories" [queryParams]="{ tab: 'expenses' }"><mat-icon>category</mat-icon> Categories <span class="inline-ar">الأقسام</span></a>
         <button mat-flat-button (click)="add()"><mat-icon>add</mat-icon> Add expense item</button>
       </div>
       <div class="table-wrap">

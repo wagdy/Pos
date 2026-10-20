@@ -39,6 +39,11 @@ export const routes: Routes = [
             path: 'materials',
             loadComponent: () => import('./features/costing/materials-page').then((m) => m.MaterialsPage),
           },
+          // General expenses (OPEX): bought, never stock, so not under Purchases.
+          {
+            path: 'expense-items',
+            loadComponent: () => import('./features/costing/expense-items-page').then((m) => m.ExpenseItemsPage),
+          },
           {
             path: 'purchases',
             loadComponent: () => import('./features/costing/purchases-shell').then((m) => m.PurchasesShell),
@@ -68,10 +73,8 @@ export const routes: Routes = [
                 path: 'spending',
                 loadComponent: () => import('./features/costing/spending-page').then((m) => m.SpendingPage),
               },
-              {
-                path: 'expense-items',
-                loadComponent: () => import('./features/costing/expense-items-page').then((m) => m.ExpenseItemsPage),
-              },
+              // Where the expense items were before they had a tab of their own.
+              { path: 'expense-items', redirectTo: '/costing/expense-items' },
               {
                 path: 'categories',
                 loadComponent: () => import('./features/costing/purchase-categories-page').then((m) => m.PurchaseCategoriesPage),

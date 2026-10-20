@@ -16,7 +16,7 @@ import { Approvals, pendingLabel } from './approvals';
 import { CategoryDeleteDialog, CategoryDeleteDialogData } from './category-delete-dialog';
 import { PurchaseCategoryDialog, PurchaseCategoryDialogData } from './purchase-category-dialog';
 
-// The purchase categories (أقسام المشتريات والخامات): what raw materials and expense items are
+// The categories (الأقسام), for purchases and expenses alike: what raw materials and expense items are
 // filed under, so purchases add up by category, and where each category's expenses count in the
 // profit and loss. One holding anything is deleted only after choosing where it moves, so nothing
 // is left without one, and on the way its raw materials can be made expense items or its expense

@@ -41,7 +41,6 @@ export class PurchasesShell {
     { path: 'invoices', icon: 'history', en: 'Invoices', ar: 'أرشيف الفواتير' },
     { path: 'spending', icon: 'pie_chart', en: 'Spending by category', ar: 'المشتريات حسب الفئة' },
     { path: 'suppliers', icon: 'local_shipping', en: 'Suppliers', ar: 'إدارة الموردين' },
-    { path: 'expense-items', icon: 'receipt_long', en: 'Expense items', ar: 'المصروفات العمومية' },
-    { path: 'categories', icon: 'category', en: 'Categories', ar: 'أقسام المشتريات والخامات' },
+    { path: 'categories', icon: 'category', en: 'Categories', ar: 'الأقسام' },
   ];
 }
