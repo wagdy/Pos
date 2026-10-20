@@ -246,7 +246,12 @@ export class FinalizeDialog {
         }
       </div>
       @if (s.status !== 'Finalized' && finalizeBlocked(s); as why) {
-        <p class="note no-print">{{ why }}</p>
+        <p class="note no-print">
+          {{ why }}
+          @if (!f.openDays && f.missingPunchDays > 0) {
+            <a routerLink="/hr/corrections">Open Corrections</a>
+          }
+        </p>
       }
 
       <section class="lists">
@@ -482,7 +487,7 @@ export class PayslipPage {
     }
     if (s.figures.missingPunchDays > 0) {
       const n = s.figures.missingPunchDays;
-      return `${n} ${n === 1 ? 'day is' : 'days are'} suspended, a punch-in with no punch-out: enter the punch-out on the attendance first.`;
+      return `${n} ${n === 1 ? 'day is' : 'days are'} suspended, a punch-in with no punch-out: enter the punch-out, or ignore the stray punch, on Corrections first.`;
     }
     return null;
   }

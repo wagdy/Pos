@@ -111,12 +111,32 @@ export interface AttendancePolicy {
   doubleScanMinutes: number;
 }
 
+// One employee's day, as everyone's day and the suspended days list them.
+export interface EmployeeDay {
+  employee: Employee;
+  day: AttendanceDay;
+}
+
 export interface AttendanceDayReport {
   date: string;
   policy: AttendancePolicy;
   totals: { present: number; late: number; absent: number; missingPunch: number; offOrOnLeave: number; overtimeMinutes: number };
-  employees: { employee: Employee; day: AttendanceDay }[];
+  employees: EmployeeDay[];
   unassigned: Punch[];
+}
+
+// A manager's administrative penalty (جزاء إداري) as the month's list shows it: hours, and what
+// they take off the pay at the employee's hourly rate.
+export interface AdministrativePenalty {
+  employeeId: string;
+  employeeName: string;
+  date: string;
+  hours: number;
+  hourlyRate: number;
+  amount: number;
+  reason: string;
+  setBy: string;
+  setAtUtc: string;
 }
 
 export interface Timesheet {
@@ -300,6 +320,26 @@ export class HrApi {
     return this.http.put<void>(`/api/hr/employees/${employeeId}/days/${date}`, { kind, notes });
   }
 
+  // The days suspended for a manager, a punch-in left 18 hours without its punch-out: everyone's,
+  // from `from` (the first of last month unless given) to today, oldest first.
+  suspendedDays(from?: string): Observable<EmployeeDay[]> {
+    return this.http.get<EmployeeDay[]>('/api/hr/attendance/suspended', { params: from ? { from } : {} });
+  }
+
+  // A suspended day resolved by the manager's punch-out: the day as it is worked out from it.
+  resolveDay(employeeId: string, date: string, punchedOutAt: string, reason: string): Observable<AttendanceDay> {
+    return this.http.post<AttendanceDay>('/api/hr/attendance/resolve', { punchId: crypto.randomUUID(), employeeId, date, punchedOutAt, reason });
+  }
+
+  // A day's administrative penalty set, or taken off with no hours.
+  setPenalty(employeeId: string, date: string, hours: number | null, reason: string | null): Observable<void> {
+    return this.http.put<void>(`/api/hr/employees/${employeeId}/days/${date}/penalty`, { hours, reason });
+  }
+
+  penalties(month: string): Observable<AdministrativePenalty[]> {
+    return this.http.get<AdministrativePenalty[]>('/api/hr/penalties', { params: { month } });
+  }
+
   settings(): Observable<AttendancePolicy> {
     return this.http.get<AttendancePolicy>('/api/hr/settings');
   }
@@ -349,6 +389,17 @@ export function duration(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`;
+}
+
+// A date ('2026-10-19') as its day: "Mon 19 Oct".
+export function dayName(date: string): string {
+  return new Date(`${date}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
+// Minutes from one wall-clock time to another, read without a time zone, so no clock change can
+// move them.
+export function minutesBetween(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}Z`) - Date.parse(`${from}Z`)) / 60_000);
 }
 
 // A wall-clock time as the till sends it ('2026-10-19T16:12:05'), as "16:12"; a day after `day`

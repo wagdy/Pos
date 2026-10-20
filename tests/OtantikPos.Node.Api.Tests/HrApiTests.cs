@@ -253,9 +253,16 @@ public class HrApiTests
         var figures = await Figures();
         Assert.Equal((2m, 40m), (figures.GetProperty("administrativePenaltyHours").GetDecimal(), figures.GetProperty("administrativePenalty").GetDecimal()));
 
+        // And on the month's list of penalties, with what it takes off.
+        string Penalties = $"/api/hr/penalties?month={Iso(month)}";
+        var listed = (await Json(await accountant.GetAsync(Penalties, Cancel))).EnumerateArray().Single();
+        Assert.Equal(("Hassan", Iso(day), 2m, 40m, "Left the walk-in open"), (listed.GetProperty("employeeName").GetString(), listed.GetProperty("date").GetString(),
+            listed.GetProperty("hours").GetDecimal(), listed.GetProperty("amount").GetDecimal(), listed.GetProperty("reason").GetString()));
+
         // Taken off again.
         Assert.Equal(HttpStatusCode.NoContent, (await manager.PutAsJsonAsync(Penalty, new { hours = (decimal?)null }, Cancel)).StatusCode);
         Assert.Equal(0m, (await Figures()).GetProperty("administrativePenalty").GetDecimal());
+        Assert.Empty((await Json(await accountant.GetAsync(Penalties, Cancel))).EnumerateArray());
     }
 
     [Fact]

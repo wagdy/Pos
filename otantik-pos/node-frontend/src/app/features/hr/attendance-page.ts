@@ -22,13 +22,26 @@ import {
   Punch,
   Timesheet,
   clock,
+  dayName,
   dayStatusLabels,
   duration,
 } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { BusinessDay, isoDay } from '../costing/financials';
-import { AddPunchData, AddPunchDialog, IgnorePunchDialog, MarkDayData, MarkDayDialog } from './attendance-dialogs';
+import {
+  AddPunchData,
+  AddPunchDialog,
+  IgnorePunchDialog,
+  MarkDayData,
+  MarkDayDialog,
+  PenaltyAnswer,
+  PenaltyData,
+  PenaltyDialog,
+  ResolveDayData,
+  ResolveDayDialog,
+} from './attendance-dialogs';
+import { SuspendedCount } from './suspended-count';
 
 type Mode = 'day' | 'employee';
 
@@ -44,7 +57,7 @@ interface Row {
 // Attendance (الحضور والانصراف): everyone's day, or one employee's month, as worked out from the
 // device's punches against each one's nine-hour shift. Each day opens to show its punches. A
 // manager puts a day right there: a punch the device missed, one that should not count, a day of
-// leave or off. Punches under a number nobody has yet are listed under the day, waiting for the
+// leave or off, a suspended day's punch-out, an administrative penalty. Punches under a number nobody has yet are listed under the day, waiting for the
 // number to be given to someone on the Employees tab.
 @Component({
   selector: 'app-attendance-page',
@@ -185,8 +198,14 @@ interface Row {
                     </div>
                     @if (canCorrect() && d.status !== 'NotEmployed') {
                       <div class="actions">
+                        @if (d.status === 'Suspended') {
+                          <button mat-flat-button (click)="resolve(r)"><mat-icon>logout</mat-icon> Punch-out <span class="inline-ar">بصمة الانصراف</span></button>
+                        }
                         <button mat-stroked-button (click)="addPunch(r)"><mat-icon>more_time</mat-icon> Add a punch <span class="inline-ar">إضافة بصمة</span></button>
                         <button mat-stroked-button (click)="markDay(r)"><mat-icon>event_available</mat-icon> Leave or day off <span class="inline-ar">إجازة أو راحة</span></button>
+                        <button mat-stroked-button (click)="penalty(r)">
+                          <mat-icon>gavel</mat-icon> {{ d.penaltyHours ? 'Change the penalty' : 'Penalty' }} <span class="inline-ar">جزاء إداري</span>
+                        </button>
                       </div>
                     }
                   </td>
@@ -213,9 +232,9 @@ interface Row {
     @if (policy(); as p) {
       <p class="note">
         Each shift is nine hours. Late counts from the shift's start{{ p.graceMinutes ? ', once past ' + p.graceMinutes + ' minutes’ grace' : ': no grace is set' }};
-        overtime is time worked after the shift ends;
+        overtime is time after the shift ends, beyond nine hours worked, so staying late to make up for being late isn't overtime;
         scans within {{ p.doubleScanMinutes }} minutes of each other are one. A day ends six hours before the next shift starts, so a shift past
-        midnight is one day.
+        midnight is one day. A punch-in left 18 hours without a punch-out is suspended until a manager enters it, here or on Corrections.
       </p>
     }
   `,
@@ -344,6 +363,7 @@ export class AttendancePage {
   private readonly notify = inject(NotifyService);
   private readonly approvals = inject(Approvals);
   private readonly businessDay = inject(BusinessDay);
+  private readonly suspendedCount = inject(SuspendedCount);
 
   // ?date=, or ?employee=&month= (its first day), to open on them.
   readonly date = input<string>();
@@ -384,7 +404,7 @@ export class AttendancePage {
     }
     return sheet.days.map((d) => ({
       key: d.date,
-      title: new Date(`${d.date}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }),
+      title: dayName(d.date),
       sub: d.isWeeklyDayOff ? 'Weekly day off · راحة أسبوعية' : '',
       employee: sheet.employee,
       day: d,
@@ -507,7 +527,7 @@ export class AttendancePage {
   protected async markDay(row: Row): Promise<void> {
     const data: MarkDayData = {
       employee: row.employee.name,
-      day: new Date(`${row.day.date}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }),
+      day: dayName(row.day.date),
       mark: row.day.mark,
       notes: row.day.markNotes,
       weeklyDayOff: row.day.isWeeklyDayOff,
@@ -523,12 +543,51 @@ export class AttendancePage {
     }
   }
 
+  // A suspended day's punch-out, for the punch-in left without one: its last punch that counts.
+  protected async resolve(row: Row): Promise<void> {
+    const stray = row.day.punches.filter((p) => !p.isIgnored).at(-1);
+    if (!stray) {
+      return;
+    }
+    const data: ResolveDayData = {
+      employee: row.employee.name,
+      date: row.day.date,
+      shift: `${clock(row.day.shiftStartsAt)}–${clock(row.day.shiftEndsAt, row.day.date)}`,
+      shiftEndsAt: row.day.shiftEndsAt,
+      punchedIn: stray.punchedAt,
+    };
+    const answer = await firstValueFrom(
+      this.dialog.open<ResolveDayDialog, ResolveDayData, { punchedOutAt: string; reason: string }>(ResolveDayDialog, { data, width: '460px' }).afterClosed(),
+    );
+    if (answer) {
+      await this.act(() => this.api.resolveDay(row.employee.id, row.day.date, answer.punchedOutAt, answer.reason), 'Punch-out entered.');
+    }
+  }
+
+  protected async penalty(row: Row): Promise<void> {
+    const d = row.day;
+    const data: PenaltyData = {
+      employee: row.employee,
+      date: d.date,
+      hours: d.penaltyHours || null,
+      reason: d.penaltyReason,
+    };
+    const answer = await firstValueFrom(this.dialog.open<PenaltyDialog, PenaltyData, PenaltyAnswer>(PenaltyDialog, { data, width: '480px' }).afterClosed());
+    if (answer) {
+      await this.act(
+        () => this.api.setPenalty(row.employee.id, d.date, answer.hours, answer.reason),
+        answer.hours === null ? 'Penalty taken off.' : 'Penalty saved.',
+      );
+    }
+  }
+
   // Does it, says so, and reads the day or month again; a refusal is said as the till says it.
   private async act(call: () => Observable<unknown>, done: string): Promise<void> {
     try {
       await firstValueFrom(call());
       this.notify.info(done);
       await this.load();
+      void this.suspendedCount.refresh();
     } catch (error) {
       this.notify.error(error, 'It could not be saved.');
     }

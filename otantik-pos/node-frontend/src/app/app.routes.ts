@@ -264,6 +264,11 @@ export const routes: Routes = [
             loadComponent: () => import('./features/hr/payslip-page').then((m) => m.PayslipPage),
           },
           {
+            // Suspended days for a manager's punch-out, and the month's administrative penalties.
+            path: 'corrections',
+            loadComponent: () => import('./features/hr/corrections-page').then((m) => m.CorrectionsPage),
+          },
+          {
             path: 'devices',
             loadComponent: () => import('./features/hr/devices-page').then((m) => m.DevicesPage),
           },

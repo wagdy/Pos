@@ -207,12 +207,20 @@ describe('a payslip', () => {
     expect(text(el.querySelector('.breakdown tr.total td')!)).toBe('L.E 5,476.33');
   });
 
+  it('points to Corrections when suspended days keep the month from being finalized', async () => {
+    payroll.mockReturnValue(of(month([slip(hassan, { status: 'Draft' }, { missingPunchDays: 1 })])));
+    const { el } = await render();
+
+    expect(el.querySelector('p.note a')!.getAttribute('href')).toBe('/hr/corrections');
+    expect(text(el.querySelector('p.note')!)).toContain('1 day is suspended');
+  });
+
   it('is finalized by a manager once the month is over and every day is settled, after asking', async () => {
     const { page } = await render();
 
     expect(page['finalizeBlocked'](slip(hassan, {}, { openDays: 10 }))).toBe('The month is not over yet: a payslip is finalized once all its days are.');
     expect(page['finalizeBlocked'](slip(hassan, {}, { missingPunchDays: 2 }))).toBe(
-      '2 days are suspended, a punch-in with no punch-out: enter the punch-out on the attendance first.',
+      '2 days are suspended, a punch-in with no punch-out: enter the punch-out, or ignore the stray punch, on Corrections first.',
     );
     expect(page['finalizeBlocked'](draft)).toBeNull();
 

@@ -108,6 +108,11 @@ public sealed class HrController(ISender sender) : ControllerBase
         return NoContent();
     }
 
+    // A month's administrative penalties, everyone's; ?month= its first day.
+    [HttpGet("penalties")]
+    public Task<IReadOnlyList<AdministrativePenaltyDto>> GetPenalties([FromQuery] DateOnly month, CancellationToken cancellationToken) =>
+        sender.Send(new GetAdministrativePenaltiesQuery(month), cancellationToken);
+
     [HttpGet("settings")]
     public Task<AttendancePolicyDto> GetSettings(CancellationToken cancellationToken) => sender.Send(new GetAttendanceSettingsQuery(), cancellationToken);
 

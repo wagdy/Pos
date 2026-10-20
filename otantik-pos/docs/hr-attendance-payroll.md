@@ -5,8 +5,8 @@ and their monthly pay. This page is the design.
 
 - **Phase 1, built:** the domain, its tables and this plan.
 - **Phase 2, built:** every endpoint below, the ADMS receiver, and the screens:
-  - HR & Payroll's Employees, Attendance, Payroll and Attendance devices tabs, with a payslip
-    page;
+  - HR & Payroll's Employees, Attendance, Corrections, Payroll and Attendance devices tabs,
+    with a payslip page;
   - advances in Financials and the daily batch.
 
 ## The rules
@@ -179,6 +179,7 @@ unit with a capture of its first requests before they are fixed.
 | `GET /api/hr/attendance/suspended?from=&to=` | The suspended days, everyone's: the corrections dashboard |
 | `POST /api/hr/attendance/resolve` | A suspended day's punch-out, from a manager: the day worked out again |
 | `PUT /api/hr/employees/{id}/days/{date}/penalty` | An administrative penalty in hours, with the reason; with no hours, taken off |
+| `GET /api/hr/penalties?month=` | The month's administrative penalties, everyone's, each with what it takes off the pay |
 | `GET`/`PUT /api/hr/settings` | The grace, and how close two scans are to be one |
 | `GET /api/hr/devices`, `POST …/{id}/approve`, `…/revoke` | The devices, approved by name |
 | `GET /api/hr/payroll?month=` | Every slip as it stands |
@@ -219,14 +220,24 @@ holiday worked say.
 
 - Attendance: everyone's day, or one employee's month.
   - Each day opens to its punches.
-  - A manager adds a missed punch with its reason, ignores one that should not count, or marks
-    a day as leave or a day off.
+  - A manager adds a missed punch with its reason, ignores one that should not count, marks
+    a day as leave or a day off, enters a suspended day's punch-out, or gives the day an
+    administrative penalty.
   - Punches under a number nobody has are listed under the day.
+- Corrections (مراجعة وجزاءات), its tab counting the days waiting:
+  - the suspended days since the first of last month (or a day chosen), each with its punches
+    and the stray punch-in marked; a manager enters the punch-out (after the punch-in, within
+    18 hours of it and before the next day starts; the shift's end a click away) or ignores the
+    stray punch;
+  - the month's administrative penalties, with what each takes off and the total; a manager
+    adds one for whoever is employed in the month (told when it replaces the day's own), and
+    changes or takes one off.
+  - Accountants see both, with nothing to change.
 - Payroll: the month's slips, each part of the formula a column, with totals.
   - Calculate drafts saves them.
   - Each row opens the employee's payslip: the formula line by line from base salary to net
     payable, the days it came from, incentives and allowances (a manager adds and voids them),
     advances, and salary paid.
-  - Finalize (a manager's, once the month is over and no day misses a punch), then Pay salary
-    through the safe entry dialog.
+  - Finalize (a manager's, once the month is over and no day is suspended; the payslip points
+    to Corrections when one is), then Pay salary through the safe entry dialog.
   - It prints as a payslip.

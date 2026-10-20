@@ -3,8 +3,10 @@ import { Route, provideRouter } from '@angular/router';
 import { routes } from '../../app.routes';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
+import { signal } from '@angular/core';
 import { FinancialsShell } from '../costing/financials-shell';
 import { HrShell } from './hr-shell';
+import { SuspendedCount } from './suspended-count';
 
 // The route of that path, anywhere under these.
 function find(list: Route[] | undefined, path: string): Route | undefined {
@@ -32,21 +34,31 @@ describe('the HR navigation', () => {
       ['attendance', 'page'],
       ['payroll', 'page'],
       ['payroll/:employeeId', 'page'],
+      ['corrections', 'page'],
       ['devices', 'page'],
     ]);
     // Advances in Financials are HR's too: guarded the same way.
     expect(find(find(routes, 'financials')!.children, 'advances')!.canActivate?.length).toBe(1);
   });
 
-  it('has a tab each for the employees, attendance, payroll and the attendance devices', async () => {
-    TestBed.configureTestingModule({ providers: [provideRouter([])] });
+  it('has a tab each for the employees, attendance, its corrections, payroll and the attendance devices, counting the days waiting', async () => {
+    const count = signal(0);
+    const refresh = vi.fn();
+    TestBed.configureTestingModule({ providers: [provideRouter([]), { provide: SuspendedCount, useValue: { count, refresh } }] });
     const fixture = TestBed.createComponent(HrShell);
     await fixture.whenStable();
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
 
     expect(text(el.querySelector('h1')!)).toBe('HR & Payroll الموارد البشرية والرواتب');
-    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('href'))).toEqual(['/employees', '/attendance', '/payroll', '/devices']);
+    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('href'))).toEqual(['/employees', '/attendance', '/corrections', '/payroll', '/devices']);
+    expect(refresh).toHaveBeenCalled();
+    expect(el.querySelector('.count')).toBeNull();
+
+    count.set(2);
+    fixture.detectChanges();
+    expect(el.querySelectorAll('nav a')[2].querySelector('.count')!.getAttribute('aria-label')).toBe('2 suspended');
+    expect(text(el.querySelector('.count')!)).toBe('2');
   });
 
   it('shows the Advances tab in Financials only to whoever sees HR', async () => {

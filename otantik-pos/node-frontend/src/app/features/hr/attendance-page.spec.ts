@@ -7,8 +7,9 @@ import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { BusinessDay } from '../costing/financials';
 import { MAT_DIALOG_DATA } from '@angular/material/dialog';
-import { AddPunchDialog, IgnorePunchDialog, MarkDayData, MarkDayDialog } from './attendance-dialogs';
+import { AddPunchDialog, IgnorePunchDialog, MarkDayData, MarkDayDialog, PenaltyDialog, ResolveDayDialog } from './attendance-dialogs';
 import { AttendancePage } from './attendance-page';
+import { SuspendedCount } from './suspended-count';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
@@ -58,6 +59,9 @@ describe('the attendance', () => {
   const addPunch = vi.fn();
   const ignorePunch = vi.fn();
   const markDay = vi.fn();
+  const setPenalty = vi.fn();
+  const resolveDay = vi.fn();
+  const suspended = { refresh: vi.fn() };
   const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
   const canApprove = signal(true);
@@ -65,7 +69,11 @@ describe('the attendance', () => {
   async function render(inputs: Record<string, string> = {}) {
     TestBed.configureTestingModule({
       providers: [
-        { provide: HrApi, useValue: { attendance, timesheet, addPunch, ignorePunch, restorePunch: vi.fn(), markDay, employees: () => of([hassan, mona]) } },
+        {
+          provide: HrApi,
+          useValue: { attendance, timesheet, addPunch, ignorePunch, restorePunch: vi.fn(), markDay, setPenalty, resolveDay, employees: () => of([hassan, mona]) },
+        },
+        { provide: SuspendedCount, useValue: suspended },
         { provide: Approvals, useValue: { canApprove } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
@@ -96,6 +104,9 @@ describe('the attendance', () => {
     addPunch.mockReset().mockReturnValue(of({}));
     ignorePunch.mockReset().mockReturnValue(of({}));
     markDay.mockReset().mockReturnValue(of(undefined));
+    setPenalty.mockReset().mockReturnValue(of(undefined));
+    resolveDay.mockReset().mockReturnValue(of({}));
+    suspended.refresh.mockReset();
     open.mockReset();
     notify.info.mockReset();
     canApprove.set(true);
@@ -129,7 +140,9 @@ describe('the attendance', () => {
     page['toggle']('hassan');
     await refresh();
     expect([...el.querySelectorAll('.punch strong')].map(text).slice(0, 2)).toEqual(['16:12', '01:20 +1']);
-    expect([...el.querySelectorAll('.detail .actions button')].map(text)).toEqual(['more_time Add a punch إضافة بصمة', 'event_available Leave or day off إجازة أو راحة']);
+    expect([...el.querySelectorAll('.detail .actions button')].map(text)).toEqual([
+      'more_time Add a punch إضافة بصمة', 'event_available Leave or day off إجازة أو راحة', 'gavel Change the penalty جزاء إداري',
+    ]);
 
     open.mockReturnValue({ afterClosed: () => of({ punchedAt: '2026-09-22T01:05:00', reason: 'Forgot to scan out' }) });
     await page['addPunch'](page['rows']()[0]);
@@ -148,6 +161,46 @@ describe('the attendance', () => {
     expect(open.mock.lastCall![0]).toBe(MarkDayDialog);
     expect(open.mock.lastCall![1].data).toMatchObject({ employee: 'Mona', mark: null, weeklyDayOff: false });
     expect(markDay).toHaveBeenCalledWith('mona', '2026-09-21', null, null);
+  });
+
+  it('gives a day an administrative penalty, changed or taken off', async () => {
+    const { page } = await render();
+
+    open.mockReturnValue({ afterClosed: () => of({ employeeId: 'hassan', date: '2026-09-21', hours: null, reason: null }) });
+    await page['penalty'](page['rows']()[0]);
+    expect(open.mock.lastCall![0]).toBe(PenaltyDialog);
+    expect(open.mock.lastCall![1].data).toEqual({ employee: hassan, date: '2026-09-21', hours: 2, reason: 'Left the walk-in open' });
+    expect(setPenalty).toHaveBeenCalledWith('hassan', '2026-09-21', null, null);
+    expect(notify.info).toHaveBeenCalledWith('Penalty taken off.');
+
+    open.mockReturnValue({ afterClosed: () => of({ employeeId: 'mona', date: '2026-09-21', hours: 1.5, reason: 'Late twice this week' }) });
+    await page['penalty'](page['rows']()[1]);
+    expect(open.mock.lastCall![1].data).toEqual({ employee: mona, date: '2026-09-21', hours: null, reason: null });
+    expect(setPenalty).toHaveBeenLastCalledWith('mona', '2026-09-21', 1.5, 'Late twice this week');
+    expect(suspended.refresh).toHaveBeenCalled();
+  });
+
+  it('enters a suspended day’s punch-out, after the punch-in left without one', async () => {
+    const stuck = day('2026-09-21', {
+      status: 'Suspended', lastOut: null, workedMinutes: 0, overtimeMinutes: 0,
+      punches: [punch('p0', '2026-09-21T16:05:00', { isIgnored: true }), punch('p1', '2026-09-21T16:07:00')],
+    });
+    attendance.mockReturnValue(of({ ...report, employees: [{ employee: hassan, day: stuck }] }));
+    const { el, page, refresh } = await render();
+
+    page['toggle']('hassan');
+    await refresh();
+    expect(text(el.querySelector('.detail .actions button')!)).toBe('logout Punch-out بصمة الانصراف');
+
+    open.mockReturnValue({ afterClosed: () => of({ punchedOutAt: '2026-09-22T01:00:00', reason: 'Forgot to scan out' }) });
+    await page['resolve'](page['rows']()[0]);
+    expect(open.mock.lastCall![0]).toBe(ResolveDayDialog);
+    expect(open.mock.lastCall![1].data).toEqual({
+      employee: 'Hassan', date: '2026-09-21', shift: '16:00–01:00 +1', shiftEndsAt: '2026-09-22T01:00:00', punchedIn: '2026-09-21T16:07:00',
+    });
+    expect(resolveDay).toHaveBeenCalledWith('hassan', '2026-09-21', '2026-09-22T01:00:00', 'Forgot to scan out');
+    expect(notify.info).toHaveBeenCalledWith('Punch-out entered.');
+    expect(suspended.refresh).toHaveBeenCalled();
   });
 
   it('offers a working day, a swap, only for a weekly day off', async () => {

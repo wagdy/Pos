@@ -345,6 +345,38 @@ internal sealed class SetAdministrativePenaltyHandler(
     }
 }
 
+// A penalty as the month's list shows it: whose, on which day, and what it takes off their pay.
+public sealed record AdministrativePenaltyDto(
+    Guid EmployeeId, string EmployeeName, DateOnly Date, decimal Hours, decimal HourlyRate, decimal Amount, string Reason, string SetBy, DateTime SetAtUtc);
+
+// A month's administrative penalties, everyone's, by day. Only those on days their employee is
+// employed, as only those come off the pay.
+public sealed record GetAdministrativePenaltiesQuery(DateOnly Month) : IRequest<IReadOnlyList<AdministrativePenaltyDto>>;
+
+internal sealed class GetAdministrativePenaltiesHandler(IEmployeeRepository employees, IAdministrativePenaltyRepository penalties)
+    : IRequestHandler<GetAdministrativePenaltiesQuery, IReadOnlyList<AdministrativePenaltyDto>>
+{
+    public async Task<IReadOnlyList<AdministrativePenaltyDto>> Handle(GetAdministrativePenaltiesQuery request, CancellationToken cancellationToken)
+    {
+        var month = PayrollMonth.Required(request.Month);
+        var list = await penalties.GetBetweenAsync(month, month.AddMonths(1).AddDays(-1), cancellationToken);
+        if (list.Count == 0)
+            return [];
+        var people = (await employees.GetAllAsync(cancellationToken)).ToDictionary(e => e.Id);
+        return list
+            .Where(p => people.TryGetValue(p.EmployeeId, out var e) && e.IsEmployedOn(p.Date))
+            .Select(p =>
+            {
+                var e = people[p.EmployeeId];
+                var rate = Math.Round(e.HourlyRate, 2, MidpointRounding.AwayFromZero);
+                return new AdministrativePenaltyDto(
+                    e.Id, e.Name, p.Date, p.Hours, rate, Math.Round(p.Hours * e.HourlyRate, 2, MidpointRounding.AwayFromZero), p.Reason, p.SetBy, p.SetAtUtc);
+            })
+            .OrderBy(p => p.Date).ThenBy(p => p.EmployeeName)
+            .ToList();
+    }
+}
+
 // The days suspended for a manager (موقوف للمراجعة): a punch-in left 18 hours without its
 // punch-out, everyone's, from `From` to `To`, oldest first.
 public sealed record GetSuspendedDaysQuery(DateOnly From, DateOnly To) : IRequest<IReadOnlyList<EmployeeDayDto>>;
