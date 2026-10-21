@@ -1,11 +1,13 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { MatDialog } from '@angular/material/dialog';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
 import { ApprovalRequest } from '../../core/costing/costing.api';
-import { AttendanceDevice, Department, DeviceCommand, DeviceUser, Employee, HrApi } from '../../core/hr/hr.api';
+import { saveDeviceLink } from '../../core/hr/device-link';
+import { AttendanceDevice, Department, DeviceCommand, DeviceSyncResult, DeviceUser, Employee, HrApi } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { BusinessDay } from '../costing/financials';
@@ -49,8 +51,9 @@ describe('the employees', () => {
   const saveEmployee = vi.fn();
   const devicesOf = vi.fn();
   const readDeviceUsers = vi.fn();
+  const syncDevice = vi.fn();
   const open = vi.fn();
-  const notify = { info: vi.fn(), error: vi.fn() };
+  const notify = { info: vi.fn(), error: vi.fn(), attention: vi.fn() };
   const pending = signal<ApprovalRequest[]>([]);
   const approvals = {
     canApprove: signal(true),
@@ -65,7 +68,7 @@ describe('the employees', () => {
       providers: [
         {
           provide: HrApi,
-          useValue: { employees, deviceUsers, saveEmployee, departments: () => of(departments), devices: devicesOf, readDeviceUsers },
+          useValue: { employees, deviceUsers, saveEmployee, departments: () => of(departments), devices: devicesOf, readDeviceUsers, syncDevice },
         },
         { provide: AuthService, useValue: { can: (p: string) => manage || p !== Permissions.HrManage } },
         { provide: Approvals, useValue: approvals },
@@ -93,8 +96,12 @@ describe('the employees', () => {
     saveEmployee.mockReset().mockImplementation((id: string) => of({ ...mona, id }));
     devicesOf.mockReset().mockReturnValue(of([]));
     readDeviceUsers.mockReset();
+    syncDevice.mockReset();
     open.mockReset();
     notify.info.mockReset();
+    notify.error.mockReset();
+    notify.attention.mockReset();
+    localStorage.clear();
     pending.set([]);
     approvals.requested.mockReset();
   });
@@ -161,7 +168,7 @@ describe('the employees', () => {
     expect(rows().map((r) => r[0])).toEqual(['Samir Chef · Kitchen']);
   });
 
-  it('syncs the approved devices’ users, reading the list again until they answer', async () => {
+  describe('Sync device', () => {
     const asked: DeviceCommand = {
       id: 'c1', number: 3, kind: 'ReadUsers', text: 'DATA QUERY USERINFO', queuedBy: 'Omar', queuedAtUtc: '2026-10-21T10:00:00Z', sentAtUtc: null,
       answeredAtUtc: null, returnCode: null,
@@ -170,29 +177,78 @@ describe('the employees', () => {
       id: 'd1', serialNumber: 'CQZ', name: 'Kitchen door', isApproved: true, approvedBy: 'Omar', approvedAtUtc: null, firstSeenAtUtc: '', lastSeenAtUtc: '',
       lastAddress: '192.168.1.106', commands: [],
     };
-    const { page } = await render();
+    const synced = (extra: Partial<DeviceSyncResult> = {}): DeviceSyncResult => ({
+      serialNumber: 'CQZ', deviceName: 'Kitchen door', newDevice: false, users: 3, usersNotOnTheTill: 1, punches: 40, newPunches: 12, ...extra,
+    });
+    const closed = new HttpErrorResponse({
+      status: 422,
+      error: { errors: ['192.168.1.106 answered, but nothing listens on port 4370. Its own port may be closed while it uses ADMS (Cloud Server): its punches still come that way.'] },
+    });
 
-    // None approved yet: said so, nothing asked.
-    devicesOf.mockReturnValue(of([{ ...door, isApproved: false }]));
-    await page['sync']();
-    expect(readDeviceUsers).not.toHaveBeenCalled();
-    expect(notify.info).toHaveBeenLastCalledWith('No attendance device is approved yet: approve it on the Attendance devices tab first.');
+    it('with no device known, says where to give its address', async () => {
+      const { page } = await render();
 
-    vi.useFakeTimers();
-    try {
-      devicesOf.mockReturnValueOnce(of([door])).mockReturnValue(of([{ ...door, commands: [{ ...asked, answeredAtUtc: '2026-10-21T10:00:08Z', returnCode: 0 }] }]));
-      readDeviceUsers.mockReturnValue(of(asked));
+      devicesOf.mockReturnValue(of([{ ...door, isApproved: false }]));
+      await page['sync']();
+      expect(syncDevice).not.toHaveBeenCalled();
+      expect(readDeviceUsers).not.toHaveBeenCalled();
+      expect(notify.info).toHaveBeenLastCalledWith(
+        'No attendance device yet: give its IP address under Connection settings on the Attendance devices tab first.',
+      );
+    });
+
+    it('reads the device directly, at the address last used here and where each approved one last called from', async () => {
+      saveDeviceLink({ address: '192.168.1.120', port: 4370, commKey: 12345 });
+      devicesOf.mockReturnValue(of([door]));
+      syncDevice.mockImplementation((address: string) =>
+        of(address === '192.168.1.120' ? synced({ serialNumber: 'CQZ2', deviceName: 'Bar', users: 1, newPunches: 1 }) : synced()),
+      );
+      const { page } = await render();
       deviceUsers.mockReturnValue(of([deviceUser('31', 'Youssef')]));
-      const syncing = page['sync']();
-      await vi.advanceTimersByTimeAsync(5_000);
-      await syncing;
-    } finally {
-      vi.useRealTimers();
-    }
-    expect(readDeviceUsers).toHaveBeenCalledWith('d1');
-    expect(notify.info).toHaveBeenCalledWith('Asked Kitchen door for its users: they appear below within seconds.');
-    expect(page['unknown']().map((u: DeviceUser) => u.deviceUserId)).toEqual(['31']);
-    expect(page['syncing']()).toBe(false);
+
+      await page['sync']();
+      expect(syncDevice.mock.calls).toEqual([
+        ['192.168.1.120', 4370, 12345],
+        ['192.168.1.106', 4370, 0],
+      ]);
+      expect(readDeviceUsers).not.toHaveBeenCalled();
+      expect(notify.info).toHaveBeenLastCalledWith('Synced Bar: 1 user, 1 new punch; Kitchen door: 3 users, 12 new punches.');
+      expect(page['unknown']().map((u: DeviceUser) => u.deviceUserId)).toEqual(['31']);
+      expect(page['syncing']()).toBe(false);
+    });
+
+    it('asks an approved device over ADMS when its own port is closed, reading the list again until it answers', async () => {
+      const { page } = await render();
+      vi.useFakeTimers();
+      try {
+        devicesOf.mockReturnValueOnce(of([door])).mockReturnValue(of([{ ...door, commands: [{ ...asked, answeredAtUtc: '2026-10-21T10:00:08Z', returnCode: 0 }] }]));
+        syncDevice.mockReturnValue(throwError(() => closed));
+        readDeviceUsers.mockReturnValue(of(asked));
+        deviceUsers.mockReturnValue(of([deviceUser('31', 'Youssef')]));
+        const syncing = page['sync']();
+        await vi.advanceTimersByTimeAsync(5_000);
+        await syncing;
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(syncDevice).toHaveBeenCalledWith('192.168.1.106', 4370, 0);
+      expect(readDeviceUsers).toHaveBeenCalledWith('d1');
+      expect(notify.attention).toHaveBeenCalledWith(
+        `${closed.error.errors[0]} Asked Kitchen door for its users over ADMS: they appear below within seconds.`,
+      );
+      expect(devicesOf).toHaveBeenCalledTimes(2);
+      expect(page['unknown']().map((u: DeviceUser) => u.deviceUserId)).toEqual(['31']);
+    });
+
+    it('says why when a device known only by its address cannot be read', async () => {
+      saveDeviceLink({ address: '192.168.1.106', port: 4370, commKey: 0 });
+      syncDevice.mockReturnValue(throwError(() => closed));
+      const { page } = await render();
+
+      await page['sync']();
+      expect(readDeviceUsers).not.toHaveBeenCalled();
+      expect(notify.error).toHaveBeenLastCalledWith(null, closed.error.errors[0]);
+    });
   });
 
   it('shows flexible hours for one without a start time', async () => {

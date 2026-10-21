@@ -10,6 +10,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
+import { addressOf, isIPv4, saveDeviceLink, savedDeviceLink, ZkPort } from '../../core/hr/device-link';
 import { errorMessage } from '../../core/http/error-message';
 import { AttendanceDevice, AttendancePolicy, DeviceCommand, HrApi } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
@@ -445,11 +446,12 @@ export class DevicesPage {
   );
   protected readonly port = computed(() => String(this.devicePort() ?? (location.port || (location.protocol === 'https:' ? '443' : '80'))));
 
-  // Where the till reaches the device: its address as last used here, else the address an
-  // approved device last called from; ZKTeco's port; no comm key unless one is set on it.
-  protected deviceAddress = stored(AddressKey) ?? '';
-  protected tcpPort = 4370;
-  protected commKey = 0;
+  // Where the till reaches the device: as last used here, else the address a device last called
+  // from, on ZKTeco's port, with no comm key unless one is set on it.
+  private readonly link = savedDeviceLink();
+  protected deviceAddress = this.link?.address ?? '';
+  protected tcpPort = this.link?.port ?? ZkPort;
+  protected commKey = this.link?.commKey ?? 0;
   protected readonly linking = signal<'test' | 'sync' | null>(null);
   protected readonly linked = signal<{ ok: boolean; text: string; unlinked?: number } | null>(null);
 
@@ -466,11 +468,9 @@ export class DevicesPage {
   }
 
   protected linkable(): boolean {
-    const parts = this.deviceAddress.trim().split('.');
     const port = Number(this.tcpPort);
     return (
-      parts.length === 4 &&
-      parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255) &&
+      isIPv4(this.deviceAddress) &&
       Number.isInteger(port) &&
       port >= 1 &&
       port <= 65535 &&
@@ -486,7 +486,7 @@ export class DevicesPage {
       const probe = await firstValueFrom(this.api.testDevice(address, Number(this.tcpPort), Number(this.commKey) || 0));
       this.linked.set({ ok: probe.reached, text: probe.message });
       if (probe.reached) {
-        keep(AddressKey, address);
+        this.remember(address);
         this.notify.info(probe.message);
       } else {
         this.notify.error(null, probe.message);
@@ -505,7 +505,7 @@ export class DevicesPage {
     this.linked.set(null);
     try {
       const r = await firstValueFrom(this.api.syncDevice(address, Number(this.tcpPort), Number(this.commKey) || 0));
-      keep(AddressKey, address);
+      this.remember(address);
       const text =
         `${r.deviceName}: ${count(r.users, 'user')} and ${count(r.punches, 'punch', 'punches')} read, ` +
         `${r.newPunches === 0 ? 'none of them new' : `${r.newPunches} new`}.` +
@@ -522,6 +522,10 @@ export class DevicesPage {
     } finally {
       this.linking.set(null);
     }
+  }
+
+  private remember(address: string): void {
+    saveDeviceLink({ address, port: Number(this.tcpPort), commKey: Number(this.commKey) || 0 });
   }
 
   protected what(c: DeviceCommand): string {
@@ -633,7 +637,7 @@ export class DevicesPage {
     try {
       const [devices, settings] = await Promise.all([firstValueFrom(this.api.devices()), firstValueFrom(this.api.settings())]);
       this.devices.set(devices);
-      this.deviceAddress ||= devices.map((d) => d.lastAddress?.replace(/^::ffff:/, '') ?? '').find((a) => /^\d+\.\d+\.\d+\.\d+$/.test(a)) ?? '';
+      this.deviceAddress ||= devices.map(addressOf).find((a) => a !== null) ?? '';
       if (!this.saved()) {
         this.grace = settings.graceMinutes;
         this.doubleScan = settings.doubleScanMinutes;
@@ -645,25 +649,6 @@ export class DevicesPage {
     } finally {
       this.loading.set(false);
     }
-  }
-}
-
-const AddressKey = 'otantik.hr.device-address';
-
-// What this browser remembers for the screen, when it can: a private window may not.
-function stored(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function keep(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // Not remembered: typed again next time.
   }
 }
 

@@ -308,14 +308,18 @@ migration `PublicHolidays`); leave allowances entered by a manager are for anyth
   - Employees also lists the device's users nobody has the number of yet, to add or link;
     the form takes the department, a role of it (picked, or a new one typed), monthly or daily
     pay, and flexible hours (no start time); the list shows each one's department, filters by
-    one, and a daily worker's wage a day; Sync device asks every approved device for its users
-    and reads the list again as they come;
+    one, and a daily worker's wage a day; Sync device reads each device directly over TCP 4370
+    (at the address last used in this browser, with its port and comm key, and where each
+    approved device last called from), its users listed and its new punches kept; an approved
+    device not read that way (its port closed while it uses ADMS, or no address known) is asked
+    for its users over ADMS instead, and the list read again as they come;
   - Departments: each with how many are in it and its roles, added, renamed, and deleted with
     its employees (or a role's holders) moved first; General kept;
   - Attendance devices: where to point the K40, approve or refuse it, have it list its users or
     send its attendance again (the command's progress shown as it goes), and the grace and
     double-scan settings. Connection settings (إعدادات التوصيل) above the list: the device's IP
-    address (the one last used here, or the one it last called from), port and comm key, with
+    address, port and comm key (as last used in this browser, remembered once a test or sync
+    reaches the device; else the address it last called from), with
     Test connection and Sync device over TCP 4370, each with progress, a message at the bottom
     and the outcome under the buttons.
   - Corrections also lists the punches that came after their month's pay was finalized, a day at

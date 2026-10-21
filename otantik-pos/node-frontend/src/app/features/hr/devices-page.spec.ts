@@ -4,6 +4,7 @@ import { MatDialog } from '@angular/material/dialog';
 import { provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { AttendanceDevice, DeviceCommand, HrApi } from '../../core/hr/hr.api';
+import { saveDeviceLink, savedDeviceLink } from '../../core/hr/device-link';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { DeviceNameDialog, DevicesPage, ReadAttendanceDialog } from './devices-page';
@@ -154,7 +155,7 @@ describe('the attendance devices', () => {
     expect(testDevice).toHaveBeenCalledWith('192.168.1.40', 4370, 0);
     expect(notify.info).toHaveBeenCalledWith(message);
     expect(text(card.querySelector('.result')!)).toBe(`check_circle ${message}`);
-    expect(localStorage.getItem('otantik.hr.device-address')).toBe('192.168.1.40');
+    expect(savedDeviceLink()).toEqual({ address: '192.168.1.40', port: 4370, commKey: 0 });
 
     // No answer: said, in red, and the address not remembered.
     const none = 'No answer from 192.168.1.50 on port 4370. Is the device on, and is this machine on the restaurant’s network?';
@@ -164,7 +165,7 @@ describe('the attendance devices', () => {
     fixture.detectChanges();
     expect(notify.error).toHaveBeenCalledWith(null, none);
     expect(card.querySelector('.result')!.classList).toContain('bad-text');
-    expect(localStorage.getItem('otantik.hr.device-address')).toBe('192.168.1.40');
+    expect(savedDeviceLink()).toEqual({ address: '192.168.1.40', port: 4370, commKey: 0 });
 
     // Not an address: nothing to press.
     page['deviceAddress'] = 'kitchen door';
@@ -174,15 +175,14 @@ describe('the attendance devices', () => {
   });
 
   it('syncs the device: its users and punches read, the new ones said, and the list read again', async () => {
-    localStorage.setItem('otantik.hr.device-address', '192.168.1.106');
+    saveDeviceLink({ address: '192.168.1.106', port: 4370, commKey: 12345 });
     const { el, page, fixture } = await render();
-    expect(page['deviceAddress']).toBe('192.168.1.106');
+    expect([page['deviceAddress'], page['tcpPort'], page['commKey']]).toEqual(['192.168.1.106', 4370, 12345]);
     devices.mockClear();
 
     syncDevice.mockReturnValue(of({
       serialNumber: 'CQZ7232060112', deviceName: 'K40 Pro (192.168.1.106)', newDevice: true, users: 2, usersNotOnTheTill: 1, punches: 3, newPunches: 3,
     }));
-    page['commKey'] = 12345;
     await page['sync']();
     fixture.detectChanges();
     expect(syncDevice).toHaveBeenCalledWith('192.168.1.106', 4370, 12345);

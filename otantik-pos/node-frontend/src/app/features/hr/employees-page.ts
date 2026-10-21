@@ -13,6 +13,7 @@ import { firstValueFrom } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
 import { ApprovalResult, isRequested } from '../../core/costing/costing.api';
+import { addressOf, DeviceLink, savedDeviceLink, ZkPort } from '../../core/hr/device-link';
 import { errorMessage } from '../../core/http/error-message';
 import { Department, DeviceUser, Employee, EmployeeInput, HrApi, weekDays } from '../../core/hr/hr.api';
 import { MoneyPipe } from '../../core/ui/money.pipe';
@@ -339,19 +340,63 @@ export class EmployeesPage {
     void this.approvals.refresh();
   }
 
-  // Every approved device asked for its users, a manager's: their answers come in within seconds,
-  // and the list below is read again until they have, for a minute at most.
+  // Every device read now, a manager's: directly, on its own port, at the address last used here
+  // (with its port and comm key) and at the address each approved device last called from; its
+  // users listed below and its new punches kept. An approved one not read that way (its port
+  // closed while it uses ADMS, or no address known) is asked for its users over ADMS instead,
+  // and the list read again until it answers, for a minute at most.
   protected async sync(): Promise<void> {
     this.syncing.set(true);
     try {
       const approved = (await firstValueFrom(this.api.devices())).filter((d) => d.isApproved);
-      if (!approved.length) {
-        this.notify.info('No attendance device is approved yet: approve it on the Attendance devices tab first.');
+      const targets = new Map<string, DeviceLink>();
+      const saved = savedDeviceLink();
+      if (saved) {
+        targets.set(saved.address, saved);
+      }
+      for (const d of approved) {
+        const address = addressOf(d);
+        if (address && !targets.has(address)) {
+          targets.set(address, { address, port: ZkPort, commKey: 0 });
+        }
+      }
+      if (!targets.size && !approved.length) {
+        this.notify.info('No attendance device yet: give its IP address under Connection settings on the Attendance devices tab first.');
         return;
       }
-      const asked = await Promise.all(approved.map((d) => firstValueFrom(this.api.readDeviceUsers(d.id))));
-      this.notify.info(`Asked ${approved.map((d) => d.name ?? d.serialNumber).join(', ')} for ${approved.length === 1 ? 'its' : 'their'} users: they appear below within seconds.`);
-      for (let round = 0; round < 12 && !this.destroyed; round++) {
+
+      const read: string[] = [];
+      const reached = new Set<string>();
+      const unreached: string[] = [];
+      for (const link of targets.values()) {
+        try {
+          const r = await firstValueFrom(this.api.syncDevice(link.address, link.port, link.commKey));
+          reached.add(r.serialNumber);
+          read.push(`${r.deviceName}: ${plural(r.users, 'user')}, ${plural(r.newPunches, 'new punch', 'new punches')}`);
+        } catch (error) {
+          unreached.push(errorMessage(error, `${link.address} could not be read.`));
+        }
+      }
+      const overAdms = approved.filter((d) => !reached.has(d.serialNumber));
+      const asked = await Promise.all(overAdms.map((d) => firstValueFrom(this.api.readDeviceUsers(d.id))));
+      this.deviceUsers.set(await firstValueFrom(this.api.deviceUsers()));
+
+      const said = [
+        ...(read.length ? [`Synced ${read.join('; ')}.`] : []),
+        ...unreached,
+        ...(overAdms.length
+          ? [`Asked ${overAdms.map((d) => d.name ?? d.serialNumber).join(', ')} for ${overAdms.length === 1 ? 'its' : 'their'} users over ADMS: they appear below within seconds.`]
+          : []),
+      ].join(' ');
+      if (!unreached.length) {
+        this.notify.info(said);
+      } else if (read.length || overAdms.length) {
+        this.notify.attention(said);
+      } else {
+        this.notify.error(null, said);
+      }
+
+      for (let round = 0; asked.length && round < 12 && !this.destroyed; round++) {
         await new Promise((resolve) => setTimeout(resolve, 5_000));
         const devices = await firstValueFrom(this.api.devices());
         this.deviceUsers.set(await firstValueFrom(this.api.deviceUsers()));
@@ -361,7 +406,7 @@ export class EmployeesPage {
         }
       }
     } catch (error) {
-      this.notify.error(error, 'The device could not be asked for its users.');
+      this.notify.error(error, 'The device could not be synced.');
     } finally {
       this.syncing.set(false);
     }
@@ -483,4 +528,8 @@ export class EmployeesPage {
       this.deviceUsers.set([]);
     }
   }
+}
+
+function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
 }
