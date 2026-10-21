@@ -97,6 +97,8 @@ public static class DependencyInjection
         services.AddScoped<OtantikPos.Hr.Domain.IDayMarkRepository, Hr.DayMarkRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IAdministrativePenaltyRepository, Hr.AdministrativePenaltyRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IPublicHolidayRepository, Hr.PublicHolidayRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IDeviceCommandRepository, Hr.DeviceCommandRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IDeviceUserRepository, Hr.DeviceUserRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IDailyRecordRepository, Hr.DailyRecordRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IPayrollAdjustmentRepository, Hr.PayrollAdjustmentRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IPayrollSlipRepository, Hr.PayrollSlipRepository>();

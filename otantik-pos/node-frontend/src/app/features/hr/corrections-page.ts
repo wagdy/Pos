@@ -11,16 +11,21 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { RouterLink } from '@angular/router';
 import { Observable, firstValueFrom } from 'rxjs';
 import { errorMessage } from '../../core/http/error-message';
-import { AdministrativePenalty, AttendanceDay, Employee, EmployeeDay, HrApi, Punch, clock, dayName, duration } from '../../core/hr/hr.api';
+import { AdministrativePenalty, AttendanceDay, Employee, EmployeeDay, HrApi, LatePunch, Punch, clock, dayName, duration, shift } from '../../core/hr/hr.api';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { BusinessDay, isoDay } from '../costing/financials';
 import { IgnorePunchDialog, PenaltyAnswer, PenaltyData, PenaltyDialog, ResolveDayData, ResolveDayDialog } from './attendance-dialogs';
-import { SuspendedCount } from './suspended-count';
+import { CorrectionsCount } from './corrections-count';
 
 // Corrections (مراجعة وجزاءات): what waits for a manager in the attendance, and the month's
 // administrative penalties.
+//
+// Punches can also come late: the device keeps them while the till is away (the laptop off the
+// network) and sends them when it is back, sometimes after their month's pay is finalized. They
+// are kept, the slip stays as it was, and they are listed here until a manager has seen to them,
+// settling in a later month's pay what they change.
 //
 // A suspended day is a punch-in left 18 hours without its punch-out: it is not worked out, and its
 // month's pay can't be finalized, until a manager enters when they left, or ignores the punch when
@@ -81,7 +86,7 @@ import { SuspendedCount } from './suspended-count';
                     <strong>{{ s.employee.name }}</strong>
                     <div class="muted small">{{ s.employee.jobTitle }}</div>
                   </td>
-                  <td class="nowrap">{{ clock(d.shiftStartsAt) }}–{{ clock(d.shiftEndsAt, d.date) }}</td>
+                  <td class="nowrap">{{ shift(d) }}</td>
                   <td>
                     <div class="punches">
                       @for (p of d.punches; track p.id) {
@@ -123,6 +128,52 @@ import { SuspendedCount } from './suspended-count';
         }
       }
     </section>
+
+    @if (lateDays().length) {
+      <section class="late" aria-labelledby="late-title">
+        <h2 id="late-title">Punches after the pay was finalized <span class="inline-ar">بصمات بعد اعتماد الرواتب</span></h2>
+        <p class="note">
+          The device kept them while the till was away, and sent them after their month's pay was finalized. The payslip stays as it was: if they
+          change what was owed, settle it in a later month's pay, with an incentive or a penalty, then mark them seen to.
+        </p>
+        <div class="table-wrap">
+          <table class="grid">
+            <thead>
+              <tr>
+                <th>Day<span class="ar">اليوم</span></th>
+                <th>Employee<span class="ar">الموظف</span></th>
+                <th>Punches<span class="ar">البصمات</span></th>
+                <th>Pay finalized<span class="ar">اعتماد الراتب</span></th>
+                @if (canCorrect()) {
+                  <th class="num"><span class="visually-hidden">Seen to</span></th>
+                }
+              </tr>
+            </thead>
+            <tbody>
+              @for (l of lateDays(); track l.key) {
+                <tr>
+                  <td class="nowrap"><strong>{{ dayName(l.day) }}</strong></td>
+                  <td><strong>{{ l.employee.name }}</strong></td>
+                  <td>
+                    <div class="punches">
+                      @for (p of l.punches; track p.id) {
+                        <span class="punch"><mat-icon>fingerprint</mat-icon><strong>{{ clock(p.punchedAt, l.day) }}</strong></span>
+                      }
+                    </div>
+                  </td>
+                  <td class="muted nowrap">{{ l.finalizedAtUtc | date: 'd MMM, HH:mm' }}</td>
+                  @if (canCorrect()) {
+                    <td class="num">
+                      <button mat-stroked-button (click)="settle(l)"><mat-icon>done</mat-icon> Seen to <span class="inline-ar">تمت المراجعة</span></button>
+                    </td>
+                  }
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </section>
+    }
 
     <section class="penalties" aria-labelledby="penalties-title">
       <div class="toolbar">
@@ -209,8 +260,12 @@ import { SuspendedCount } from './suspended-count';
       margin: 0;
       font: var(--mat-sys-title-medium);
     }
-    .penalties {
+    .penalties,
+    .late {
       margin-top: 28px;
+    }
+    .late h2 {
+      margin-bottom: 4px;
     }
     .since {
       width: 170px;
@@ -276,22 +331,36 @@ export class CorrectionsPage {
   private readonly notify = inject(NotifyService);
   private readonly approvals = inject(Approvals);
   private readonly businessDay = inject(BusinessDay);
-  private readonly suspendedCount = inject(SuspendedCount);
+  private readonly correctionsCount = inject(CorrectionsCount);
 
   protected readonly clock = clock;
   protected readonly dayName = dayName;
+  protected readonly shift = shift;
   protected readonly canCorrect = this.approvals.canApprove;
 
   // Since the first of last month, as the count on the tab.
   protected readonly from = signal(isoDay(new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1)));
   protected readonly month = signal(isoDay(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
   protected readonly days = signal<EmployeeDay[]>([]);
+  protected readonly late = signal<LatePunch[]>([]);
   protected readonly penalties = signal<AdministrativePenalty[]>([]);
   protected readonly employees = signal<Employee[]>([]);
   protected readonly loadingDays = signal(false);
   protected readonly loadingPenalties = signal(false);
   protected readonly daysError = signal<string | null>(null);
   protected readonly penaltiesError = signal<string | null>(null);
+
+  // The late punches by employee and day, as a manager sees to them.
+  protected readonly lateDays = computed(() => {
+    const days = new Map<string, { key: string; employee: Employee; day: string; finalizedAtUtc: string; punches: Punch[] }>();
+    for (const l of this.late()) {
+      const key = `${l.employee.id} ${l.day}`;
+      const entry = days.get(key) ?? { key, employee: l.employee, day: l.day, finalizedAtUtc: l.finalizedAtUtc, punches: [] };
+      entry.punches.push(l.punch);
+      days.set(key, entry);
+    }
+    return [...days.values()];
+  });
 
   protected readonly penaltyTotals = computed(() =>
     this.penalties().reduce((t, p) => ({ hours: Math.round((t.hours + p.hours) * 100) / 100, amount: Math.round((t.amount + p.amount) * 100) / 100 }), {
@@ -327,8 +396,9 @@ export class CorrectionsPage {
     const data: ResolveDayData = {
       employee: s.employee.name,
       date: d.date,
-      shift: `${clock(d.shiftStartsAt)}–${clock(d.shiftEndsAt, d.date)}`,
+      shift: shift(d),
       shiftEndsAt: d.shiftEndsAt,
+      dayEndsAt: d.dayEndsAt,
       punchedIn: stray.punchedAt,
     };
     const answer = await firstValueFrom(
@@ -355,6 +425,14 @@ export class CorrectionsPage {
     if (reason) {
       await this.act(() => this.api.ignorePunch(stray.id, reason), 'The punch no longer counts.', () => this.loadDays());
     }
+  }
+
+  protected async settle(l: { employee: Employee; day: string; punches: Punch[] }): Promise<void> {
+    await this.act(
+      () => this.api.settleLatePunches(l.punches.map((p) => p.id)),
+      `${l.employee.name}'s ${dayName(l.day)}: seen to.`,
+      () => this.loadDays(),
+    );
   }
 
   protected async addPenalty(): Promise<void> {
@@ -420,13 +498,15 @@ export class CorrectionsPage {
     this.loadingDays.set(true);
     this.daysError.set(null);
     try {
-      this.days.set(await firstValueFrom(this.api.suspendedDays(this.from())));
+      const [days, late] = await Promise.all([firstValueFrom(this.api.suspendedDays(this.from())), firstValueFrom(this.api.latePunches())]);
+      this.days.set(days);
+      this.late.set(late);
     } catch (error) {
       this.daysError.set(errorMessage(error, 'The suspended days could not be loaded.'));
     } finally {
       this.loadingDays.set(false);
     }
-    void this.suspendedCount.refresh();
+    void this.correctionsCount.refresh();
   }
 
   private async loadPenalties(): Promise<void> {

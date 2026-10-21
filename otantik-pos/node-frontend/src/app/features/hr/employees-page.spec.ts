@@ -5,12 +5,12 @@ import { of } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
 import { ApprovalRequest } from '../../core/costing/costing.api';
-import { Employee, HrApi } from '../../core/hr/hr.api';
+import { DeviceUser, Employee, HrApi } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { BusinessDay } from '../costing/financials';
 import { EmployeeDialog } from './employee-dialog';
-import { EmployeesPage } from './employees-page';
+import { EmployeesPage, LinkDeviceUserDialog } from './employees-page';
 import { EmploymentDialog } from './employment-dialog';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
@@ -32,8 +32,17 @@ const hassan = employee('hassan', 'Hassan', { deviceUserId: '7', daysOff: ['Frid
 const mona = employee('mona', 'Mona', { jobTitle: 'Waiter', monthlySalary: 4_000, dailyRate: 133.33, hourlyRate: 14.81, shiftStartsAt: '16:00:00', shiftEndsAt: '01:00:00', daysOff: [] });
 const gone = employee('gone', 'Gone Already', { isActive: false, leftOn: '2026-09-30' });
 
+function deviceUser(number: string, name: string, extra: Partial<DeviceUser> = {}): DeviceUser {
+  return {
+    id: `u${number}`, deviceSerialNumber: 'CQZ', deviceName: 'Kitchen door', deviceUserId: number, name, lastSeenAtUtc: '2026-10-20T08:00:00Z',
+    employeeId: null, employeeName: null, waitingPunches: 0, ...extra,
+  };
+}
+
 describe('the employees', () => {
   const employees = vi.fn();
+  const deviceUsers = vi.fn();
+  const saveEmployee = vi.fn();
   const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
   const pending = signal<ApprovalRequest[]>([]);
@@ -48,7 +57,7 @@ describe('the employees', () => {
   async function render(manage = true) {
     TestBed.configureTestingModule({
       providers: [
-        { provide: HrApi, useValue: { employees } },
+        { provide: HrApi, useValue: { employees, deviceUsers, saveEmployee } },
         { provide: AuthService, useValue: { can: (p: string) => manage || p !== Permissions.HrManage } },
         { provide: Approvals, useValue: approvals },
         { provide: NotifyService, useValue: notify },
@@ -71,6 +80,8 @@ describe('the employees', () => {
 
   beforeEach(() => {
     employees.mockReset().mockReturnValue(of([gone, hassan, mona]));
+    deviceUsers.mockReset().mockReturnValue(of([]));
+    saveEmployee.mockReset().mockImplementation((id: string) => of({ ...mona, id }));
     open.mockReset();
     notify.info.mockReset();
     pending.set([]);
@@ -124,6 +135,38 @@ describe('the employees', () => {
     expect(approvals.requested).toHaveBeenCalled();
 
     expect([...el.querySelectorAll('button')].map(text)).toContain('person_add Add employee إضافة موظف');
+  });
+
+  it('shows flexible hours for one without a start time', async () => {
+    employees.mockReturnValue(of([employee('karim', 'Karim', { shiftStartsAt: null, shiftEndsAt: null })]));
+    const { rows } = await render();
+
+    expect(rows()[0][2]).toBe('Flexible ساعات مرنة');
+  });
+
+  it('lists the device’s users nobody has the number of, to add as employees or link to one', async () => {
+    deviceUsers.mockReturnValue(of([
+      deviceUser('7', 'Hassan', { employeeId: 'hassan', employeeName: 'Hassan' }),
+      deviceUser('12', 'منى', { waitingPunches: 40 }),
+    ]));
+    const { el, page } = await render();
+
+    const listed = [...el.querySelectorAll('.on-device tbody tr')];
+    expect(listed.map((r) => [...r.querySelectorAll('td')].slice(0, 4).map(cell))).toEqual([['12', 'منى', 'Kitchen door', '40']]);
+
+    open.mockReturnValue({ afterClosed: () => of(undefined) });
+    await page['addFromDevice'](deviceUser('12', 'منى'));
+    expect(open.mock.lastCall![0]).toBe(EmployeeDialog);
+    expect(open.mock.lastCall![1].data).toEqual({ fromDevice: { name: 'منى', deviceUserId: '12' }, canApprove: true, today: '2026-10-20' });
+
+    // Linked to Mona, employed without a number: saved as she is, with it.
+    open.mockReturnValue({ afterClosed: () => of('mona') });
+    await page['link'](deviceUser('12', 'منى'));
+    expect(open.mock.lastCall![0]).toBe(LinkDeviceUserDialog);
+    expect(open.mock.lastCall![1].data.employees).toEqual([mona]);
+    expect(saveEmployee.mock.lastCall![0]).toBe('mona');
+    expect(saveEmployee.mock.lastCall![1]).toMatchObject({ name: 'Mona', shiftStartsAt: '16:00:00', monthlySalary: 4_000, deviceUserId: '12' });
+    expect(notify.info).toHaveBeenCalledWith('Mona has number 12: their punches count.');
   });
 
   it('offers no changes to whoever only sees HR', async () => {

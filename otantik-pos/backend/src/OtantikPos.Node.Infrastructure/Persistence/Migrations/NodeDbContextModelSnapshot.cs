@@ -651,6 +651,13 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<DateTime?>("LateSettledAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LateSettledBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
                     b.Property<DateTime>("PunchedAt")
                         .HasColumnType("timestamp without time zone");
 
@@ -796,6 +803,100 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.ToTable("DayMarks", "hr");
                 });
 
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Attendance.DeviceCommand", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("AnsweredAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeviceSerialNumber")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("QueuedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("QueuedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<int?>("ReturnCode")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("SentAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeviceSerialNumber", "Number")
+                        .IsUnique();
+
+                    b.ToTable("DeviceCommands", "hr");
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Attendance.DeviceUser", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DeviceSerialNumber")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("DeviceUserId")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)");
+
+                    b.Property<DateTime>("FirstSeenAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("LastSeenAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeviceSerialNumber", "DeviceUserId")
+                        .IsUnique();
+
+                    b.ToTable("DeviceUsers", "hr");
+                });
+
             modelBuilder.Entity("OtantikPos.Hr.Domain.Attendance.PublicHoliday", b =>
                 {
                     b.Property<Guid>("Id")
@@ -873,7 +974,7 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
-                    b.Property<TimeOnly>("ShiftStartsAt")
+                    b.Property<TimeOnly?>("ShiftStartsAt")
                         .HasColumnType("time without time zone");
 
                     b.Property<string>("StaffMemberId")

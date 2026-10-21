@@ -25,6 +25,7 @@ import {
   dayName,
   dayStatusLabels,
   duration,
+  shift,
 } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
@@ -41,7 +42,7 @@ import {
   ResolveDayData,
   ResolveDayDialog,
 } from './attendance-dialogs';
-import { SuspendedCount } from './suspended-count';
+import { CorrectionsCount } from './corrections-count';
 
 type Mode = 'day' | 'employee';
 
@@ -148,7 +149,7 @@ interface Row {
                     <div class="muted small">{{ r.sub }}</div>
                   }
                 </td>
-                <td class="nowrap">{{ clock(d.shiftStartsAt) }}–{{ clock(d.shiftEndsAt, d.date) }}</td>
+                <td class="nowrap">{{ shift(d) }}</td>
                 <td class="nowrap">{{ clock(d.firstIn, d.date) }}</td>
                 <td class="nowrap">{{ clock(d.lastOut, d.date) }}</td>
                 <td class="num">{{ duration(d.workedMinutes) }}</td>
@@ -241,7 +242,8 @@ interface Row {
         overtime is time after the shift ends, beyond nine hours worked, so staying late to make up for being late isn't overtime;
         scans within {{ p.doubleScanMinutes }} minutes of each other are one. A day ends six hours before the next shift starts, so a shift past
         midnight is one day. A punch-in left 18 hours without a punch-out is suspended until a manager enters it, here or on Corrections. A public
-        holiday is everyone's paid day off; worked, it is measured as the day would have been, and earns a holiday allowance.
+        holiday is everyone's paid day off; worked, it is measured as the day would have been, and earns a holiday allowance. Flexible hours
+        have no shift: nothing is late, hours past nine are overtime, and their day runs from 04:00 to 04:00.
       </p>
     }
   `,
@@ -388,7 +390,7 @@ export class AttendancePage {
   private readonly notify = inject(NotifyService);
   private readonly approvals = inject(Approvals);
   private readonly businessDay = inject(BusinessDay);
-  private readonly suspendedCount = inject(SuspendedCount);
+  private readonly correctionsCount = inject(CorrectionsCount);
 
   // ?date=, or ?employee=&month= (its first day), to open on them.
   readonly date = input<string>();
@@ -403,6 +405,7 @@ export class AttendancePage {
   };
   protected readonly clock = clock;
   protected readonly duration = duration;
+  protected readonly shift = shift;
   protected readonly canCorrect = this.approvals.canApprove;
 
   protected readonly mode = signal<Mode>('day');
@@ -528,7 +531,7 @@ export class AttendancePage {
     const data: AddPunchData = {
       employee: row.employee.name,
       day: row.day.date,
-      shift: `${clock(row.day.shiftStartsAt)}–${clock(row.day.shiftEndsAt, row.day.date)}`,
+      shift: shift(row.day),
     };
     const answer = await firstValueFrom(
       this.dialog.open<AddPunchDialog, AddPunchData, { punchedAt: string; reason: string }>(AddPunchDialog, { data, width: '440px' }).afterClosed(),
@@ -579,8 +582,9 @@ export class AttendancePage {
     const data: ResolveDayData = {
       employee: row.employee.name,
       date: row.day.date,
-      shift: `${clock(row.day.shiftStartsAt)}–${clock(row.day.shiftEndsAt, row.day.date)}`,
+      shift: shift(row.day),
       shiftEndsAt: row.day.shiftEndsAt,
+      dayEndsAt: row.day.dayEndsAt,
       punchedIn: stray.punchedAt,
     };
     const answer = await firstValueFrom(
@@ -614,7 +618,7 @@ export class AttendancePage {
       await firstValueFrom(call());
       this.notify.info(done);
       await this.load();
-      void this.suspendedCount.refresh();
+      void this.correctionsCount.refresh();
     } catch (error) {
       this.notify.error(error, 'It could not be saved.');
     }

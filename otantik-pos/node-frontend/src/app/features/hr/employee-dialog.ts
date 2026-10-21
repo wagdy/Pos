@@ -3,6 +3,7 @@ import { Component, ElementRef, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
+import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
@@ -16,17 +17,19 @@ import { FormChecks, FormProblem } from '../costing/form-checks';
 export interface EmployeeDialogData {
   // The one changed; none for a new one.
   employee?: Employee;
+  // A new one's name and number as the attendance device has them.
+  fromDevice?: { name: string; deviceUserId: string };
   canApprove: boolean;
   today: string;
 }
 
 // An employee added or changed: who they are, their base monthly salary, when their nine-hour
-// shift starts, their weekly days off, the day they started, and their number on the attendance
-// device. Saved here: a manager's at once, anyone else's sent for approval. Closes with what was
-// saved or asked, or nothing when cancelled.
+// shift starts (or flexible hours, with none), their weekly days off, the day they started, and
+// their number on the attendance device. Saved here: a manager's at once, anyone else's sent for
+// approval. Closes with what was saved or asked, or nothing when cancelled.
 @Component({
   selector: 'app-employee-dialog',
-  imports: [DecimalPipe, FormsModule, MatButtonModule, MatButtonToggleModule, MatDialogModule, MatFormFieldModule, MatInputModule],
+  imports: [DecimalPipe, FormsModule, MatButtonModule, MatButtonToggleModule, MatCheckboxModule, MatDialogModule, MatFormFieldModule, MatInputModule],
   template: `
     <h2 mat-dialog-title>
       @if (data.employee) {
@@ -58,14 +61,21 @@ export interface EmployeeDialogData {
           }
           <mat-error>{{ checks.message('Base salary') }}</mat-error>
         </mat-form-field>
-        <mat-form-field>
-          <mat-label>Shift starts · بداية الوردية</mat-label>
-          <input matInput type="time" [(ngModel)]="shiftStart" aria-label="Shift starts" [errorStateMatcher]="checks.field('Shift starts')" />
-          @if (shiftEnd(); as end) {
-            <mat-hint>Nine hours: ends {{ end }}</mat-hint>
+        <div class="shift">
+          @if (flexible) {
+            <p class="muted small flexible">No start time: nothing is late for them, and hours past nine in a day are overtime.</p>
+          } @else {
+            <mat-form-field>
+              <mat-label>Shift starts · بداية الوردية</mat-label>
+              <input matInput type="time" [(ngModel)]="shiftStart" aria-label="Shift starts" [errorStateMatcher]="checks.field('Shift starts')" />
+              @if (shiftEnd(); as end) {
+                <mat-hint>Nine hours: ends {{ end }}</mat-hint>
+              }
+              <mat-error>{{ checks.message('Shift starts') }}</mat-error>
+            </mat-form-field>
           }
-          <mat-error>{{ checks.message('Shift starts') }}</mat-error>
-        </mat-form-field>
+          <mat-checkbox [(ngModel)]="flexible">Flexible hours <span class="ar">ساعات مرنة</span></mat-checkbox>
+        </div>
         <mat-form-field>
           <mat-label>Started on · تاريخ التعيين</mat-label>
           <input matInput type="date" [(ngModel)]="hiredOn" aria-label="Started on" [errorStateMatcher]="checks.field('Started on')" />
@@ -117,6 +127,17 @@ export interface EmployeeDialogData {
     }
     .wide {
       grid-column: span 2;
+    }
+    .shift {
+      display: grid;
+      align-content: start;
+
+      mat-form-field {
+        width: 100%;
+      }
+      .flexible {
+        margin: 8px 0 4px;
+      }
     }
     .days {
       display: grid;
@@ -182,13 +203,14 @@ export class EmployeeDialog {
   // Made once: a retry after a lost answer finds what was made.
   private readonly requestId = crypto.randomUUID();
 
-  protected name = this.data.employee?.name ?? '';
+  protected name = this.data.employee?.name ?? this.data.fromDevice?.name ?? '';
   protected jobTitle = this.data.employee?.jobTitle ?? '';
   protected salary: number | null = this.data.employee?.monthlySalary ?? null;
+  protected flexible = !!this.data.employee && this.data.employee.shiftStartsAt === null;
   protected shiftStart = (this.data.employee?.shiftStartsAt ?? '10:00:00').slice(0, 5);
   protected daysOff: WeekDay[] = [...(this.data.employee?.daysOff ?? [])];
   protected hiredOn = this.data.employee?.hiredOn ?? this.data.today;
-  protected deviceUserId = this.data.employee?.deviceUserId ?? '';
+  protected deviceUserId = this.data.employee?.deviceUserId ?? this.data.fromDevice?.deviceUserId ?? '';
   protected reason = '';
 
   protected readonly checks = new FormChecks(() => this.problems());
@@ -216,7 +238,7 @@ export class EmployeeDialog {
     if (this.salary === null || !(this.salary >= 0)) {
       add('Base salary', 'enter the salary');
     }
-    if (!/^\d{2}:\d{2}$/.test(this.shiftStart ?? '')) {
+    if (!this.flexible && !/^\d{2}:\d{2}$/.test(this.shiftStart ?? '')) {
       add('Shift starts', 'enter when the shift starts');
     }
     if (!this.hiredOn) {
@@ -240,7 +262,7 @@ export class EmployeeDialog {
       name: this.name.trim(),
       jobTitle: this.jobTitle.trim(),
       monthlySalary: this.salary!,
-      shiftStartsAt: `${this.shiftStart}:00`,
+      shiftStartsAt: this.flexible ? null : `${this.shiftStart}:00`,
       daysOff: this.daysOff,
       hiredOn: this.hiredOn,
       deviceUserId: this.deviceUserId.trim() || null,

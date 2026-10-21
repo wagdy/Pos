@@ -16,6 +16,8 @@ public sealed class HrStore
     public DayMarkStore Marks { get; } = new();
     public PenaltyStore Penalties { get; } = new();
     public HolidayStore Holidays { get; } = new();
+    public DeviceCommandStore Commands { get; } = new();
+    public DeviceUserStore DeviceUsers { get; } = new();
     public DailyRecordStore Records { get; } = new();
     public AdjustmentStore Adjustments { get; } = new();
     public SlipStore Slips { get; } = new();
@@ -63,6 +65,34 @@ public sealed class PunchStore : ListStore<AttendanceLog>, IAttendanceLogReposit
 
     public Task<IReadOnlyList<AttendanceLog>> GetUnassignedAsync(string deviceUserId, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<AttendanceLog>>(Items.Where(l => l.EmployeeId == null && l.DeviceUserId == deviceUserId).ToList());
+
+    public Task<IReadOnlyDictionary<string, int>> CountUnassignedAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyDictionary<string, int>>(Items.Where(l => l.EmployeeId == null && l.DeviceUserId != null)
+            .GroupBy(l => l.DeviceUserId!).ToDictionary(g => g.Key, g => g.Count()));
+}
+
+public sealed class DeviceCommandStore : ListStore<DeviceCommand>, IDeviceCommandRepository
+{
+    public Task<DeviceCommand?> GetNextAsync(string serialNumber, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Items.Where(c => c.DeviceSerialNumber == serialNumber && c.SentAtUtc == null).OrderBy(c => c.Number).FirstOrDefault());
+
+    public Task<DeviceCommand?> GetByNumberAsync(string serialNumber, int number, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Items.SingleOrDefault(c => c.DeviceSerialNumber == serialNumber && c.Number == number));
+
+    public Task<int> GetLastNumberAsync(string serialNumber, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Items.Where(c => c.DeviceSerialNumber == serialNumber).Select(c => c.Number).DefaultIfEmpty(0).Max());
+
+    public Task<IReadOnlyList<DeviceCommand>> GetRecentAsync(int perDevice, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<DeviceCommand>>(Items.GroupBy(c => c.DeviceSerialNumber).SelectMany(g => g.OrderByDescending(c => c.Number).Take(perDevice)).ToList());
+}
+
+public sealed class DeviceUserStore : ListStore<DeviceUser>, IDeviceUserRepository
+{
+    public Task<IReadOnlyList<DeviceUser>> GetForDeviceAsync(string serialNumber, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<DeviceUser>>(Items.Where(u => u.DeviceSerialNumber == serialNumber).ToList());
+
+    public Task<IReadOnlyList<DeviceUser>> GetAllAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<DeviceUser>>(Items.ToList());
 }
 
 public sealed class DayMarkStore : ListStore<DayMark>, IDayMarkRepository

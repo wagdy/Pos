@@ -1,18 +1,26 @@
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { MatDialog } from '@angular/material/dialog';
+import { provideRouter } from '@angular/router';
 import { of } from 'rxjs';
-import { AttendanceDevice, HrApi } from '../../core/hr/hr.api';
+import { AttendanceDevice, DeviceCommand, HrApi } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
-import { DeviceNameDialog, DevicesPage } from './devices-page';
+import { DeviceNameDialog, DevicesPage, ReadAttendanceDialog } from './devices-page';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
 const waiting: AttendanceDevice = {
   id: 'd1', serialNumber: 'CQZ7232060112', name: null, isApproved: false, approvedBy: null, approvedAtUtc: null,
-  firstSeenAtUtc: '2026-10-20T08:00:00Z', lastSeenAtUtc: '2026-10-20T08:00:00Z', lastAddress: '192.168.1.40',
+  firstSeenAtUtc: '2026-10-20T08:00:00Z', lastSeenAtUtc: '2026-10-20T08:00:00Z', lastAddress: '192.168.1.40', commands: [],
 };
+
+function command(extra: Partial<DeviceCommand> = {}): DeviceCommand {
+  return {
+    id: 'c1', number: 2, kind: 'ReadUsers', text: 'DATA QUERY USERINFO', queuedBy: 'Omar', queuedAtUtc: '2026-10-20T08:00:00Z', sentAtUtc: null,
+    answeredAtUtc: null, returnCode: null, ...extra,
+  };
+}
 const approved: AttendanceDevice = { ...waiting, id: 'd2', serialNumber: 'CQZ0000000002', name: 'Kitchen door', isApproved: true, approvedBy: 'Omar' };
 
 describe('the attendance devices', () => {
@@ -21,6 +29,8 @@ describe('the attendance devices', () => {
   const approveDevice = vi.fn();
   const revokeDevice = vi.fn();
   const saveSettings = vi.fn();
+  const readDeviceUsers = vi.fn();
+  const readDeviceAttendance = vi.fn();
   const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
   const canApprove = signal(true);
@@ -28,7 +38,8 @@ describe('the attendance devices', () => {
   async function render() {
     TestBed.configureTestingModule({
       providers: [
-        { provide: HrApi, useValue: { devices, settings, approveDevice, revokeDevice, saveSettings } },
+        provideRouter([]),
+        { provide: HrApi, useValue: { devices, settings, approveDevice, revokeDevice, saveSettings, readDeviceUsers, readDeviceAttendance } },
         { provide: Approvals, useValue: { canApprove } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
@@ -46,6 +57,8 @@ describe('the attendance devices', () => {
     approveDevice.mockReset().mockReturnValue(of({ ...waiting, isApproved: true, name: 'Back door' }));
     revokeDevice.mockReset().mockReturnValue(of({ ...approved, isApproved: false }));
     saveSettings.mockReset().mockImplementation((p: object) => of(p));
+    readDeviceUsers.mockReset().mockReturnValue(of(command()));
+    readDeviceAttendance.mockReset().mockReturnValue(of(command({ kind: 'ReadAttendance' })));
     open.mockReset();
     notify.info.mockReset();
     canApprove.set(true);
@@ -76,6 +89,35 @@ describe('the attendance devices', () => {
 
     await page['revoke'](approved);
     expect(revokeDevice).toHaveBeenCalledWith('d2');
+  });
+
+  it('asks an approved device for its users or its attendance again, and says how far the command got', async () => {
+    devices.mockReturnValue(of([waiting, { ...approved, commands: [command()] }]));
+    const { el, page, fixture } = await render();
+    const sync = () => text(el.querySelector('tr.sync .command')!);
+
+    expect([...el.querySelectorAll('tr.sync button')].map(text)).toEqual(['groups Read its users قراءة المستخدمين', 'history Read its attendance again']);
+    expect(sync()).toContain('Its users: waiting for the device to ask, asked');
+
+    await page['readUsers'](approved);
+    expect(readDeviceUsers).toHaveBeenCalledWith('d2');
+    expect(notify.info).toHaveBeenCalledWith('Kitchen door: asked for its users. It takes the command the next time it asks, within seconds.');
+
+    open.mockReturnValue({ afterClosed: () => of({ from: '2026-09-01', to: '2026-10-21' }) });
+    await page['readAttendance'](approved);
+    expect(open.mock.lastCall![0]).toBe(ReadAttendanceDialog);
+    expect(readDeviceAttendance).toHaveBeenCalledWith('d2', '2026-09-01', '2026-10-21');
+
+    devices.mockReturnValue(of([{ ...approved, commands: [command({ sentAtUtc: '2026-10-20T08:00:05Z', answeredAtUtc: '2026-10-20T08:00:09Z', returnCode: 0 })] }]));
+    await page['load']();
+    fixture.detectChanges();
+    expect(sync()).toContain('Its users: done');
+    expect(el.querySelector('tr.sync a')!.getAttribute('href')).toBe('/hr/employees');
+
+    devices.mockReturnValue(of([{ ...approved, commands: [command({ sentAtUtc: '2026-10-20T08:00:05Z', answeredAtUtc: '2026-10-20T08:00:09Z', returnCode: -1002 })] }]));
+    await page['load']();
+    fixture.detectChanges();
+    expect(sync()).toBe('Its users: refused, code -1002: its firmware may not take this command');
   });
 
   it('saves how punches are read, once changed', async () => {

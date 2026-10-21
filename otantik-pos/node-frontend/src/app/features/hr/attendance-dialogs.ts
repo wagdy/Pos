@@ -66,7 +66,10 @@ export interface AddPunchData {
   template: `
     <h2 mat-dialog-title>Add a punch for {{ data.employee }} <span class="ar">إضافة بصمة</span></h2>
     <mat-dialog-content>
-      <p class="muted">The device missed it: a forgotten scan, the device down. Their shift runs {{ data.shift }}; a punch after midnight is on the next date.</p>
+      <p class="muted">
+        The device missed it: a forgotten scan, the device down. {{ data.shift === 'Flexible' ? 'They work flexible hours' : 'Their shift runs ' + data.shift }}; a
+        punch after midnight is on the next date.
+      </p>
       <div class="row">
         <mat-form-field>
           <mat-label>Date · التاريخ</mat-label>
@@ -174,18 +177,19 @@ export class MarkDayDialog {
 // A punch-in left this long without its punch-out suspends the day.
 const abandonedAfterMinutes = 18 * 60;
 
-// A punch-in left 18 hours without its punch-out (a suspended day), and the shift it was for.
+// A punch-in left 18 hours without its punch-out (a suspended day), the shift it was for (none
+// for flexible hours), and when the day ends.
 export interface ResolveDayData {
   employee: string;
   date: string;
   shift: string;
-  shiftEndsAt: string;
+  shiftEndsAt: string | null;
+  dayEndsAt: string;
   punchedIn: string;
 }
 
 // The punch-out a manager enters for a suspended day: when they left, on the restaurant's clock,
-// after the punch-in, within 18 hours of it and before the next day starts (nine hours after the
-// shift ends), and why it is entered. Closes with the time
+// after the punch-in, within 18 hours of it and before the next day starts, and why it is entered. Closes with the time
 // ('2026-10-20T01:00:00') and the reason.
 @Component({
   selector: 'app-resolve-day-dialog',
@@ -193,7 +197,10 @@ export interface ResolveDayData {
   template: `
     <h2 mat-dialog-title>{{ data.employee }}’s punch-out, {{ day }} <span class="ar">بصمة الانصراف</span></h2>
     <mat-dialog-content>
-      <p class="muted">In at <strong>{{ inAt }}</strong> and never out; their shift runs {{ data.shift }}. Enter when they left, and the day is worked out from it.</p>
+      <p class="muted">
+        In at <strong>{{ inAt }}</strong> and never out; {{ data.shiftEndsAt ? 'their shift runs ' + data.shift : 'they work flexible hours' }}. Enter when
+        they left, and the day is worked out from it.
+      </p>
       @if (shiftEndFits) {
         <button mat-stroked-button type="button" class="shortcut" (click)="atShiftEnd()">At the shift’s end, {{ endsAt }}</button>
       }
@@ -230,19 +237,17 @@ export class ResolveDayDialog {
   protected readonly day = dayName(this.data.date);
   protected readonly inAt = clock(this.data.punchedIn, this.data.date);
   protected readonly endsAt = clock(this.data.shiftEndsAt, this.data.date);
-  private readonly toShiftEnd = minutesBetween(this.data.punchedIn, this.data.shiftEndsAt);
-  // When the next day starts, six hours before its shift: nine after this one ends.
-  private readonly dayEndsAt = new Date(Date.parse(`${this.data.shiftEndsAt}Z`) + 9 * 3_600_000).toISOString().slice(0, 19);
+  private readonly toShiftEnd = this.data.shiftEndsAt ? minutesBetween(this.data.punchedIn, this.data.shiftEndsAt) : 0;
   // The shift's end, when it can be the punch-out: after the punch-in and within 18 hours of it.
   protected readonly shiftEndFits = this.toShiftEnd > 0 && this.toShiftEnd <= abandonedAfterMinutes;
   // On the date the shift ends, as most punch-outs are; the time is the manager's to enter.
-  protected date = (this.shiftEndFits ? this.data.shiftEndsAt : this.data.punchedIn).slice(0, 10);
+  protected date = (this.shiftEndFits ? this.data.shiftEndsAt! : this.data.punchedIn).slice(0, 10);
   protected time = '';
   protected reason = '';
 
   protected atShiftEnd(): void {
-    this.date = this.data.shiftEndsAt.slice(0, 10);
-    this.time = this.data.shiftEndsAt.slice(11, 16);
+    this.date = this.data.shiftEndsAt!.slice(0, 10);
+    this.time = this.data.shiftEndsAt!.slice(11, 16);
   }
 
   protected punchedOutAt(): string {
@@ -265,8 +270,8 @@ export class ResolveDayDialog {
     if (after > abandonedAfterMinutes) {
       return 'The punch-out is within 18 hours of the punch-in.';
     }
-    return minutesBetween(this.dayEndsAt, this.punchedOutAt()) >= 0
-      ? `The punch-out is before ${clock(this.dayEndsAt, this.data.date)}, when the next day starts.`
+    return minutesBetween(this.data.dayEndsAt, this.punchedOutAt()) >= 0
+      ? `The punch-out is before ${clock(this.data.dayEndsAt, this.data.date)}, when the next day starts.`
       : null;
   }
 

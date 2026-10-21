@@ -56,8 +56,9 @@ public sealed record PunchDto(
 public sealed record AttendanceDayDto(
     DateOnly Date,
     DayStatus Status,
-    DateTime ShiftStartsAt,
-    DateTime ShiftEndsAt,
+    // None for flexible hours.
+    DateTime? ShiftStartsAt,
+    DateTime? ShiftEndsAt,
     DateTime? FirstIn,
     DateTime? LastOut,
     int WorkedMinutes,
@@ -75,16 +76,18 @@ public sealed record AttendanceDayDto(
     string? PenaltyReason = null,
     string? PenaltySetBy = null,
     // The public holiday the day is, by its name.
-    string? HolidayName = null)
+    string? HolidayName = null,
+    // When the day ends, and the next one's punches start.
+    DateTime? DayEndsAt = null)
 {
     public static AttendanceDayDto From(Employee employee, TimesheetDay day)
     {
         var e = day.Evaluation;
-        var start = e.Day.ToDateTime(employee.ShiftStartsAt);
+        DateTime? start = employee.ShiftStartsAt is { } s ? e.Day.ToDateTime(s) : null;
         return new AttendanceDayDto(
             e.Day, e.Status, start, start + Employee.ShiftLength, e.FirstIn, e.LastOut, e.WorkedMinutes, e.LateMinutes, e.EarlyLeaveMinutes, e.AwayMinutes,
             e.OvertimeMinutes, e.ShortMinutes, employee.IsDayOff(e.Day), day.Mark?.Kind, day.Mark?.Notes, day.Punches.Select(PunchDto.From).ToList(),
-            e.PenaltyHours, day.Penalty?.Reason, day.Penalty?.SetBy, day.Holiday?.Name);
+            e.PenaltyHours, day.Penalty?.Reason, day.Penalty?.SetBy, day.Holiday?.Name, Timesheet.Window(employee, e.Day).To);
     }
 }
 
@@ -358,6 +361,69 @@ internal sealed class SetAdministrativePenaltyHandler(
     }
 }
 
+// A device's punch that came after its month's pay was finalized (the till away while the device
+// kept it): the slip stays as it was, and a manager sees to it in a later month's pay.
+public sealed record LatePunchDto(EmployeeDto Employee, DateOnly Day, DateOnly Month, DateTime FinalizedAtUtc, PunchDto Punch);
+
+// The punches that came after their month's pay was finalized and are not seen to yet, over the
+// last year, by day.
+public sealed record GetLatePunchesQuery : IRequest<IReadOnlyList<LatePunchDto>>;
+
+internal sealed class GetLatePunchesHandler(
+    IEmployeeRepository employees, IPayrollSlipRepository slips, IAttendanceLogRepository logs, IRecordDescriptions clock)
+    : IRequestHandler<GetLatePunchesQuery, IReadOnlyList<LatePunchDto>>
+{
+    public const int MonthsBack = 12;
+
+    public async Task<IReadOnlyList<LatePunchDto>> Handle(GetLatePunchesQuery request, CancellationToken cancellationToken)
+    {
+        var thisMonth = PayrollMonth.Of(DateOnly.FromDateTime(clock.LocalTimeOf(DateTime.UtcNow)));
+        var people = (await employees.GetAllAsync(cancellationToken)).ToDictionary(e => e.Id);
+        var late = new List<LatePunchDto>();
+        for (var month = thisMonth.AddMonths(-MonthsBack); month <= thisMonth; month = month.AddMonths(1))
+        {
+            var finalized = (await slips.GetForMonthAsync(month, cancellationToken)).Where(s => s.FinalizedAtUtc is not null).ToList();
+            if (finalized.Count == 0)
+                continue;
+            // A month's days' punches run from the evening before its first to the day after its last.
+            var punches = await logs.GetBetweenAsync(
+                month.AddDays(-1).ToDateTime(TimeOnly.MinValue), month.AddMonths(1).AddDays(2).ToDateTime(TimeOnly.MinValue), null, cancellationToken);
+            foreach (var slip in finalized)
+            {
+                if (!people.TryGetValue(slip.EmployeeId, out var employee))
+                    continue;
+                foreach (var punch in punches.Where(p =>
+                    p.EmployeeId == employee.Id && p.Source == PunchSource.Device && p.LateSettledAtUtc is null && p.ReceivedAtUtc > slip.FinalizedAtUtc))
+                {
+                    var day = Timesheet.DayOf(employee, punch.PunchedAt);
+                    if (PayrollMonth.Of(day) == month)
+                        late.Add(new LatePunchDto(EmployeeDto.From(employee), day, month, slip.FinalizedAtUtc!.Value, PunchDto.From(punch)));
+                }
+            }
+        }
+
+        return late.OrderBy(l => l.Day).ThenBy(l => l.Employee.Name).ThenBy(l => l.Punch.PunchedAt).ToList();
+    }
+}
+
+// Late punches seen to by a manager: settled in a later month's pay, or nothing to settle.
+public sealed record SettleLatePunchesCommand(IReadOnlyList<Guid> PunchIds, string StaffName) : IRequest<int>, IRetryOnConflict;
+
+internal sealed class SettleLatePunchesHandler(IAttendanceLogRepository logs, IUnitOfWork unitOfWork) : IRequestHandler<SettleLatePunchesCommand, int>
+{
+    public const int MaxPunches = 500;
+
+    public async Task<int> Handle(SettleLatePunchesCommand request, CancellationToken cancellationToken)
+    {
+        if (request.PunchIds.Count is 0 or > MaxPunches)
+            throw new DomainException($"Settle one punch to {MaxPunches} at a time.");
+        foreach (var id in request.PunchIds.Distinct())
+            (await logs.GetRequiredAsync(id, cancellationToken)).SettleLate(request.StaffName);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return request.PunchIds.Distinct().Count();
+    }
+}
+
 // A penalty as the month's list shows it: whose, on which day, and what it takes off their pay.
 public sealed record AdministrativePenaltyDto(
     Guid EmployeeId, string EmployeeName, DateOnly Date, decimal Hours, decimal HourlyRate, decimal Amount, string Reason, string SetBy, DateTime SetAtUtc);
@@ -391,10 +457,12 @@ internal sealed class GetAdministrativePenaltiesHandler(IEmployeeRepository empl
 }
 
 // The days suspended for a manager (موقوف للمراجعة): a punch-in left 18 hours without its
-// punch-out, everyone's, from `From` to `To`, oldest first.
+// punch-out, everyone's, from `From` to `To`, oldest first. Not one in a month whose pay is
+// finalized for its employee: it can't be put right after that (a punch that came late, listed
+// with the late punches instead).
 public sealed record GetSuspendedDaysQuery(DateOnly From, DateOnly To) : IRequest<IReadOnlyList<EmployeeDayDto>>;
 
-internal sealed class GetSuspendedDaysHandler(IEmployeeRepository employees, Timesheets timesheets)
+internal sealed class GetSuspendedDaysHandler(IEmployeeRepository employees, Timesheets timesheets, IPayrollSlipRepository slips)
     : IRequestHandler<GetSuspendedDaysQuery, IReadOnlyList<EmployeeDayDto>>
 {
     public const int MaxDays = 400;
@@ -411,8 +479,16 @@ internal sealed class GetSuspendedDaysHandler(IEmployeeRepository employees, Tim
         if (people.Count == 0)
             return [];
         var (_, sheets) = await timesheets.ReadAsync(people, request.From, request.To, cancellationToken);
+        var finalized = new HashSet<(Guid, DateOnly)>();
+        for (var month = PayrollMonth.Of(request.From); month <= request.To; month = month.AddMonths(1))
+        {
+            foreach (var slip in (await slips.GetForMonthAsync(month, cancellationToken)).Where(s => s.IsFinalized))
+                finalized.Add((slip.EmployeeId, month));
+        }
+
         return sheets
-            .SelectMany(s => s.Days.Where(d => d.Evaluation.Status == DayStatus.Suspended)
+            .SelectMany(s => s.Days
+                .Where(d => d.Evaluation.Status == DayStatus.Suspended && !finalized.Contains((s.Employee.Id, PayrollMonth.Of(d.Evaluation.Day))))
                 .Select(d => new EmployeeDayDto(EmployeeDto.From(s.Employee), AttendanceDayDto.From(s.Employee, d))))
             .OrderBy(d => d.Day.Date).ThenBy(d => d.Employee.Name)
             .ToList();

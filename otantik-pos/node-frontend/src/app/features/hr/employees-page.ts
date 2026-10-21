@@ -2,9 +2,11 @@ import { DatePipe } from '@angular/common';
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
-import { MatDialog } from '@angular/material/dialog';
+import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
+import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatSelectModule } from '@angular/material/select';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { firstValueFrom } from 'rxjs';
@@ -12,7 +14,7 @@ import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
 import { ApprovalResult, isRequested } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
-import { Employee, HrApi, weekDays } from '../../core/hr/hr.api';
+import { DeviceUser, Employee, EmployeeInput, HrApi, weekDays } from '../../core/hr/hr.api';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals, pendingLabel } from '../costing/approvals';
@@ -20,10 +22,55 @@ import { BusinessDay } from '../costing/financials';
 import { EmployeeDialog, EmployeeDialogData } from './employee-dialog';
 import { EmploymentDialog, EmploymentDialogData } from './employment-dialog';
 
-// The employees (الموظفين): who is on the payroll, their base salary, their nine-hour shift and
-// days off, and their number on the attendance device. Added, changed, leaving and coming back by
-// whoever manages HR: a manager's at once, anyone else's waiting for a manager, listed above the
-// table until then (a new one) or locking its row (a change).
+// Who on the till gets a device user's number: an employee without one yet.
+@Component({
+  selector: 'app-link-device-user-dialog',
+  imports: [FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatSelectModule],
+  template: `
+    <h2 mat-dialog-title>Link no. {{ data.user.deviceUserId }}, {{ data.user.name || 'no name' }} <span class="ar">ربط رقم البصمة</span></h2>
+    <mat-dialog-content>
+      <p class="muted">The employee gets the number, and the punches made under it are theirs from then.</p>
+      <mat-form-field class="wide">
+        <mat-label>Employee · الموظف</mat-label>
+        <mat-select [(ngModel)]="employeeId" aria-label="Employee">
+          @for (e of data.employees; track e.id) {
+            <mat-option [value]="e.id">{{ e.name }} · {{ e.jobTitle }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+    </mat-dialog-content>
+    <mat-dialog-actions align="end">
+      <button mat-button mat-dialog-close>Cancel</button>
+      <button mat-flat-button [disabled]="!employeeId" [mat-dialog-close]="employeeId">Link</button>
+    </mat-dialog-actions>
+  `,
+  styles: `
+    .wide {
+      width: 100%;
+    }
+    .muted {
+      color: var(--mat-sys-on-surface-variant);
+    }
+    .ar {
+      direction: rtl;
+      unicode-bidi: isolate;
+      margin-left: 6px;
+      opacity: 0.75;
+      font-size: 0.8em;
+    }
+  `,
+})
+export class LinkDeviceUserDialog {
+  protected readonly data = inject<{ user: DeviceUser; employees: Employee[] }>(MAT_DIALOG_DATA);
+  protected employeeId = '';
+}
+
+// The employees (الموظفين): who is on the payroll, their base salary, their nine-hour shift (or
+// flexible hours) and days off, and their number on the attendance device. Added, changed, leaving
+// and coming back by whoever manages HR: a manager's at once, anyone else's waiting for a manager,
+// listed above the table until then (a new one) or locking its row (a change). Below, the users
+// the device has listed that nobody on the till has the number of yet, to add as employees or
+// link to one.
 @Component({
   selector: 'app-employees-page',
   imports: [DatePipe, FormsModule, MatButtonModule, MatIconModule, MatProgressBarModule, MatSlideToggleModule, MatTooltipModule, MoneyPipe],
@@ -80,7 +127,13 @@ import { EmploymentDialog, EmploymentDialogData } from './employment-dialog';
                   {{ e.monthlySalary | money }}
                   <div class="muted small">{{ e.dailyRate | money }} a day · {{ e.hourlyRate | money }} an hour</div>
                 </td>
-                <td class="nowrap">{{ e.shiftStartsAt.slice(0, 5) }}–{{ e.shiftEndsAt.slice(0, 5) }}</td>
+                <td class="nowrap">
+                  @if (e.shiftStartsAt && e.shiftEndsAt) {
+                    {{ e.shiftStartsAt.slice(0, 5) }}–{{ e.shiftEndsAt.slice(0, 5) }}
+                  } @else {
+                    Flexible<span class="ar">ساعات مرنة</span>
+                  }
+                </td>
                 <td>{{ daysOff(e) }}</td>
                 <td>{{ e.deviceUserId ?? '—' }}</td>
                 <td>
@@ -125,6 +178,44 @@ import { EmploymentDialog, EmploymentDialogData } from './employment-dialog';
           </tbody>
         </table>
       </div>
+
+      @if (unknown().length) {
+        <section class="on-device" aria-labelledby="on-device-title">
+          <h3 id="on-device-title">On the attendance device, not on the till yet <span class="inline-ar">على جهاز البصمة وليسوا في النظام</span></h3>
+          <p class="muted small">As the device listed them. Add each as an employee, or give their number to one already here: their punches count from then.</p>
+          <div class="table-wrap">
+            <table class="grid">
+              <thead>
+                <tr>
+                  <th>Device no.<span class="ar">رقم البصمة</span></th>
+                  <th>Name on the device<span class="ar">الاسم على الجهاز</span></th>
+                  <th>Device<span class="ar">الجهاز</span></th>
+                  <th class="num">Punches waiting<span class="ar">بصمات بانتظار</span></th>
+                  @if (canManage()) {
+                    <th class="num"><span class="visually-hidden">Add or link</span></th>
+                  }
+                </tr>
+              </thead>
+              <tbody>
+                @for (u of unknown(); track u.id) {
+                  <tr>
+                    <td><strong>{{ u.deviceUserId }}</strong></td>
+                    <td>{{ u.name || '—' }}</td>
+                    <td class="muted">{{ u.deviceName ?? u.deviceSerialNumber }}</td>
+                    <td class="num">{{ u.waitingPunches }}</td>
+                    @if (canManage()) {
+                      <td class="num nowrap">
+                        <button mat-stroked-button (click)="addFromDevice(u)"><mat-icon>person_add</mat-icon> Add as employee</button>
+                        <button mat-button (click)="link(u)" [disabled]="!unnumbered().length">Link to…</button>
+                      </td>
+                    }
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </section>
+      }
     }
   `,
   styleUrl: '../costing/costing.scss',
@@ -159,6 +250,17 @@ import { EmploymentDialog, EmploymentDialogData } from './employment-dialog';
     .danger {
       color: var(--mat-sys-error);
     }
+    .on-device {
+      margin-top: 24px;
+
+      h3 {
+        margin: 0;
+        font: var(--mat-sys-title-small);
+      }
+      td.num button {
+        margin-left: 4px;
+      }
+    }
   `,
 })
 export class EmployeesPage {
@@ -171,6 +273,7 @@ export class EmployeesPage {
   protected readonly pendingLabel = pendingLabel;
 
   protected readonly employees = signal<Employee[]>([]);
+  protected readonly deviceUsers = signal<DeviceUser[]>([]);
   protected readonly loading = signal(true);
   protected readonly error = signal<string | null>(null);
   protected readonly canManage = computed(() => this.auth.can(Permissions.HrManage));
@@ -180,6 +283,10 @@ export class EmployeesPage {
   protected readonly shown = computed(() => (this.showLeft() ? this.employees() : this.active()));
   protected readonly payroll = computed(() => this.active().reduce((sum, e) => sum + e.monthlySalary, 0));
   protected readonly waiting = computed(() => this.approvals.waitingToBeMade('Employee'));
+  // The device's users whose number no employee has.
+  protected readonly unknown = computed(() => this.deviceUsers().filter((u) => !u.employeeId));
+  // Who a device number can go to: those employed without one.
+  protected readonly unnumbered = computed(() => this.active().filter((e) => !e.deviceUserId));
 
   constructor() {
     void this.load();
@@ -198,6 +305,46 @@ export class EmployeesPage {
 
   protected async edit(employee: Employee): Promise<void> {
     await this.open({ employee, canApprove: this.approvals.canApprove(), today: await this.businessDay.today() });
+  }
+
+  protected async addFromDevice(user: DeviceUser): Promise<void> {
+    await this.open({
+      fromDevice: { name: user.name, deviceUserId: user.deviceUserId },
+      canApprove: this.approvals.canApprove(),
+      today: await this.businessDay.today(),
+    });
+  }
+
+  // The employee chosen gets the number: saved as they are, with it.
+  protected async link(user: DeviceUser): Promise<void> {
+    const id = await firstValueFrom(
+      this.dialog
+        .open<LinkDeviceUserDialog, { user: DeviceUser; employees: Employee[] }, string>(LinkDeviceUserDialog, {
+          data: { user, employees: this.unnumbered() },
+          width: '440px',
+        })
+        .afterClosed(),
+    );
+    const employee = this.employees().find((e) => e.id === id);
+    if (!employee) {
+      return;
+    }
+    const input: EmployeeInput = {
+      requestId: crypto.randomUUID(),
+      name: employee.name,
+      jobTitle: employee.jobTitle,
+      monthlySalary: employee.monthlySalary,
+      shiftStartsAt: employee.shiftStartsAt,
+      daysOff: employee.daysOff,
+      hiredOn: employee.hiredOn,
+      deviceUserId: user.deviceUserId,
+      reason: `Their number on the attendance device: ${user.deviceUserId}`,
+    };
+    try {
+      await this.saved(await firstValueFrom(this.api.saveEmployee(employee.id, input)), `${employee.name} has number ${user.deviceUserId}: their punches count.`);
+    } catch (error) {
+      this.notify.error(error, 'The number could not be given.');
+    }
   }
 
   protected async leave(employee: Employee): Promise<void> {
@@ -243,6 +390,12 @@ export class EmployeesPage {
       this.error.set(errorMessage(error, 'The employees could not be loaded.'));
     } finally {
       this.loading.set(false);
+    }
+    try {
+      this.deviceUsers.set(await firstValueFrom(this.api.deviceUsers()));
+    } catch {
+      // Only a help: the employees stand without it.
+      this.deviceUsers.set([]);
     }
   }
 }

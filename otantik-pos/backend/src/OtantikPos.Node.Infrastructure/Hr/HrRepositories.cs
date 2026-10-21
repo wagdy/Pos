@@ -58,6 +58,49 @@ internal sealed class AttendanceLogRepository(NodeDbContext db) : IAttendanceLog
 
     public async Task<IReadOnlyList<AttendanceLog>> GetUnassignedAsync(string deviceUserId, CancellationToken cancellationToken = default) =>
         await db.AttendanceLogs.Where(l => l.EmployeeId == null && l.DeviceUserId == deviceUserId).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyDictionary<string, int>> CountUnassignedAsync(CancellationToken cancellationToken = default) =>
+        await db.AttendanceLogs.Where(l => l.EmployeeId == null && l.DeviceUserId != null)
+            .GroupBy(l => l.DeviceUserId!)
+            .Select(g => new { g.Key, Count = g.Count() })
+            .ToDictionaryAsync(g => g.Key, g => g.Count, cancellationToken);
+}
+
+internal sealed class DeviceCommandRepository(NodeDbContext db) : IDeviceCommandRepository
+{
+    public Task<DeviceCommand?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.DeviceCommands.SingleOrDefaultAsync(c => c.Id == id, cancellationToken);
+
+    public void Add(DeviceCommand aggregate) => db.DeviceCommands.Add(aggregate);
+
+    public Task<DeviceCommand?> GetNextAsync(string serialNumber, CancellationToken cancellationToken = default) =>
+        db.DeviceCommands.Where(c => c.DeviceSerialNumber == serialNumber && c.SentAtUtc == null).OrderBy(c => c.Number).FirstOrDefaultAsync(cancellationToken);
+
+    public Task<DeviceCommand?> GetByNumberAsync(string serialNumber, int number, CancellationToken cancellationToken = default) =>
+        db.DeviceCommands.SingleOrDefaultAsync(c => c.DeviceSerialNumber == serialNumber && c.Number == number, cancellationToken);
+
+    public async Task<int> GetLastNumberAsync(string serialNumber, CancellationToken cancellationToken = default) =>
+        await db.DeviceCommands.Where(c => c.DeviceSerialNumber == serialNumber).MaxAsync(c => (int?)c.Number, cancellationToken) ?? 0;
+
+    public async Task<IReadOnlyList<DeviceCommand>> GetRecentAsync(int perDevice, CancellationToken cancellationToken = default) =>
+        (await db.DeviceCommands.AsNoTracking().OrderByDescending(c => c.QueuedAtUtc).Take(200).ToListAsync(cancellationToken))
+            .GroupBy(c => c.DeviceSerialNumber)
+            .SelectMany(g => g.OrderByDescending(c => c.Number).Take(perDevice))
+            .ToList();
+}
+
+internal sealed class DeviceUserRepository(NodeDbContext db) : IDeviceUserRepository
+{
+    public Task<DeviceUser?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.DeviceUsers.SingleOrDefaultAsync(u => u.Id == id, cancellationToken);
+
+    public void Add(DeviceUser aggregate) => db.DeviceUsers.Add(aggregate);
+
+    public async Task<IReadOnlyList<DeviceUser>> GetForDeviceAsync(string serialNumber, CancellationToken cancellationToken = default) =>
+        await db.DeviceUsers.Where(u => u.DeviceSerialNumber == serialNumber).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<DeviceUser>> GetAllAsync(CancellationToken cancellationToken = default) =>
+        await db.DeviceUsers.AsNoTracking().ToListAsync(cancellationToken);
 }
 
 internal sealed class DayMarkRepository(NodeDbContext db) : IDayMarkRepository

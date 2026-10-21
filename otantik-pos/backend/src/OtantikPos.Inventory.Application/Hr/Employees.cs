@@ -17,8 +17,9 @@ public sealed record EmployeeDto(
     string Name,
     string JobTitle,
     decimal MonthlySalary,
-    TimeOnly ShiftStartsAt,
-    TimeOnly ShiftEndsAt,
+    // None for flexible hours.
+    TimeOnly? ShiftStartsAt,
+    TimeOnly? ShiftEndsAt,
     IReadOnlyList<DayOfWeek> DaysOff,
     string? DeviceUserId,
     DateOnly HiredOn,
@@ -28,7 +29,7 @@ public sealed record EmployeeDto(
     decimal HourlyRate)
 {
     public static EmployeeDto From(Employee e) => new(
-        e.Id, e.Name, e.JobTitle, e.MonthlySalary, e.ShiftStartsAt, e.ShiftStartsAt.Add(Employee.ShiftLength), Employees.DaysOf(e.DaysOff),
+        e.Id, e.Name, e.JobTitle, e.MonthlySalary, e.ShiftStartsAt, e.ShiftStartsAt?.Add(Employee.ShiftLength), Employees.DaysOf(e.DaysOff),
         e.DeviceUserId, e.HiredOn, e.LeftOn, e.IsActive, Math.Round(e.DailyRate, 2, MidpointRounding.AwayFromZero),
         Math.Round(e.HourlyRate, 2, MidpointRounding.AwayFromZero));
 }
@@ -38,7 +39,7 @@ public sealed record EmployeeDetails(
     string Name,
     string JobTitle,
     decimal MonthlySalary,
-    TimeOnly ShiftStartsAt,
+    TimeOnly? ShiftStartsAt,
     IReadOnlyList<DayOfWeek> DaysOff,
     DateOnly HiredOn,
     string? DeviceUserId);
@@ -159,7 +160,7 @@ internal sealed class EmployeeWriter(IEmployeeRepository employees, IAttendanceL
                 lines.Add(new ApprovalChange(label, existing is null ? null : before, after));
         }
 
-        var shift = d.ShiftStartsAt.ToString("HH:mm", Invariant);
+        var shift = d.ShiftStartsAt is { } start ? $"from {start.ToString("HH:mm", Invariant)}" : "flexible hours";
         Line("Name", existing?.Name, d.Name.Trim());
         Line("Job title", existing?.JobTitle, d.JobTitle.Trim());
         Line("Monthly salary", existing is null ? null : Money(existing.MonthlySalary), Money(d.MonthlySalary));
@@ -168,11 +169,12 @@ internal sealed class EmployeeWriter(IEmployeeRepository employees, IAttendanceL
         Line("Started on", existing is null ? null : Day(existing.HiredOn), Day(d.HiredOn));
         Line("Attendance device number", existing?.DeviceUserId ?? "—", string.IsNullOrWhiteSpace(d.DeviceUserId) ? "—" : d.DeviceUserId.Trim());
         return existing is null
-            ? ($"New employee · {d.Name.Trim()} · {d.JobTitle.Trim()} · {Money(d.MonthlySalary)} a month, from {shift}", ApprovalAction.Create, lines)
+            ? ($"New employee · {d.Name.Trim()} · {d.JobTitle.Trim()} · {Money(d.MonthlySalary)} a month, {shift}", ApprovalAction.Create, lines)
             : ($"Employee changed · {existing.Name}", ApprovalAction.Update, lines);
     }
 
-    private static string Shift(TimeOnly start) => $"{start.ToString("HH:mm", Invariant)}–{start.Add(Employee.ShiftLength).ToString("HH:mm", Invariant)}";
+    private static string Shift(TimeOnly? start) =>
+        start is { } s ? $"{s.ToString("HH:mm", Invariant)}–{s.Add(Employee.ShiftLength).ToString("HH:mm", Invariant)}" : "Flexible hours";
 
     private static string DaysOff(WeekDays days) =>
         days == WeekDays.None ? "None" : string.Join(", ", Employees.DaysOf(days).Select(d => Invariant.DateTimeFormat.GetAbbreviatedDayName(d)));

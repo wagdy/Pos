@@ -23,7 +23,8 @@ async function open<T>(component: Type<T>, data: unknown) {
 
 describe('the punch-out dialog', () => {
   const data: ResolveDayData = {
-    employee: 'Hassan', date: '2026-09-21', shift: '16:00–01:00 +1', shiftEndsAt: '2026-09-22T01:00:00', punchedIn: '2026-09-21T16:07:00',
+    employee: 'Hassan', date: '2026-09-21', shift: '16:00–01:00 +1', shiftEndsAt: '2026-09-22T01:00:00', dayEndsAt: '2026-09-22T10:00:00',
+    punchedIn: '2026-09-21T16:07:00',
   };
 
   it('opens on the date the shift ends, with the shift’s end a click away', async () => {
@@ -65,6 +66,21 @@ describe('the punch-out dialog', () => {
     refresh();
     expect(el.querySelector('.problem')).toBeNull();
     expect(dialog['ready']()).toBe(true);
+  });
+
+  it('on flexible hours, offers no shift’s end, and ends with the business day', async () => {
+    const { el, dialog, refresh } = await open(ResolveDayDialog, {
+      ...data, shift: 'Flexible', shiftEndsAt: null, dayEndsAt: '2026-09-22T04:00:00', punchedIn: '2026-09-21T13:00:00',
+    });
+
+    expect(el.querySelector('.shortcut')).toBeNull();
+    expect(text(el.querySelector('p.muted')!)).toContain('In at 13:00 and never out; they work flexible hours.');
+    expect(dialog['date']).toBe('2026-09-21');
+    dialog['reason'] = 'Forgot to scan out';
+    dialog['date'] = '2026-09-22';
+    dialog['time'] = '04:30';
+    refresh();
+    expect(text(el.querySelector('.problem')!)).toBe('The punch-out is before 04:00 +1, when the next day starts.');
   });
 
   it('offers no shortcut when the punch-in came after the shift had ended', async () => {

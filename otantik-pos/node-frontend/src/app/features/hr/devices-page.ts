@@ -1,5 +1,5 @@
 import { DatePipe } from '@angular/common';
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
@@ -8,9 +8,10 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { errorMessage } from '../../core/http/error-message';
-import { AttendanceDevice, AttendancePolicy, HrApi } from '../../core/hr/hr.api';
+import { AttendanceDevice, AttendancePolicy, DeviceCommand, HrApi } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 
@@ -48,13 +49,69 @@ export class DeviceNameDialog {
   protected name = this.data.device.name ?? '';
 }
 
+// From which day to which the device's attendance is read again.
+@Component({
+  selector: 'app-read-attendance-dialog',
+  imports: [FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule],
+  template: `
+    <h2 mat-dialog-title>Read {{ data.device }}'s attendance again</h2>
+    <mat-dialog-content>
+      <p class="muted">Every punch it holds from one day to another, sent again. What the till has already is kept once; what it missed comes in.</p>
+      <div class="row">
+        <mat-form-field>
+          <mat-label>From · من</mat-label>
+          <input matInput type="date" [(ngModel)]="from" [max]="to" aria-label="From" />
+        </mat-form-field>
+        <mat-form-field>
+          <mat-label>To · إلى</mat-label>
+          <input matInput type="date" [(ngModel)]="to" [min]="from" aria-label="To" />
+        </mat-form-field>
+      </div>
+    </mat-dialog-content>
+    <mat-dialog-actions align="end">
+      <button mat-button mat-dialog-close>Cancel</button>
+      <button mat-flat-button [disabled]="!from || !to || to < from" [mat-dialog-close]="{ from, to }">Read it</button>
+    </mat-dialog-actions>
+  `,
+  styles: `
+    .row {
+      display: flex;
+      gap: 12px;
+    }
+    .muted {
+      color: var(--mat-sys-on-surface-variant);
+    }
+  `,
+})
+export class ReadAttendanceDialog {
+  protected readonly data = inject<{ device: string; from: string; to: string }>(MAT_DIALOG_DATA);
+  protected from = this.data.from;
+  protected to = this.data.to;
+}
+
 // The attendance devices (أجهزة البصمة): a ZKTeco K40 Pro pushes its punches to this till over the
 // restaurant's network. One that calls is listed as waiting, and refused, until a manager approves
-// it by name. Below, how punches are read: the grace for arriving late, and how close two scans are
-// to count as one. A manager's to change.
+// it by name. A manager can leave an approved one a command, which it takes the next time it asks:
+// to list its users, for the Employees tab, or to send its attendance from a day again. Below, how
+// punches are read: the grace for arriving late, and how close two scans are to count as one. A
+// manager's to change.
+//
+// The device keeps its punches while the till is away, and sends them all when it is back: the
+// laptop needs the same address on the network each time (a reservation on the router), as the
+// device is given it once.
 @Component({
   selector: 'app-devices-page',
-  imports: [DatePipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatInputModule, MatProgressBarModule, MatTooltipModule],
+  imports: [
+    DatePipe,
+    FormsModule,
+    MatButtonModule,
+    MatFormFieldModule,
+    MatIconModule,
+    MatInputModule,
+    MatProgressBarModule,
+    MatTooltipModule,
+    RouterLink,
+  ],
   template: `
     <section class="setup">
       <h2>Connecting a device <span class="inline-ar">ربط جهاز البصمة</span></h2>
@@ -72,7 +129,11 @@ export class DeviceNameDialog {
       @if (local) {
         <p class="muted small">This screen is open on the till itself: give the device this machine’s address on the restaurant’s network, not “localhost”.</p>
       }
-      <p class="muted small">It shows up below within a minute, waiting. Approve it, and its punches start coming in.</p>
+      <p class="muted small">It shows up below within a minute, waiting. Approve it, and its punches start coming in, the ones it already holds too.</p>
+      <p class="muted small">
+        Reserve this machine’s address on the router, so it keeps it: the device holds its punches while the till is away and sends them all when it
+        can reach this address again.
+      </p>
     </section>
 
     @if (loading()) {
@@ -108,7 +169,7 @@ export class DeviceNameDialog {
                 }
               </td>
               <td class="nowrap">{{ d.lastSeenAtUtc | date: 'd MMM, HH:mm' }}</td>
-              <td class="num nowrap">
+              <td class="num nowrap" [attr.rowspan]="d.isApproved ? 2 : 1">
                 @if (canApprove()) {
                   @if (d.isApproved) {
                     <button mat-icon-button (click)="name(d)" matTooltip="Rename" [attr.aria-label]="'Rename ' + d.serialNumber"><mat-icon>edit</mat-icon></button>
@@ -121,6 +182,36 @@ export class DeviceNameDialog {
                 }
               </td>
             </tr>
+            @if (d.isApproved) {
+              @let c = d.commands[0];
+              <tr class="sync">
+                <td colspan="3">
+                  @if (canApprove()) {
+                    <button mat-stroked-button (click)="readUsers(d)"><mat-icon>groups</mat-icon> Read its users <span class="inline-ar">قراءة المستخدمين</span></button>
+                    <button mat-button (click)="readAttendance(d)"><mat-icon>history</mat-icon> Read its attendance again</button>
+                  }
+                  @if (c) {
+                    <span class="command" [class.bad-text]="c.returnCode !== null && c.returnCode !== 0">
+                      {{ what(c) }}:
+                      @if (c.answeredAtUtc === null) {
+                        @if (c.sentAtUtc === null) {
+                          waiting for the device to ask, asked {{ c.queuedAtUtc | date: 'HH:mm' }}
+                        } @else {
+                          sent {{ c.sentAtUtc | date: 'HH:mm' }}, waiting for its answer
+                        }
+                      } @else if (c.returnCode === 0) {
+                        done {{ c.answeredAtUtc | date: 'd MMM, HH:mm' }}
+                        @if (c.kind === 'ReadUsers') {
+                          · <a routerLink="/hr/employees">its users are on the Employees tab</a>
+                        }
+                      } @else {
+                        refused, code {{ c.returnCode }}: its firmware may not take this command
+                      }
+                    </span>
+                  }
+                </td>
+              </tr>
+            }
           } @empty {
             <tr><td colspan="4" class="muted">No device has called yet.</td></tr>
           }
@@ -215,6 +306,21 @@ export class DeviceNameDialog {
     .danger {
       color: var(--mat-sys-error);
     }
+    tr.sync td {
+      background: var(--mat-sys-surface-container-lowest);
+
+      button {
+        margin-right: 8px;
+      }
+    }
+    .command {
+      font-size: 0.85em;
+      color: var(--mat-sys-on-surface-variant);
+
+      &.bad-text {
+        color: var(--mat-sys-error);
+      }
+    }
   `,
 })
 export class DevicesPage {
@@ -222,6 +328,8 @@ export class DevicesPage {
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
   private readonly approvals = inject(Approvals);
+  private readonly destroyRef = inject(DestroyRef);
+  private poll: ReturnType<typeof setInterval> | null = null;
 
   protected readonly canApprove = this.approvals.canApprove;
   protected readonly devices = signal<AttendanceDevice[]>([]);
@@ -237,7 +345,70 @@ export class DevicesPage {
   protected readonly local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(location.hostname);
 
   constructor() {
+    this.destroyRef.onDestroy(() => this.stopWatching());
     void this.load();
+  }
+
+  protected what(c: DeviceCommand): string {
+    return c.kind === 'ReadUsers' ? 'Its users' : 'Its attendance';
+  }
+
+  protected async readUsers(device: AttendanceDevice): Promise<void> {
+    await this.command(() => this.api.readDeviceUsers(device.id), `${device.name}: asked for its users. It takes the command the next time it asks, within seconds.`);
+  }
+
+  protected async readAttendance(device: AttendanceDevice): Promise<void> {
+    const today = new Date();
+    const to = isoDate(today);
+    const from = isoDate(new Date(today.getFullYear(), today.getMonth() - 1, 1));
+    const answer = await firstValueFrom(
+      this.dialog
+        .open<ReadAttendanceDialog, { device: string; from: string; to: string }, { from: string; to: string }>(ReadAttendanceDialog, {
+          data: { device: device.name ?? device.serialNumber, from, to },
+          width: '440px',
+        })
+        .afterClosed(),
+    );
+    if (answer) {
+      await this.command(() => this.api.readDeviceAttendance(device.id, answer.from, answer.to), `${device.name}: asked for its attendance again.`);
+    }
+  }
+
+  private async command(call: () => ReturnType<HrApi['readDeviceUsers']>, done: string): Promise<void> {
+    try {
+      await firstValueFrom(call());
+      this.notify.info(done);
+      await this.load();
+    } catch (error) {
+      this.notify.error(error, 'The command could not be left for the device.');
+    }
+  }
+
+  // A command less than ten minutes old and not answered yet: the list is read again every few
+  // seconds until it is.
+  private waiting(): boolean {
+    const recent = Date.now() - 10 * 60_000;
+    return this.devices().some((d) => d.commands[0] && d.commands[0].answeredAtUtc === null && Date.parse(d.commands[0].queuedAtUtc) > recent);
+  }
+
+  private watch(): void {
+    if (this.poll || !this.waiting()) {
+      return;
+    }
+    this.poll = setInterval(() => {
+      void this.load(false).then(() => {
+        if (!this.waiting()) {
+          this.stopWatching();
+        }
+      });
+    }, 5_000);
+  }
+
+  private stopWatching(): void {
+    if (this.poll) {
+      clearInterval(this.poll);
+      this.poll = null;
+    }
   }
 
   protected settingsChanged(): boolean {
@@ -281,8 +452,8 @@ export class DevicesPage {
     }
   }
 
-  private async load(): Promise<void> {
-    this.loading.set(true);
+  private async load(showLoading = true): Promise<void> {
+    this.loading.set(showLoading);
     this.error.set(null);
     try {
       const [devices, settings] = await Promise.all([firstValueFrom(this.api.devices()), firstValueFrom(this.api.settings())]);
@@ -292,10 +463,15 @@ export class DevicesPage {
         this.doubleScan = settings.doubleScanMinutes;
       }
       this.saved.set(settings);
+      this.watch();
     } catch (error) {
       this.error.set(errorMessage(error, 'The devices could not be loaded.'));
     } finally {
       this.loading.set(false);
     }
   }
+}
+
+function isoDate(day: Date): string {
+  return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
 }

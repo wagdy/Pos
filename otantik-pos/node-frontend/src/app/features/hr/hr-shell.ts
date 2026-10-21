@@ -1,11 +1,11 @@
 import { Component, inject } from '@angular/core';
 import { MatTabsModule } from '@angular/material/tabs';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
-import { SuspendedCount } from './suspended-count';
+import { CorrectionsCount } from './corrections-count';
 
 // HR & Payroll (الموارد البشرية والرواتب): the employees, their attendance and its corrections, the
-// monthly payroll, the public holidays, and the attendance devices that send their punches. The Corrections tab counts
-// the days waiting for a manager's punch-out. Managers and accountants (HrView); an
+// monthly payroll, the public holidays, and the attendance devices that send their punches. The
+// Corrections tab counts what waits there for a manager. Managers and accountants (HrView); an
 // accountant's changes go to a manager. Advances are paid in Financials and in the daily batch,
 // from the safe or a day's takings.
 @Component({
@@ -19,8 +19,8 @@ import { SuspendedCount } from './suspended-count';
       @for (tab of tabs; track tab.path) {
         <a mat-tab-link [routerLink]="tab.path" routerLinkActive #active="routerLinkActive" [active]="active.isActive">
           {{ tab.en }}<span class="inline-ar">{{ tab.ar }}</span>
-          @if (tab.path === 'corrections' && suspended.count()) {
-            <span class="count" [attr.aria-label]="suspended.count() + ' suspended'">{{ suspended.count() }}</span>
+          @if (tab.path === 'corrections' && waiting.count()) {
+            <span class="count" [attr.aria-label]="waiting.count() + ' waiting'">{{ waiting.count() }}</span>
           }
         </a>
       }
@@ -57,7 +57,7 @@ import { SuspendedCount } from './suspended-count';
   `,
 })
 export class HrShell {
-  protected readonly suspended = inject(SuspendedCount);
+  protected readonly waiting = inject(CorrectionsCount);
   protected readonly tabs = [
     { path: 'employees', en: 'Employees', ar: 'الموظفين' },
     { path: 'attendance', en: 'Attendance', ar: 'الحضور والانصراف' },
@@ -68,6 +68,6 @@ export class HrShell {
   ];
 
   constructor() {
-    void this.suspended.refresh();
+    void this.waiting.refresh();
   }
 }

@@ -63,6 +63,11 @@ public sealed class AttendanceLog : AggregateRoot
     public string? IgnoreReason { get; private set; }
     public bool IsIgnored => IgnoredAtUtc is not null;
 
+    // A punch that came after its month's pay was finalized, seen to by a manager: settled in a
+    // later month's pay, or nothing to settle.
+    public DateTime? LateSettledAtUtc { get; private set; }
+    public string? LateSettledBy { get; private set; }
+
     // What the timesheet counts: someone's, and not ignored.
     public bool Counts => EmployeeId is not null && !IsIgnored;
 
@@ -88,6 +93,12 @@ public sealed class AttendanceLog : AggregateRoot
             Reason = Required(reason, "Say why the punch is entered by hand: the device was down, they forgot to scan."),
             RecordedBy = recordedBy,
         };
+
+    public void SettleLate(string settledBy)
+    {
+        LateSettledAtUtc ??= DateTime.UtcNow;
+        LateSettledBy ??= settledBy;
+    }
 
     // A punch from a user number nobody had, now someone's.
     public void AssignTo(Guid employeeId)

@@ -19,19 +19,23 @@ namespace OtantikPos.Node.Api.Controllers;
 //
 // GET  cdata?SN=…&options=all       it starts: its options, with the stamp to send after.
 // POST cdata?SN=…&table=ATTLOG       punches, a line each: PIN⇥yyyy-MM-dd HH:mm:ss⇥status⇥verify⇥…
-// POST cdata?SN=…&table=…            anything else (operations, users): taken as read, not kept.
-//                                    Fingerprint templates are never kept.
-// GET  getrequest?SN=…               every few seconds: OK, as no command is ever queued yet.
-// POST devicecmd?SN=…                a command's result: OK.
+//                                    any number of them: what it kept while the till was away.
+// POST cdata?SN=…&table=USERINFO     its users, a line each (PIN=…⇥Name=…⇥…), when asked: their
+//      (or OPERLOG, "USER PIN=…")    number and name are kept, nothing else (no password or card).
+// POST cdata?SN=…&table=…            anything else (operations): taken as read, not kept.
+//                                    Fingerprint and face templates are never kept.
+// GET  getrequest?SN=…               every few seconds: a command a manager left for it
+//                                    (C:<n>:DATA QUERY USERINFO, …ATTLOG StartTime=…), or OK.
+// POST devicecmd?SN=…                its answer to a command: ID=<n>&Return=<code>&CMD=…
 [ApiController]
 [AllowAnonymous]
 [Route("iclock")]
 [ApiExplorerSettings(IgnoreApi = true)]
 public sealed partial class IclockController(ISender sender, ILogger<IclockController> logger) : ControllerBase
 {
-    // A day's punches are a few hundred lines; a device sending its whole log after weeks away,
-    // tens of thousands, which it splits.
-    private const int MaxBody = 2 * 1024 * 1024;
+    // A day's punches are a few hundred lines; a device sending its whole log after weeks away, or
+    // read again, tens of thousands, which it splits. A line is under 60 bytes.
+    private const int MaxBody = 16 * 1024 * 1024;
 
     [HttpGet("cdata")]
     public async Task<IActionResult> Start([FromQuery(Name = "SN")] string? serial, CancellationToken cancellationToken)
@@ -64,6 +68,22 @@ public sealed partial class IclockController(ISender sender, ILogger<IclockContr
         if (!IsSerial(serial))
             return BadRequest("SN");
         var lines = await LinesAsync(cancellationToken);
+        if (string.Equals(table, "USERINFO", StringComparison.OrdinalIgnoreCase) || string.Equals(table, "OPERLOG", StringComparison.OrdinalIgnoreCase))
+        {
+            var users = lines.Select(User).OfType<DeviceUserLine>().ToList();
+            if (users.Count == 0)
+            {
+                var contact = await sender.Send(new DeviceContactCommand(serial!, Address), cancellationToken);
+                return contact.Approved ? Text($"OK:{lines.Count}") : Refused();
+            }
+
+            var kept = await sender.Send(new RecordDeviceUsersCommand(serial!, users), cancellationToken);
+            if (kept is null)
+                return Refused();
+            logger.LogInformation("Attendance device {Serial} listed {Users} users", serial, kept);
+            return Text($"OK:{lines.Count}");
+        }
+
         if (!string.Equals(table, "ATTLOG", StringComparison.OrdinalIgnoreCase))
         {
             var contact = await sender.Send(new DeviceContactCommand(serial!, Address), cancellationToken);
@@ -95,7 +115,12 @@ public sealed partial class IclockController(ISender sender, ILogger<IclockContr
         if (!IsSerial(serial))
             return BadRequest("SN");
         var contact = await sender.Send(new DeviceContactCommand(serial!, Address), cancellationToken);
-        return contact.Approved ? Text("OK") : Refused();
+        if (!contact.Approved)
+            return Refused();
+        var command = await sender.Send(new NextDeviceCommandCommand(serial!), cancellationToken);
+        if (command is not null)
+            logger.LogInformation("Attendance device {Serial} handed {Command}", serial, command);
+        return Text(command ?? "OK");
     }
 
     [HttpPost("devicecmd")]
@@ -105,7 +130,40 @@ public sealed partial class IclockController(ISender sender, ILogger<IclockContr
         if (!IsSerial(serial))
             return BadRequest("SN");
         var contact = await sender.Send(new DeviceContactCommand(serial!, Address), cancellationToken);
-        return contact.Approved ? Text("OK") : Refused();
+        if (!contact.Approved)
+            return Refused();
+        var answers = (await LinesAsync(cancellationToken)).Select(Answer).OfType<(int, int)>().ToList();
+        if (answers.Count > 0)
+            await sender.Send(new DeviceCommandAnswersCommand(serial!, answers), cancellationToken);
+        return Text("OK");
+    }
+
+    // "ID=5&Return=0&CMD=DATA": the command's number and its return code. Null for anything else.
+    public static (int Number, int ReturnCode)? Answer(string line)
+    {
+        var fields = line.Split('&').Select(f => f.Split('=', 2)).Where(f => f.Length == 2).ToDictionary(f => f[0].Trim(), f => f[1].Trim(), StringComparer.OrdinalIgnoreCase);
+        return fields.TryGetValue("ID", out var id) && int.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number)
+            && fields.TryGetValue("Return", out var ret) && int.TryParse(ret, NumberStyles.Integer, CultureInfo.InvariantCulture, out var code)
+            ? (number, code)
+            : null;
+    }
+
+    // "PIN=7⇥Name=Hassan⇥Pri=0⇥Passwd=…" (USERINFO) or "USER PIN=7⇥Name=Hassan…" (OPERLOG): the
+    // user's number and name, and nothing else. Null for anything else, fingerprints and faces
+    // ("FP PIN=…", "FACE PIN=…", "BIODATA …") above all.
+    public static DeviceUserLine? User(string line)
+    {
+        var text = line.Trim();
+        if (text.StartsWith("USER ", StringComparison.OrdinalIgnoreCase))
+            text = text[5..].TrimStart();
+        if (!text.StartsWith("PIN=", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var fields = text.Split('\t').Select(f => f.Split('=', 2)).Where(f => f.Length == 2)
+            .GroupBy(f => f[0].Trim(), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First()[1], StringComparer.OrdinalIgnoreCase);
+        var pin = fields.GetValueOrDefault("PIN")?.Trim();
+        if (pin is not { Length: > 0 and <= 24 } || !UserPattern().IsMatch(pin))
+            return null;
+        return new DeviceUserLine(pin, fields.GetValueOrDefault("Name")?.Trim());
     }
 
     // "7⇥2026-10-12 10:04:31⇥0⇥1⇥0⇥0⇥0": the user number, the time on the device's clock, the

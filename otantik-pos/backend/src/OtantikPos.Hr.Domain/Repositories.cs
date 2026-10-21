@@ -33,6 +33,32 @@ public interface IAttendanceLogRepository : IRepository<AttendanceLog>
 
     // Tracked: the punches under a user number nobody had, for the employee who has it now.
     Task<IReadOnlyList<AttendanceLog>> GetUnassignedAsync(string deviceUserId, CancellationToken cancellationToken = default);
+
+    // How many punches wait under each user number nobody has.
+    Task<IReadOnlyDictionary<string, int>> CountUnassignedAsync(CancellationToken cancellationToken = default);
+}
+
+public interface IDeviceCommandRepository : IRepository<DeviceCommand>
+{
+    // Tracked: the oldest of a device's commands not handed to it yet.
+    Task<DeviceCommand?> GetNextAsync(string serialNumber, CancellationToken cancellationToken = default);
+
+    // Tracked.
+    Task<DeviceCommand?> GetByNumberAsync(string serialNumber, int number, CancellationToken cancellationToken = default);
+
+    // A device's highest command number so far; 0 before its first.
+    Task<int> GetLastNumberAsync(string serialNumber, CancellationToken cancellationToken = default);
+
+    // Each device's newest few, newest first.
+    Task<IReadOnlyList<DeviceCommand>> GetRecentAsync(int perDevice, CancellationToken cancellationToken = default);
+}
+
+public interface IDeviceUserRepository : IRepository<DeviceUser>
+{
+    // Tracked: the users a device has told the till of.
+    Task<IReadOnlyList<DeviceUser>> GetForDeviceAsync(string serialNumber, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<DeviceUser>> GetAllAsync(CancellationToken cancellationToken = default);
 }
 
 public interface IDayMarkRepository : IRepository<DayMark>

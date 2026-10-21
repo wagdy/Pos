@@ -102,9 +102,16 @@ public sealed record DayEvaluation(
 //
 // A punch-in left without its punch-out stays open for 18 hours from it, then the day is
 // suspended for a manager: an abandoned shift is never closed by guessing.
+//
+// Flexible hours have no shift: nothing is late, early or away, and the hours past nine worked in
+// a day are overtime. Their day runs as the till's business day does, from 04:00 to 04:00, so a
+// night past midnight is one day. A working day with no punches is still an absence.
 public static class Timesheet
 {
     public static readonly TimeSpan DayStartsBeforeShift = TimeSpan.FromHours(6);
+
+    // When the day of someone on flexible hours starts: when the till's business day does.
+    public static readonly TimeOnly FlexibleDayStartsAt = new(4, 0);
 
     // A punch-in this long without its punch-out is an abandoned shift: suspended for a manager.
     public static readonly TimeSpan AbandonedAfter = TimeSpan.FromHours(18);
@@ -112,13 +119,13 @@ public static class Timesheet
     // The punches of `day` are the ones from From, up to but not including To.
     public static (DateTime From, DateTime To) Window(Employee employee, DateOnly day)
     {
-        var from = day.ToDateTime(employee.ShiftStartsAt) - DayStartsBeforeShift;
+        var from = employee.ShiftStartsAt is { } start ? day.ToDateTime(start) - DayStartsBeforeShift : day.ToDateTime(FlexibleDayStartsAt);
         return (from, from.AddDays(1));
     }
 
     // The day a punch at `time` belongs to: the one whose window holds it.
     public static DateOnly DayOf(Employee employee, DateTime time) =>
-        DateOnly.FromDateTime(time - (employee.ShiftStartsAt.ToTimeSpan() - DayStartsBeforeShift));
+        DateOnly.FromDateTime(time - (employee.ShiftStartsAt is { } start ? start.ToTimeSpan() - DayStartsBeforeShift : FlexibleDayStartsAt.ToTimeSpan()));
 
     // `now` is local time, as the punches are: a day is over once its window has closed.
     // `holiday`: the day is a public holiday.
@@ -149,8 +156,10 @@ public static class Timesheet
         DateTime? last = complete ? times[^1] : null;
         if (off)
             return new DayEvaluation(day, status, first, last, times.Count, worked, 0, 0, 0, 0);
+        if (employee.ShiftStartsAt is not { } shiftStart)
+            return new DayEvaluation(day, status, first, last, times.Count, worked, 0, 0, 0, last is null ? 0 : Math.Max(0, worked - Employee.ShiftHours * 60));
 
-        var start = day.ToDateTime(employee.ShiftStartsAt);
+        var start = day.ToDateTime(shiftStart);
         var end = start + Employee.ShiftLength;
         var late = first <= start.AddMinutes(policy.GraceMinutes) ? TimeSpan.Zero : Clip(first, start, end) - start;
         if (last is not { } lastOut)

@@ -30,8 +30,9 @@ public static class WeekDaysExtensions
 // (StaffMemberId). Punches from the attendance device find them by the user number they have on
 // it (DeviceUserId).
 //
-// Everyone's shift is nine hours, from the time it starts (ShiftStartsAt). A month's pay is
-// thirty days' whatever the month's length: a day costs the salary over 30, an hour a day's
+// A shift is nine hours, from the time it starts (ShiftStartsAt). Someone on flexible hours has
+// no start time: nothing is late for them, and their day is the hours they punch. A month's pay
+// is thirty days' whatever the month's length: a day costs the salary over 30, an hour a day's
 // over 9, which is what lateness and absence are deducted at and overtime paid at.
 public sealed partial class Employee : AggregateRoot
 {
@@ -51,7 +52,7 @@ public sealed partial class Employee : AggregateRoot
         string name,
         string jobTitle,
         decimal monthlySalary,
-        TimeOnly shiftStartsAt,
+        TimeOnly? shiftStartsAt,
         WeekDays daysOff,
         DateOnly hiredOn,
         string? deviceUserId = null,
@@ -78,8 +79,11 @@ public sealed partial class Employee : AggregateRoot
     // The base monthly salary (الراتب الأساسي), before incentives, allowances and deductions.
     public decimal MonthlySalary { get; private set; }
 
-    // When the shift starts, local time. It ends nine hours later, past midnight if need be.
-    public TimeOnly ShiftStartsAt { get; private set; }
+    // When the shift starts, local time. It ends nine hours later, past midnight if need be. None
+    // for flexible hours.
+    public TimeOnly? ShiftStartsAt { get; private set; }
+
+    public bool HasFlexibleHours => ShiftStartsAt is null;
 
     public WeekDays DaysOff { get; private set; }
 
@@ -129,8 +133,9 @@ public sealed partial class Employee : AggregateRoot
         MonthlySalary = Math.Round(monthlySalary, 2, MidpointRounding.AwayFromZero);
     }
 
-    // To the minute: the device's punches are, and lateness is counted in minutes.
-    public void SetShift(TimeOnly startsAt) => ShiftStartsAt = new TimeOnly(startsAt.Hour, startsAt.Minute);
+    // To the minute: the device's punches are, and lateness is counted in minutes. None: flexible
+    // hours.
+    public void SetShift(TimeOnly? startsAt) => ShiftStartsAt = startsAt is { } start ? new TimeOnly(start.Hour, start.Minute) : null;
 
     public void SetDaysOff(WeekDays daysOff)
     {

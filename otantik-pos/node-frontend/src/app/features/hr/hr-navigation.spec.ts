@@ -6,7 +6,7 @@ import { Permissions } from '../../core/auth/permissions';
 import { signal } from '@angular/core';
 import { FinancialsShell } from '../costing/financials-shell';
 import { HrShell } from './hr-shell';
-import { SuspendedCount } from './suspended-count';
+import { CorrectionsCount } from './corrections-count';
 
 // The route of that path, anywhere under these.
 function find(list: Route[] | undefined, path: string): Route | undefined {
@@ -45,7 +45,7 @@ describe('the HR navigation', () => {
   it('has a tab each for the employees, attendance, its corrections, payroll, holidays and the attendance devices, counting the days waiting', async () => {
     const count = signal(0);
     const refresh = vi.fn();
-    TestBed.configureTestingModule({ providers: [provideRouter([]), { provide: SuspendedCount, useValue: { count, refresh } }] });
+    TestBed.configureTestingModule({ providers: [provideRouter([]), { provide: CorrectionsCount, useValue: { count, refresh } }] });
     const fixture = TestBed.createComponent(HrShell);
     await fixture.whenStable();
     fixture.detectChanges();
@@ -58,7 +58,7 @@ describe('the HR navigation', () => {
 
     count.set(2);
     fixture.detectChanges();
-    expect(el.querySelectorAll('nav a')[2].querySelector('.count')!.getAttribute('aria-label')).toBe('2 suspended');
+    expect(el.querySelectorAll('nav a')[2].querySelector('.count')!.getAttribute('aria-label')).toBe('2 waiting');
     expect(text(el.querySelector('.count')!)).toBe('2');
   });
 

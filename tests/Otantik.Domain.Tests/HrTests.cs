@@ -250,6 +250,52 @@ public class HrTests
     }
 
     [Fact]
+    public void Flexible_hours_have_no_shift_and_their_day_is_the_business_days()
+    {
+        var waiter = new Employee(Guid.NewGuid(), "Mona", "Waiter", 4_050, null, WeekDays.Friday, new DateOnly(2026, 1, 1), "12");
+        Assert.True(waiter.HasFlexibleHours);
+        var tuesday = Monday.AddDays(1);
+
+        // From 04:00 to 04:00: a night past midnight is one day.
+        Assert.Equal((At(Monday, 4), At(tuesday, 4)), Timesheet.Window(waiter, Monday));
+        Assert.Equal(Monday, Timesheet.DayOf(waiter, At(tuesday, 3, 59)));
+        Assert.Equal(tuesday, Timesheet.DayOf(waiter, At(tuesday, 4)));
+
+        // Nothing late, early or away; the hours past nine are overtime.
+        var late = Day(waiter, Monday, At(Monday, 13), At(Monday, 15), At(Monday, 16), At(tuesday, 1, 30));
+        Assert.Equal((DayStatus.Worked, 690, 0, 0, 0, 150), (late.Status, late.WorkedMinutes, late.LateMinutes, late.EarlyLeaveMinutes, late.AwayMinutes, late.OvertimeMinutes));
+        var short_ = Day(waiter, Monday, At(Monday, 13), At(Monday, 17));
+        Assert.Equal((240, 0, 0), (short_.WorkedMinutes, short_.ShortMinutes, short_.OvertimeMinutes));
+        // A working day without punches is an absence still; their day off is a day off.
+        Assert.Equal(DayStatus.Absent, Day(waiter, Monday).Status);
+        Assert.Equal(DayStatus.DayOff, Day(waiter, Friday).Status);
+
+        // Given a shift later: measured against it from then.
+        waiter.SetShift(new TimeOnly(10, 0));
+        Assert.Equal(180, Day(waiter, Monday, At(Monday, 13), At(Monday, 19)).LateMinutes);
+    }
+
+    [Fact]
+    public void A_command_for_the_device_is_numbered_and_its_first_answer_kept()
+    {
+        var users = DeviceCommand.ReadUsers("CQZ", 3, "Omar");
+        Assert.Equal("C:3:DATA QUERY USERINFO", users.Line);
+        Assert.Throws<DomainException>(() => DeviceCommand.ReadUsers("CQZ", 0, "Omar"));
+        var attendance = DeviceCommand.ReadAttendance("CQZ", 4, new DateOnly(2026, 9, 1), new DateOnly(2026, 10, 12), "Omar");
+        Assert.Equal("C:4:DATA QUERY ATTLOG StartTime=2026-09-01 00:00:00\tEndTime=2026-10-12 23:59:59", attendance.Line);
+        Assert.Throws<DomainException>(() => DeviceCommand.ReadAttendance("CQZ", 5, Monday, Monday.AddDays(-1), "Omar"));
+
+        attendance.Answered(0, Later);
+        attendance.Answered(-1002, Later.AddMinutes(1));
+        Assert.Equal((0, Later), (attendance.ReturnCode, attendance.AnsweredAtUtc));
+
+        // A device user is their number and name, as the device has them.
+        var user = new DeviceUser("CQZ", " 7 ", new string('x', 150), Later);
+        Assert.Equal(("7", 100), (user.DeviceUserId, user.Name.Length));
+        Assert.Throws<DomainException>(() => new DeviceUser("CQZ", " ", "Hassan", Later));
+    }
+
+    [Fact]
     public void A_public_holiday_has_a_name_and_runs_one_day_to_ten()
     {
         Assert.Throws<DomainException>(() => new PublicHoliday(Guid.NewGuid(), " ", Monday, Monday, "Omar"));

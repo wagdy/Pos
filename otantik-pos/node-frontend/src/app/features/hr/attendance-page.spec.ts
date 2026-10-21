@@ -9,7 +9,7 @@ import { BusinessDay } from '../costing/financials';
 import { MAT_DIALOG_DATA } from '@angular/material/dialog';
 import { AddPunchDialog, IgnorePunchDialog, MarkDayData, MarkDayDialog, PenaltyDialog, ResolveDayDialog } from './attendance-dialogs';
 import { AttendancePage } from './attendance-page';
-import { SuspendedCount } from './suspended-count';
+import { CorrectionsCount } from './corrections-count';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
@@ -35,7 +35,7 @@ function day(date: string, extra: Partial<AttendanceDay> = {}): AttendanceDay {
     date, status: 'Worked', shiftStartsAt: `${date}T16:00:00`, shiftEndsAt: `${tomorrow}T01:00:00`, firstIn: `${date}T16:12:00`,
     lastOut: `${tomorrow}T01:20:00`, workedMinutes: 548, lateMinutes: 12, earlyLeaveMinutes: 0, awayMinutes: 0, overtimeMinutes: 20, shortMinutes: 12,
     isWeeklyDayOff: false, mark: null, markNotes: null, punches: [punch('p1', `${date}T16:12:00`), punch('p2', `${tomorrow}T01:20:00`)],
-    penaltyHours: 0, penaltyReason: null, penaltySetBy: null, holidayName: null, ...extra,
+    penaltyHours: 0, penaltyReason: null, penaltySetBy: null, holidayName: null, dayEndsAt: `${tomorrow}T10:00:00`, ...extra,
   };
 }
 
@@ -73,7 +73,7 @@ describe('the attendance', () => {
           provide: HrApi,
           useValue: { attendance, timesheet, addPunch, ignorePunch, restorePunch: vi.fn(), markDay, setPenalty, resolveDay, employees: () => of([hassan, mona]) },
         },
-        { provide: SuspendedCount, useValue: suspended },
+        { provide: CorrectionsCount, useValue: suspended },
         { provide: Approvals, useValue: { canApprove } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
@@ -196,11 +196,19 @@ describe('the attendance', () => {
     await page['resolve'](page['rows']()[0]);
     expect(open.mock.lastCall![0]).toBe(ResolveDayDialog);
     expect(open.mock.lastCall![1].data).toEqual({
-      employee: 'Hassan', date: '2026-09-21', shift: '16:00–01:00 +1', shiftEndsAt: '2026-09-22T01:00:00', punchedIn: '2026-09-21T16:07:00',
+      employee: 'Hassan', date: '2026-09-21', shift: '16:00–01:00 +1', shiftEndsAt: '2026-09-22T01:00:00', dayEndsAt: '2026-09-22T10:00:00',
+      punchedIn: '2026-09-21T16:07:00',
     });
     expect(resolveDay).toHaveBeenCalledWith('hassan', '2026-09-21', '2026-09-22T01:00:00', 'Forgot to scan out');
     expect(notify.info).toHaveBeenCalledWith('Punch-out entered.');
     expect(suspended.refresh).toHaveBeenCalled();
+  });
+
+  it('shows flexible hours for a day with no shift', async () => {
+    attendance.mockReturnValue(of({ ...report, employees: [{ employee: mona, day: day('2026-09-21', { shiftStartsAt: null, shiftEndsAt: null, lateMinutes: 0 }) }] }));
+    const { el, cells } = await render();
+
+    expect(cells(el.querySelectorAll('tbody tr')[0])[0]).toBe('Flexible');
   });
 
   it('says when the day is a public holiday: worked by some, a paid day off for the rest', async () => {

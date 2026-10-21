@@ -3,13 +3,13 @@ import { TestBed } from '@angular/core/testing';
 import { MatDialog } from '@angular/material/dialog';
 import { provideRouter } from '@angular/router';
 import { of } from 'rxjs';
-import { AdministrativePenalty, AttendanceDay, Employee, EmployeeDay, HrApi, Punch } from '../../core/hr/hr.api';
+import { AdministrativePenalty, AttendanceDay, Employee, EmployeeDay, HrApi, LatePunch, Punch } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { BusinessDay } from '../costing/financials';
 import { IgnorePunchDialog, PenaltyDialog, ResolveDayDialog } from './attendance-dialogs';
 import { CorrectionsPage } from './corrections-page';
-import { SuspendedCount } from './suspended-count';
+import { CorrectionsCount } from './corrections-count';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 // Each element's text inside, as Angular drops the spaces between elements.
@@ -33,7 +33,7 @@ function suspendedDay(date: string, next: string, punches: Punch[]): AttendanceD
   return {
     date, status: 'Suspended', shiftStartsAt: `${date}T16:00:00`, shiftEndsAt: `${next}T01:00:00`, firstIn: punches[0].punchedAt, lastOut: null,
     workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, awayMinutes: 0, overtimeMinutes: 0, shortMinutes: 0, isWeeklyDayOff: false, mark: null,
-    markNotes: null, punches, penaltyHours: 0, penaltyReason: null, penaltySetBy: null, holidayName: null,
+    markNotes: null, punches, penaltyHours: 0, penaltyReason: null, penaltySetBy: null, holidayName: null, dayEndsAt: `${next}T10:00:00`,
   };
 }
 
@@ -68,6 +68,8 @@ describe('the corrections', () => {
   const resolveDay = vi.fn();
   const ignorePunch = vi.fn();
   const setPenalty = vi.fn();
+  const latePunches = vi.fn();
+  const settleLatePunches = vi.fn();
   const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
   const count = { refresh: vi.fn() };
@@ -79,13 +81,15 @@ describe('the corrections', () => {
         provideRouter([]),
         {
           provide: HrApi,
-          useValue: { suspendedDays, penalties: penaltiesOf, resolveDay, ignorePunch, setPenalty, employees: () => of([hassan, mona, gone]) },
+          useValue: {
+            suspendedDays, penalties: penaltiesOf, resolveDay, ignorePunch, setPenalty, latePunches, settleLatePunches, employees: () => of([hassan, mona, gone]),
+          },
         },
         { provide: Approvals, useValue: { canApprove } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
         { provide: BusinessDay, useValue: { today: () => Promise.resolve('2026-10-21') } },
-        { provide: SuspendedCount, useValue: count },
+        { provide: CorrectionsCount, useValue: count },
       ],
     });
     const fixture = TestBed.createComponent(CorrectionsPage);
@@ -104,6 +108,8 @@ describe('the corrections', () => {
     resolveDay.mockReset().mockReturnValue(of({ ...waiting[0].day, status: 'Worked', workedMinutes: 780 }));
     ignorePunch.mockReset().mockReturnValue(of({}));
     setPenalty.mockReset().mockReturnValue(of(undefined));
+    latePunches.mockReset().mockReturnValue(of([]));
+    settleLatePunches.mockReset().mockReturnValue(of({ settled: 2 }));
     open.mockReset();
     notify.info.mockReset();
     count.refresh.mockReset();
@@ -135,7 +141,8 @@ describe('the corrections', () => {
     await page['resolve'](waiting[0], waiting[0].day.punches[2]);
     expect(open.mock.lastCall![0]).toBe(ResolveDayDialog);
     expect(open.mock.lastCall![1].data).toEqual({
-      employee: 'Hassan', date: '2026-10-12', shift: '16:00–01:00 +1', shiftEndsAt: '2026-10-13T01:00:00', punchedIn: '2026-10-12T16:05:00',
+      employee: 'Hassan', date: '2026-10-12', shift: '16:00–01:00 +1', shiftEndsAt: '2026-10-13T01:00:00', dayEndsAt: '2026-10-13T10:00:00',
+      punchedIn: '2026-10-12T16:05:00',
     });
     expect(resolveDay).toHaveBeenCalledWith('hassan', '2026-10-12', '2026-10-13T01:00:00', 'Forgot to scan out');
     expect(notify.info).toHaveBeenCalledWith('Punch-out entered: Hassan worked 13h 00m on Mon 12 Oct.');
@@ -151,6 +158,24 @@ describe('the corrections', () => {
     expect(open.mock.lastCall![1].data).toEqual({ time: '16:02' });
     expect(ignorePunch).toHaveBeenCalledWith('m1', 'Scanned by mistake');
     expect(suspendedDays).toHaveBeenCalledTimes(2);
+  });
+
+  it('lists the punches that came after the pay was finalized, a day at a time, until seen to', async () => {
+    const late = (id: string, at: string): LatePunch => ({
+      employee: hassan, day: '2026-09-28', month: '2026-09-01', finalizedAtUtc: '2026-10-02T09:00:00Z', punch: punch(id, at),
+    });
+    latePunches.mockReturnValue(of([late('l1', '2026-09-28T16:01:00'), late('l2', '2026-09-29T01:10:00')]));
+    const { el, page } = await render();
+
+    const rows = [...el.querySelectorAll('.late tbody tr')];
+    expect(rows.length).toBe(1);
+    expect(text(rows[0].querySelector('td')!)).toBe('Mon 28 Sept');
+    expect([...rows[0].querySelectorAll('.punch strong')].map(text)).toEqual(['16:01', '01:10 +1']);
+
+    await page['settle'](page['lateDays']()[0]);
+    expect(settleLatePunches).toHaveBeenCalledWith(['l1', 'l2']);
+    expect(notify.info).toHaveBeenCalledWith('Hassan\'s Mon 28 Sept: seen to.');
+    expect(latePunches).toHaveBeenCalledTimes(2);
   });
 
   it('lists the month’s penalties with what they take off, in all', async () => {

@@ -322,6 +322,112 @@ public class HrApiTests
     }
 
     [Fact]
+    public async Task Flexible_hours_have_no_shift_to_be_late_for_and_overtime_past_nine_hours()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var today = await TodayAsync(manager);
+        var day = today.AddDays(-3);
+        var mona = Guid.NewGuid();
+        await Json(await manager.PutAsJsonAsync($"/api/hr/employees/{mona}", new
+        {
+            requestId = Guid.NewGuid(), name = "Mona", jobTitle = "Waiter", monthlySalary = 4_050, shiftStartsAt = (string?)null, daysOff = Array.Empty<string>(),
+            hiredOn = Iso(today.AddMonths(-2)),
+        }, Cancel));
+        var employee = (await Json(await manager.GetAsync("/api/hr/employees", Cancel))).EnumerateArray().Single();
+        Assert.Equal(JsonValueKind.Null, employee.GetProperty("shiftStartsAt").ValueKind);
+
+        // In at 11:30, out at 01:00 the next morning: one day, the business day's, and four and a half
+        // hours past nine; nothing late.
+        foreach (var at in new[] { $"{Iso(day)}T11:30:00", $"{Iso(day.AddDays(1))}T01:00:00" })
+        {
+            await Json(await manager.PostAsJsonAsync("/api/hr/punches", new { punchId = Guid.NewGuid(), employeeId = mona, punchedAt = at, reason = "Device down" }, Cancel));
+        }
+
+        var worked = (await Json(await manager.GetAsync($"/api/hr/attendance?date={Iso(day)}", Cancel))).GetProperty("employees")[0].GetProperty("day");
+        Assert.Equal(("Worked", 810, 0, 0, 270), (worked.GetProperty("status").GetString(), worked.GetProperty("workedMinutes").GetInt32(),
+            worked.GetProperty("lateMinutes").GetInt32(), worked.GetProperty("earlyLeaveMinutes").GetInt32(), worked.GetProperty("overtimeMinutes").GetInt32()));
+        Assert.Equal((JsonValueKind.Null, $"{Iso(day.AddDays(1))}T04:00:00"), (worked.GetProperty("shiftStartsAt").ValueKind, worked.GetProperty("dayEndsAt").GetString()));
+        // A working day with no punches is an absence still.
+        Assert.Equal("Absent", (await Json(await manager.GetAsync($"/api/hr/attendance?date={Iso(day.AddDays(-1))}", Cancel)))
+            .GetProperty("employees")[0].GetProperty("day").GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task A_device_is_asked_for_its_users_and_its_queued_punches_come_in_bulk_and_late()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var device = api.Anonymous();
+        var today = await TodayAsync(manager);
+        const string Serial = "CQZ7232060112";
+        await device.GetAsync($"/iclock/cdata?SN={Serial}&options=all", Cancel);
+        var deviceId = (await Json(await manager.GetAsync("/api/hr/devices", Cancel))).EnumerateArray().Single().GetProperty("id").GetGuid();
+        await Json(await manager.PostAsJsonAsync($"/api/hr/devices/{deviceId}/approve", new { name = "Kitchen door" }, Cancel));
+        Task<string> Poll() => device.GetStringAsync($"/iclock/getrequest?SN={Serial}", Cancel);
+        Task<HttpResponseMessage> Post(string path, string body) => device.PostAsync(path, new StringContent(body, Encoding.UTF8, "text/plain"), Cancel);
+        Assert.Equal("OK", await Poll());
+
+        // A manager's command, handed to the device once when it next asks.
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.PostAsync($"/api/hr/devices/{deviceId}/read-users", null, Cancel)).StatusCode);
+        var asked = await Json(await manager.PostAsync($"/api/hr/devices/{deviceId}/read-users", null, Cancel));
+        Assert.Equal((1, "ReadUsers"), (asked.GetProperty("number").GetInt32(), asked.GetProperty("kind").GetString()));
+        Assert.Equal(1, (await Json(await manager.PostAsync($"/api/hr/devices/{deviceId}/read-users", null, Cancel))).GetProperty("number").GetInt32());
+        Assert.Equal("C:1:DATA QUERY USERINFO", await Poll());
+        Assert.Equal("OK", await Poll());
+
+        // Its users: numbers and names kept, never passwords, cards or fingerprints.
+        var users = string.Join("\r\n", "PIN=7\tName=Hassan\tPri=0\tPasswd=1234\tCard=99887766\tGrp=1", "PIN=12\tName=منى\tPri=0\tPasswd=", "FP PIN=7\tFID=6\tSize=1024\tTMP=AAAA");
+        Assert.Equal("OK:3", await (await Post($"/iclock/cdata?SN={Serial}&table=USERINFO", users)).Content.ReadAsStringAsync(Cancel));
+        Assert.Equal("OK", await (await Post($"/iclock/devicecmd?SN={Serial}", "ID=1&Return=0&CMD=DATA")).Content.ReadAsStringAsync(Cancel));
+        var command = (await Json(await manager.GetAsync("/api/hr/devices", Cancel))).EnumerateArray().Single().GetProperty("commands")[0];
+        Assert.Equal(0, command.GetProperty("returnCode").GetInt32());
+        async Task<Dictionary<string, JsonElement>> DeviceUsers() =>
+            (await Json(await accountant.GetAsync("/api/hr/device-users", Cancel))).EnumerateArray().ToDictionary(u => u.GetProperty("deviceUserId").GetString()!);
+        var listed = await DeviceUsers();
+        Assert.Equal(("Hassan", "منى"), (listed["7"].GetProperty("name").GetString(), listed["12"].GetProperty("name").GetString()));
+        Assert.Equal(JsonValueKind.Null, listed["7"].GetProperty("employeeId").ValueKind);
+        Assert.DoesNotContain("1234", listed["7"].GetRawText());
+
+        // Weeks away from the network: six thousand punches at once, all kept, and once when sent again.
+        var start = today.AddDays(-30).ToDateTime(new TimeOnly(0, 0));
+        var queued = string.Join("\r\n", Enumerable.Range(0, 6_000).Select(i =>
+            $"{(i % 2 == 0 ? "7" : "12")}\t{start.AddMinutes(i * 3).ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)}\t0\t1\t0\t0\t0"));
+        foreach (var _ in Enumerable.Range(0, 2))
+            Assert.Equal("OK:6000", await (await Post($"/iclock/cdata?SN={Serial}&table=ATTLOG&Stamp=900", queued)).Content.ReadAsStringAsync(Cancel));
+        listed = await DeviceUsers();
+        Assert.Equal((3_000, 3_000), (listed["7"].GetProperty("waitingPunches").GetInt32(), listed["12"].GetProperty("waitingPunches").GetInt32()));
+
+        // Number 7 given to an employee: theirs now, and listed against them.
+        await HireAsync(manager, "Hassan", today.AddMonths(-2), "7");
+        listed = await DeviceUsers();
+        Assert.Equal(("Hassan", 0), (listed["7"].GetProperty("employeeName").GetString(), listed["7"].GetProperty("waitingPunches").GetInt32()));
+
+        // Its attendance read again from a day: the device's own command.
+        var again = await Json(await manager.PostAsJsonAsync($"/api/hr/devices/{deviceId}/read-attendance", new { from = Iso(today.AddDays(-10)), to = Iso(today) }, Cancel));
+        Assert.Equal(2, again.GetProperty("number").GetInt32());
+        Assert.Equal($"C:2:DATA QUERY ATTLOG StartTime={Iso(today.AddDays(-10))} 00:00:00\tEndTime={Iso(today)} 23:59:59", await Poll());
+
+        // A punch for a month whose pay is finalized: kept, and listed for a manager to see to.
+        var lastMonth = new DateOnly(today.Year, today.Month, 1).AddMonths(-1);
+        var lastDay = lastMonth.AddMonths(1).AddDays(-1);
+        var ali = await HireAsync(manager, "Ali", lastDay, "21");
+        Assert.Equal(HttpStatusCode.NoContent, (await manager.PutAsJsonAsync($"/api/hr/employees/{ali}/days/{Iso(lastDay)}", new { kind = "Leave" }, Cancel)).StatusCode);
+        await Json(await manager.PostAsync($"/api/hr/payroll/{ali}/finalize?month={Iso(lastMonth)}", null, Cancel));
+        Assert.Equal("OK:1", await (await Post($"/iclock/cdata?SN={Serial}&table=ATTLOG&Stamp=901", $"21\t{Iso(lastDay)} 12:00:00\t0\t1")).Content.ReadAsStringAsync(Cancel));
+        var late = (await Json(await accountant.GetAsync("/api/hr/attendance/late-punches", Cancel))).EnumerateArray().Single();
+        Assert.Equal(("Ali", Iso(lastDay)), (late.GetProperty("employee").GetProperty("name").GetString(), late.GetProperty("day").GetString()));
+        // A lone punch-in there can't be put right any more: not listed as suspended, only as late.
+        Assert.DoesNotContain((await Json(await accountant.GetAsync($"/api/hr/attendance/suspended?from={Iso(lastMonth)}&to={Iso(today)}", Cancel))).EnumerateArray(),
+            d => d.GetProperty("employee").GetProperty("name").GetString() == "Ali");
+        object Settle() => new { punchIds = new[] { late.GetProperty("punch").GetProperty("id").GetGuid() } };
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.PostAsJsonAsync("/api/hr/attendance/late-punches/settle", Settle(), Cancel)).StatusCode);
+        Assert.Equal(1, (await Json(await manager.PostAsJsonAsync("/api/hr/attendance/late-punches/settle", Settle(), Cancel))).GetProperty("settled").GetInt32());
+        Assert.Empty((await Json(await accountant.GetAsync("/api/hr/attendance/late-punches", Cancel))).EnumerateArray());
+    }
+
+    [Fact]
     public async Task The_attendance_device_is_refused_until_approved_and_its_punches_make_the_day()
     {
         await using var api = await TestApi.StartAsync();

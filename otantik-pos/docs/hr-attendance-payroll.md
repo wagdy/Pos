@@ -14,8 +14,12 @@ and their monthly pay. This page is the design.
 - **Employees** (`hr.Employees`): name, job title, base monthly salary, shift start, weekly
   days off, their user number on the device, an optional link to a till account, hired/left
   dates. They are not the till's staff accounts: most never sign in to a till.
-- **The shift is nine hours** for everyone, from the employee's shift start, past midnight if
-  need be.
+- **The shift is nine hours**, from the employee's shift start, past midnight if need be.
+- **Flexible hours** (an employee with no shift start, migration `FlexibleShiftsAndDeviceSync`):
+  nothing is late, early or away for them, and the hours past nine worked in a day are overtime.
+  Their day runs as the till's business day does, from 04:00 to 04:00, so a night past midnight
+  is one day. A working day with no punches is still an absence, and their salary is paid as
+  anyone's.
 - **Rates come from a 30-day month**, whatever the month's length:
   - a day = salary ÷ 30;
   - an hour = a day ÷ 9;
@@ -115,13 +119,30 @@ The K40 Pro pushes to us over HTTP with ZKTeco's ADMS ("iclock") protocol. Nothi
 | Request | When | Our answer |
 | --- | --- | --- |
 | `GET /iclock/cdata?SN=…&options=all` | The device starts or reconnects | Its options, text/plain: `GET OPTION FROM: <SN>`, `ATTLOGStamp=<last stamp>`, `OPERLOGStamp=9999`, `ErrorDelay=30`, `Delay=10`, `TransTimes=00:00;14:05`, `TransInterval=1`, `TransFlag=TransData AttLog OpLog`, `Realtime=1`, `Encrypt=None` |
-| `POST /iclock/cdata?SN=…&table=ATTLOG&Stamp=…` | New punches | Each line `PIN⇥YYYY-MM-DD HH:MM:SS⇥status⇥verify⇥…` becomes an `AttendanceLog`. Answer `OK`, then keep the stamp |
-| `POST /iclock/cdata?SN=…&table=OPERLOG` | Operations, users enrolled | `OK`. `USER PIN=…⇥Name=…` lines can suggest links to employees. Fingerprint templates (`FP …`) are never stored |
-| `GET /iclock/getrequest?SN=…` | Every few seconds | `OK`, or a queued command `C:<id>:<command>` (for example fetching a period's punches again, or putting an employee's number and name on the device) |
-| `POST /iclock/devicecmd?SN=…` | A command's result | `OK`; the result is recorded |
+| `POST /iclock/cdata?SN=…&table=ATTLOG&Stamp=…` | New punches, or all those it kept while the till was away | Each line `PIN⇥YYYY-MM-DD HH:MM:SS⇥status⇥verify⇥…` becomes an `AttendanceLog`, any number of them, saved a thousand at a time (up to 16 MB a request). Answer `OK:<lines>`, then keep the stamp |
+| `POST /iclock/cdata?SN=…&table=USERINFO` (or `OPERLOG`) | Its users, when asked | `PIN=…⇥Name=…` (or `USER PIN=…⇥Name=…`) lines keep the user's number and name (`DeviceUser`), nothing else: no password or card. Fingerprint and face templates (`FP …`, `FACE …`, `BIODATA …`) are never stored |
+| `GET /iclock/getrequest?SN=…` | Every few seconds | `OK`, or the oldest command a manager left for it, `C:<n>:DATA QUERY USERINFO` or `C:<n>:DATA QUERY ATTLOG StartTime=…⇥EndTime=…` (`DeviceCommand`), handed over once |
+| `POST /iclock/devicecmd?SN=…` | A command's result | `ID=<n>&Return=<code>&CMD=…`: the command answered, 0 being done; `OK` |
 
 The exact option set and command syntax vary by firmware. They are to be checked against our
-unit with a capture of its first requests before they are fixed.
+unit with a capture of its first requests before they are fixed. A command the firmware does not
+take comes back with a non-zero code, shown on the Devices tab.
+
+**Syncing what the device held before the till** (built):
+- Its attendance: on approval the till's options say `ATTLOGStamp=None`, so the device sends
+  its whole stored log by itself. A manager can also have it read again from one day to another
+  (`DATA QUERY ATTLOG`); what is kept already is kept once. Punches from before an employee's
+  hire date count for nothing.
+- Its users: a manager has it list them (`DATA QUERY USERINFO`). Each user nobody on the till has
+  the number of is listed on the Employees tab, with the punches waiting under it, to add as an
+  employee (name and number filled in) or link to one; their punches are theirs from then.
+
+**Offline, and late punches** (built): the device keeps its punches while the laptop is off the
+network and sends them all when it is back. The days are worked out from the punches' own
+times, so past days come out as if the punches had arrived on time, and a punch sent twice is
+kept once. One that arrives for a month whose pay is finalized is kept, the slip stays as it was,
+and Corrections lists it until a manager marks it seen to (settling in a later month's pay what
+it changes).
 
 **What happens to a punch:**
 1. The line is parsed strictly. A malformed one is logged and skipped, never the whole batch.
@@ -192,6 +213,9 @@ unit with a capture of its first requests before they are fixed.
 | `PUT /api/hr/employees/{id}/days/{date}/penalty` | An administrative penalty in hours, with the reason; with no hours, taken off |
 | `GET /api/hr/penalties?month=` | The month's administrative penalties, everyone's, each with what it takes off the pay |
 | `GET /api/hr/holidays?year=` | A year's public holidays |
+| `POST /api/hr/devices/{id}/read-users`, `…/read-attendance` | A command left for the device: list its users, or send its attendance from a day to another again: a manager's |
+| `GET /api/hr/device-users` | The users the devices listed, who on the till has each number, and the punches waiting under it |
+| `GET /api/hr/attendance/late-punches`, `POST …/settle` | Device punches that came after their month's pay was finalized; marked seen to by a manager |
 | `PUT /api/hr/holidays/{id}`, `DELETE …/{id}` | A public holiday added or changed, or taken off: a manager's |
 | `GET`/`PUT /api/hr/settings` | The grace, and how close two scans are to be one |
 | `GET /api/hr/devices`, `POST …/{id}/approve`, `…/revoke` | The devices, approved by name |
@@ -223,8 +247,13 @@ migration `PublicHolidays`); leave allowances entered by a manager are for anyth
 **Built:**
 - HR & Payroll in the top bar (`hr.view`):
   - Employees: add, change, leave and come back; an accountant's go to a manager;
-  - Attendance devices: where to point the K40, approve or refuse it, and the grace and
+  - Employees also lists the device's users nobody has the number of yet, to add or link;
+    the form takes flexible hours (no start time);
+  - Attendance devices: where to point the K40, approve or refuse it, have it list its users or
+    send its attendance again (the command's progress shown as it goes), and the grace and
     double-scan settings.
+  - Corrections also lists the punches that came after their month's pay was finalized, a day at
+    a time, until a manager marks them seen to.
 - Financials → Advances (السلفيات): the month's advances, each employee's total, a new advance
   from the safe or a day's takings, and voids.
 - The daily batch: an employee advance block beside the supplier payments.

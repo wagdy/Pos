@@ -99,6 +99,15 @@ public sealed class HrController(ISender sender) : ControllerBase
         sender.Send(new ResolveSuspendedDayCommand(
             request.PunchId, request.EmployeeId, request.Date, request.PunchedOutAt, request.Reason, StaffName), cancellationToken);
 
+    // A device's punches that came after their month's pay was finalized, not seen to yet.
+    [HttpGet("attendance/late-punches")]
+    public Task<IReadOnlyList<LatePunchDto>> GetLatePunches(CancellationToken cancellationToken) => sender.Send(new GetLatePunchesQuery(), cancellationToken);
+
+    [HttpPost("attendance/late-punches/settle")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public async Task<object> SettleLatePunches(SettleRequest request, CancellationToken cancellationToken) =>
+        new { Settled = await sender.Send(new SettleLatePunchesCommand(request.PunchIds ?? [], StaffName), cancellationToken) };
+
     // A manager's administrative penalty on a day, in hours, with the reason; with no hours, taken off.
     [HttpPut("employees/{employeeId:guid}/days/{date}/penalty")]
     [Authorize(Policy = Permissions.ApprovalDecide)]
@@ -131,6 +140,22 @@ public sealed class HrController(ISender sender) : ControllerBase
         await sender.Send(new DeletePublicHolidayCommand(holidayId), cancellationToken);
         return NoContent();
     }
+
+    // A command left for a device: its users read, or its attendance from a day read again. The
+    // device takes it the next time it asks, within seconds.
+    [HttpPost("devices/{deviceId:guid}/read-users")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<DeviceCommandDto> ReadDeviceUsers(Guid deviceId, CancellationToken cancellationToken) =>
+        sender.Send(new QueueDeviceCommandCommand(deviceId, DeviceCommandKind.ReadUsers, null, null, StaffName), cancellationToken);
+
+    [HttpPost("devices/{deviceId:guid}/read-attendance")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<DeviceCommandDto> ReadDeviceAttendance(Guid deviceId, ReadAttendanceRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new QueueDeviceCommandCommand(deviceId, DeviceCommandKind.ReadAttendance, request.From, request.To, StaffName), cancellationToken);
+
+    // The users the devices have listed, and who on the till has each number.
+    [HttpGet("device-users")]
+    public Task<IReadOnlyList<DeviceUserDto>> GetDeviceUsers(CancellationToken cancellationToken) => sender.Send(new GetDeviceUsersQuery(), cancellationToken);
 
     [HttpGet("settings")]
     public Task<AttendancePolicyDto> GetSettings(CancellationToken cancellationToken) => sender.Send(new GetAttendanceSettingsQuery(), cancellationToken);
@@ -204,7 +229,8 @@ public sealed record SaveEmployeeRequest(
     string Name,
     string JobTitle,
     decimal MonthlySalary,
-    TimeOnly ShiftStartsAt,
+    // None for flexible hours.
+    TimeOnly? ShiftStartsAt,
     IReadOnlyList<DayOfWeek>? DaysOff,
     DateOnly HiredOn,
     string? DeviceUserId = null,
@@ -225,6 +251,10 @@ public sealed record ResolveDayRequest(Guid PunchId, Guid EmployeeId, DateOnly D
 public sealed record PenaltyRequest(decimal? Hours, string? Reason = null);
 
 public sealed record HolidayRequest(string Name, DateOnly FirstDay, DateOnly LastDay);
+
+public sealed record SettleRequest(IReadOnlyList<Guid>? PunchIds);
+
+public sealed record ReadAttendanceRequest(DateOnly? From, DateOnly? To = null);
 
 public sealed record ApproveDeviceRequest(string? Name);
 

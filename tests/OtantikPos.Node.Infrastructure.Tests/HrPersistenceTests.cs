@@ -90,6 +90,48 @@ public class HrPersistenceTests
     }
 
     [Fact]
+    public async Task Flexible_hours_device_commands_and_users_and_a_settled_late_punch_are_kept()
+    {
+        await using var node = await TestNode.StartAsync();
+        var waiter = new Employee(Guid.NewGuid(), "Mona", "Waiter", 4_050, null, WeekDays.Friday, new DateOnly(2026, 1, 1), "12");
+        var punch = AttendanceLog.FromDevice(Serial, "12", PunchIn, 0, 1, waiter.Id);
+        punch.SettleLate("Omar");
+        var command = DeviceCommand.ReadUsers(Serial, 1, "Omar");
+        command.Sent(DateTime.UtcNow);
+        command.Answered(0, DateTime.UtcNow);
+        await node.Db(async db =>
+        {
+            db.Employees.Add(waiter);
+            db.AttendanceLogs.Add(punch);
+            db.DeviceCommands.Add(command);
+            db.DeviceUsers.Add(new DeviceUser(Serial, "12", "منى", DateTime.UtcNow));
+            return await db.SaveChangesAsync();
+        });
+
+        await node.Db(async db =>
+        {
+            Assert.Null((await db.Employees.SingleAsync()).ShiftStartsAt);
+            Assert.Equal("Omar", (await db.AttendanceLogs.SingleAsync()).LateSettledBy);
+            var kept = await db.DeviceCommands.SingleAsync();
+            Assert.Equal((DeviceCommandKind.ReadUsers, "C:1:DATA QUERY USERINFO", (int?)0), (kept.Kind, kept.Line, kept.ReturnCode));
+            Assert.Equal(("12", "منى"), ((await db.DeviceUsers.SingleAsync()).DeviceUserId, (await db.DeviceUsers.SingleAsync()).Name));
+            return 0;
+        });
+
+        // A device's command numbers, and its users, are one each.
+        await Assert.ThrowsAsync<ConflictException>(() => node.Db(async db =>
+        {
+            db.DeviceCommands.Add(DeviceCommand.ReadUsers(Serial, 1, "Omar"));
+            return await db.SaveChangesAsync();
+        }));
+        await Assert.ThrowsAsync<ConflictException>(() => node.Db(async db =>
+        {
+            db.DeviceUsers.Add(new DeviceUser(Serial, "12", "Mona", DateTime.UtcNow));
+            return await db.SaveChangesAsync();
+        }));
+    }
+
+    [Fact]
     public async Task A_punch_sent_twice_is_kept_once_and_a_device_number_is_one_employees()
     {
         await using var node = await TestNode.StartAsync();

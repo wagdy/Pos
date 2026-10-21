@@ -19,15 +19,15 @@ export const weekDays: { day: WeekDay; en: string; ar: string }[] = [
   { day: 'Friday', en: 'Fri', ar: 'الجمعة' },
 ];
 
-// Someone on the payroll. A nine-hour shift from shiftStartsAt; a day's pay is the salary over 30,
-// an hour's a day's over 9.
+// Someone on the payroll. A nine-hour shift from shiftStartsAt, or flexible hours with none; a
+// day's pay is the salary over 30, an hour's a day's over 9.
 export interface Employee {
   id: string;
   name: string;
   jobTitle: string;
   monthlySalary: number;
-  shiftStartsAt: string;
-  shiftEndsAt: string;
+  shiftStartsAt: string | null;
+  shiftEndsAt: string | null;
   daysOff: WeekDay[];
   deviceUserId: string | null;
   hiredOn: string;
@@ -43,7 +43,7 @@ export interface EmployeeInput {
   name: string;
   jobTitle: string;
   monthlySalary: number;
-  shiftStartsAt: string;
+  shiftStartsAt: string | null;
   daysOff: WeekDay[];
   hiredOn: string;
   deviceUserId: string | null;
@@ -99,8 +99,9 @@ export interface Punch {
 export interface AttendanceDay {
   date: string;
   status: DayStatus;
-  shiftStartsAt: string;
-  shiftEndsAt: string;
+  // None for flexible hours.
+  shiftStartsAt: string | null;
+  shiftEndsAt: string | null;
   firstIn: string | null;
   lastOut: string | null;
   workedMinutes: number;
@@ -119,6 +120,17 @@ export interface AttendanceDay {
   penaltySetBy: string | null;
   // The public holiday the day is, by its name.
   holidayName: string | null;
+  // When the day ends, and the next one's punches start.
+  dayEndsAt: string;
+}
+
+// A device's punch that came after its month's pay was finalized, for a manager to see to.
+export interface LatePunch {
+  employee: Employee;
+  day: string;
+  month: string;
+  finalizedAtUtc: string;
+  punch: Punch;
 }
 
 export interface AttendancePolicy {
@@ -171,7 +183,21 @@ export interface Timesheet {
   days: AttendanceDay[];
 }
 
-// A ZKTeco device that has called the till: refused until a manager approves it by name.
+// A command left for a device: waiting until it asks, sent, then answered (0 is done).
+export interface DeviceCommand {
+  id: string;
+  number: number;
+  kind: 'ReadUsers' | 'ReadAttendance';
+  text: string;
+  queuedBy: string;
+  queuedAtUtc: string;
+  sentAtUtc: string | null;
+  answeredAtUtc: string | null;
+  returnCode: number | null;
+}
+
+// A ZKTeco device that has called the till: refused until a manager approves it by name. Its
+// newest commands first.
 export interface AttendanceDevice {
   id: string;
   serialNumber: string;
@@ -182,6 +208,21 @@ export interface AttendanceDevice {
   firstSeenAtUtc: string;
   lastSeenAtUtc: string;
   lastAddress: string | null;
+  commands: DeviceCommand[];
+}
+
+// Someone enrolled on a device, as it listed them: who on the till has their number, if anyone,
+// and how many of their punches wait for someone to.
+export interface DeviceUser {
+  id: string;
+  deviceSerialNumber: string;
+  deviceName: string | null;
+  deviceUserId: string;
+  name: string;
+  lastSeenAtUtc: string;
+  employeeId: string | null;
+  employeeName: string | null;
+  waitingPunches: number;
 }
 
 export type AdjustmentKind = 'Incentive' | 'LeaveAllowance';
@@ -436,6 +477,28 @@ export class HrApi {
     return this.http.post<AttendanceDevice>(`/api/hr/devices/${id}/revoke`, {});
   }
 
+  // A command left for the device, taken the next time it asks: its users, or its attendance
+  // from a day read again.
+  readDeviceUsers(id: string): Observable<DeviceCommand> {
+    return this.http.post<DeviceCommand>(`/api/hr/devices/${id}/read-users`, {});
+  }
+
+  readDeviceAttendance(id: string, from: string, to: string): Observable<DeviceCommand> {
+    return this.http.post<DeviceCommand>(`/api/hr/devices/${id}/read-attendance`, { from, to });
+  }
+
+  deviceUsers(): Observable<DeviceUser[]> {
+    return this.http.get<DeviceUser[]>('/api/hr/device-users');
+  }
+
+  latePunches(): Observable<LatePunch[]> {
+    return this.http.get<LatePunch[]>('/api/hr/attendance/late-punches');
+  }
+
+  settleLatePunches(punchIds: string[]): Observable<{ settled: number }> {
+    return this.http.post<{ settled: number }>('/api/hr/attendance/late-punches/settle', { punchIds });
+  }
+
   payroll(month: string): Observable<PayrollMonth> {
     return this.http.get<PayrollMonth>('/api/hr/payroll', { params: { month } });
   }
@@ -465,6 +528,11 @@ export function duration(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`;
+}
+
+// A day's shift as "16:00–01:00 +1", or "Flexible" for flexible hours.
+export function shift(day: Pick<AttendanceDay, 'date' | 'shiftStartsAt' | 'shiftEndsAt'>): string {
+  return day.shiftStartsAt && day.shiftEndsAt ? `${clock(day.shiftStartsAt)}–${clock(day.shiftEndsAt, day.date)}` : 'Flexible';
 }
 
 // A date ('2026-10-19') as its day: "Mon 19 Oct".

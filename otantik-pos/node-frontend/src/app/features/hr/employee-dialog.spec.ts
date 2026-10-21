@@ -81,6 +81,22 @@ describe('the employee form', () => {
     expect(close).toHaveBeenCalledWith(expect.objectContaining({ id, name: 'Mona' }));
   });
 
+  it('takes flexible hours, with no start time, and opens on one from the attendance device', async () => {
+    const { el, page, refresh } = await render({ canApprove: true, today: '2026-10-20', fromDevice: { name: 'منى', deviceUserId: '12' } });
+    expect([page['name'], page['deviceUserId'], page['flexible']]).toEqual(['منى', '12', false]);
+
+    Object.assign(page, { jobTitle: 'Waiter', salary: 4_050, flexible: true, shiftStart: '' });
+    await refresh();
+    expect(el.querySelector('input[type=time]')).toBeNull();
+    expect(text(el.querySelector('.flexible')!)).toBe('No start time: nothing is late for them, and hours past nine in a day are overtime.');
+    await page['save']();
+    expect(saveEmployee.mock.lastCall![1]).toMatchObject({ name: 'منى', shiftStartsAt: null, deviceUserId: '12' });
+
+    TestBed.resetTestingModule();
+    const edited = await render({ employee: { ...hassan, shiftStartsAt: null, shiftEndsAt: null }, canApprove: true, today: '2026-10-20' });
+    expect(edited.page['flexible']).toBe(true);
+  });
+
   it('changes one as it is, and an accountant sends it for approval with a reason', async () => {
     const { el, page } = await render({ employee: hassan, canApprove: false, today: '2026-10-20' });
 

@@ -57,6 +57,7 @@ internal sealed class AttendanceLogConfiguration : IEntityTypeConfiguration<Atte
         builder.Property(l => l.RecordedBy).HasMaxLength(200);
         builder.Property(l => l.Reason).HasMaxLength(AttendanceLog.MaxReasonLength);
         builder.Property(l => l.IgnoredBy).HasMaxLength(200);
+        builder.Property(l => l.LateSettledBy).HasMaxLength(200);
         builder.Property(l => l.IgnoreReason).HasMaxLength(AttendanceLog.MaxReasonLength);
         builder.Ignore(l => l.IsIgnored);
         builder.Ignore(l => l.Counts);
@@ -93,6 +94,33 @@ internal sealed class AdministrativePenaltyConfiguration : IEntityTypeConfigurat
         builder.HasOne<Employee>().WithMany().HasForeignKey(p => p.EmployeeId).OnDelete(DeleteBehavior.Restrict);
         // One a day: changed, not added to.
         builder.HasIndex(p => new { p.EmployeeId, p.Date }).IsUnique();
+    }
+}
+
+internal sealed class DeviceCommandConfiguration : IEntityTypeConfiguration<DeviceCommand>
+{
+    public void Configure(EntityTypeBuilder<DeviceCommand> builder)
+    {
+        builder.ToTable("DeviceCommands", NodeDbContext.HrSchema);
+        builder.Property(c => c.DeviceSerialNumber).HasMaxLength(AttendanceDevice.MaxSerialNumberLength);
+        builder.Property(c => c.Kind).IsEnumName();
+        builder.Property(c => c.Text).HasMaxLength(200);
+        builder.Property(c => c.QueuedBy).HasMaxLength(200);
+        builder.Ignore(c => c.Line);
+        // The device knows a command by its number alone.
+        builder.HasIndex(c => new { c.DeviceSerialNumber, c.Number }).IsUnique();
+    }
+}
+
+internal sealed class DeviceUserConfiguration : IEntityTypeConfiguration<DeviceUser>
+{
+    public void Configure(EntityTypeBuilder<DeviceUser> builder)
+    {
+        builder.ToTable("DeviceUsers", NodeDbContext.HrSchema);
+        builder.Property(u => u.DeviceSerialNumber).HasMaxLength(AttendanceDevice.MaxSerialNumberLength);
+        builder.Property(u => u.DeviceUserId).HasMaxLength(DeviceUser.MaxDeviceUserIdLength);
+        builder.Property(u => u.Name).HasMaxLength(DeviceUser.MaxNameLength);
+        builder.HasIndex(u => new { u.DeviceSerialNumber, u.DeviceUserId }).IsUnique();
     }
 }
 
