@@ -229,7 +229,7 @@ public sealed record AddManualPunchCommand(Guid PunchId, Guid EmployeeId, DateTi
     : IRequest<PunchDto>, IRetryOnConflict;
 
 internal sealed class AddManualPunchHandler(
-    IEmployeeRepository employees, IAttendanceLogRepository logs, IPayrollSlipRepository slips, IUnitOfWork unitOfWork)
+    IEmployeeRepository employees, IAttendanceLogRepository logs, IPayrollSlipRepository slips, IUnitOfWork unitOfWork, IAttendanceNotifier notifier)
     : IRequestHandler<AddManualPunchCommand, PunchDto>
 {
     public async Task<PunchDto> Handle(AddManualPunchCommand request, CancellationToken cancellationToken)
@@ -244,6 +244,7 @@ internal sealed class AddManualPunchHandler(
         var punch = AttendanceLog.Manual(request.PunchId, employee.Id, request.PunchedAt, request.Reason, request.StaffName);
         logs.Add(punch);
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        await notifier.AttendanceChangedAsync(cancellationToken);
         return PunchDto.From(punch);
     }
 }
@@ -252,7 +253,7 @@ internal sealed class AddManualPunchHandler(
 public sealed record IgnorePunchCommand(Guid PunchId, bool Ignore, string? Reason, string StaffName) : IRequest<PunchDto>;
 
 internal sealed class IgnorePunchHandler(
-    IEmployeeRepository employees, IAttendanceLogRepository logs, IPayrollSlipRepository slips, IUnitOfWork unitOfWork)
+    IEmployeeRepository employees, IAttendanceLogRepository logs, IPayrollSlipRepository slips, IUnitOfWork unitOfWork, IAttendanceNotifier notifier)
     : IRequestHandler<IgnorePunchCommand, PunchDto>
 {
     public async Task<PunchDto> Handle(IgnorePunchCommand request, CancellationToken cancellationToken)
@@ -269,6 +270,7 @@ internal sealed class IgnorePunchHandler(
         else
             punch.Restore();
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        await notifier.AttendanceChangedAsync(cancellationToken);
         return PunchDto.From(punch);
     }
 }
@@ -277,7 +279,8 @@ internal sealed class IgnorePunchHandler(
 // mark taken off (Kind null).
 public sealed record SetDayMarkCommand(Guid EmployeeId, DateOnly Date, DayMarkKind? Kind, string? Notes, string StaffName) : IRequest, IRetryOnConflict;
 
-internal sealed class SetDayMarkHandler(IEmployeeRepository employees, IDayMarkRepository marks, IPayrollSlipRepository slips, IUnitOfWork unitOfWork)
+internal sealed class SetDayMarkHandler(
+    IEmployeeRepository employees, IDayMarkRepository marks, IPayrollSlipRepository slips, IUnitOfWork unitOfWork, IAttendanceNotifier notifier)
     : IRequestHandler<SetDayMarkCommand>
 {
     public async Task Handle(SetDayMarkCommand request, CancellationToken cancellationToken)
@@ -304,6 +307,7 @@ internal sealed class SetDayMarkHandler(IEmployeeRepository employees, IDayMarkR
         }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        await notifier.AttendanceChangedAsync(cancellationToken);
     }
 }
 
@@ -501,7 +505,8 @@ public sealed record ResolveSuspendedDayCommand(Guid PunchId, Guid EmployeeId, D
     : IRequest<AttendanceDayDto>, IRetryOnConflict;
 
 internal sealed class ResolveSuspendedDayHandler(
-    IEmployeeRepository employees, IAttendanceLogRepository logs, IPayrollSlipRepository slips, Timesheets timesheets, IUnitOfWork unitOfWork)
+    IEmployeeRepository employees, IAttendanceLogRepository logs, IPayrollSlipRepository slips, Timesheets timesheets, IUnitOfWork unitOfWork,
+    IAttendanceNotifier notifier)
     : IRequestHandler<ResolveSuspendedDayCommand, AttendanceDayDto>
 {
     public async Task<AttendanceDayDto> Handle(ResolveSuspendedDayCommand request, CancellationToken cancellationToken)
@@ -521,6 +526,7 @@ internal sealed class ResolveSuspendedDayHandler(
                 throw new DomainException($"The punch-out is within {Timesheet.AbandonedAfter.TotalHours:0} hours of the punch-in, on the same day's shift.");
             logs.Add(AttendanceLog.Manual(request.PunchId, employee.Id, request.PunchedOutAt, request.Reason, request.StaffName));
             await unitOfWork.SaveChangesAsync(cancellationToken);
+            await notifier.AttendanceChangedAsync(cancellationToken);
         }
 
         var resolved = (await timesheets.ReadAsync([employee], request.Date, request.Date, cancellationToken)).Sheets[0].Days[0];

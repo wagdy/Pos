@@ -5,18 +5,20 @@ import { of } from 'rxjs';
 import { Department, HrApi } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
-import { DeleteDepartmentDialog, DepartmentDialog, DepartmentsPage } from './departments-page';
+import { DeleteDepartmentDialog, DeleteRoleDialog, DepartmentDialog, DepartmentsPage } from './departments-page';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
-const general: Department = { id: 'general', name: 'General', isGeneral: true, employed: 1, everyone: 1 };
-const kitchen: Department = { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 3, everyone: 4 };
-const empty: Department = { id: 'empty', name: 'Management', isGeneral: false, employed: 0, everyone: 0 };
+const general: Department = { id: 'general', name: 'General', isGeneral: true, employed: 1, everyone: 1, roles: [] };
+const kitchen: Department = { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 3, everyone: 4, roles: [] };
+const empty: Department = { id: 'empty', name: 'Management', isGeneral: false, employed: 0, everyone: 0, roles: [] };
 
 describe('the departments', () => {
   const departments = vi.fn();
   const saveDepartment = vi.fn();
   const deleteDepartment = vi.fn();
+  const saveRole = vi.fn();
+  const deleteRole = vi.fn();
   const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
   const canApprove = signal(true);
@@ -24,7 +26,7 @@ describe('the departments', () => {
   async function render() {
     TestBed.configureTestingModule({
       providers: [
-        { provide: HrApi, useValue: { departments, saveDepartment, deleteDepartment } },
+        { provide: HrApi, useValue: { departments, saveDepartment, deleteDepartment, saveRole, deleteRole } },
         { provide: Approvals, useValue: { canApprove } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
@@ -40,6 +42,8 @@ describe('the departments', () => {
     departments.mockReset().mockReturnValue(of([general, kitchen, empty]));
     saveDepartment.mockReset().mockReturnValue(of(kitchen));
     deleteDepartment.mockReset().mockReturnValue(of(undefined));
+    saveRole.mockReset().mockReturnValue(of({}));
+    deleteRole.mockReset().mockReturnValue(of(undefined));
     open.mockReset();
     notify.info.mockReset();
     canApprove.set(true);
@@ -68,6 +72,34 @@ describe('the departments', () => {
     await page['rename'](kitchen);
     expect(open.mock.lastCall![1].data).toEqual({ name: 'Kitchen' });
     expect(saveDepartment).toHaveBeenLastCalledWith('kitchen', 'Kitchen & Bar');
+  });
+
+  it('lists each department’s roles, added, renamed and deleted with their holders moved', async () => {
+    const chef = { id: 'chef', departmentId: 'kitchen', name: 'Chef', employed: 2 };
+    const helper = { id: 'helper', departmentId: 'kitchen', name: 'Helper', employed: 1 };
+    const withRoles = { ...kitchen, roles: [chef, helper] };
+    departments.mockReturnValue(of([general, withRoles]));
+    const { el, page } = await render();
+
+    expect([...el.querySelectorAll('tbody tr')[1].querySelectorAll('.role')].map((r) => text(r).replace(/editclose/g, '').trim())).toEqual(['Chef · 2', 'Helper · 1']);
+    expect(text(el.querySelectorAll('tbody tr')[0].querySelector('.roles')!)).toContain('No roles yet');
+
+    open.mockReturnValue({ afterClosed: () => of('Captain') });
+    await page['addRole'](withRoles);
+    expect(open.mock.lastCall![1].data).toEqual({ title: 'Add a role to Kitchen', placeholder: 'Chef, helper, waiter, captain' });
+    expect(saveRole).toHaveBeenCalledWith('kitchen', expect.any(String), 'Captain');
+
+    open.mockReturnValue({ afterClosed: () => of('Head chef') });
+    await page['renameRole'](withRoles, chef);
+    expect(saveRole).toHaveBeenLastCalledWith('kitchen', 'chef', 'Head chef');
+    expect(notify.info).toHaveBeenLastCalledWith('Renamed Head chef, for whoever holds it.');
+
+    open.mockReturnValue({ afterClosed: () => of({ moveTo: 'chef' }) });
+    await page['removeRole'](withRoles, helper);
+    expect(open.mock.lastCall![0]).toBe(DeleteRoleDialog);
+    expect(open.mock.lastCall![1].data).toEqual({ role: helper, department: 'Kitchen', others: [chef] });
+    expect(deleteRole).toHaveBeenCalledWith('helper', 'chef');
+    expect(notify.info).toHaveBeenLastCalledWith('The Helper role deleted: they are Chef now.');
   });
 
   it('deletes one, moving its employees to another first', async () => {

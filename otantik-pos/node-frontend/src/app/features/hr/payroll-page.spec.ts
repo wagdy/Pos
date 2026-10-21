@@ -22,7 +22,7 @@ const cell = (el: Element): string =>
 
 const hassan: Employee = {
   id: 'hassan', name: 'Hassan', jobTitle: 'Chef', monthlySalary: 5_400, shiftStartsAt: '16:00:00', shiftEndsAt: '01:00:00', daysOff: ['Friday'],
-  deviceUserId: '7', hiredOn: '2026-09-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general',
+  deviceUserId: '7', hiredOn: '2026-09-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general', jobRoleId: null,
 };
 const mona: Employee = { ...hassan, id: 'mona', name: 'Mona', jobTitle: 'Waiter', monthlySalary: 4_050, dailyRate: 135, hourlyRate: 15 };
 
@@ -199,7 +199,7 @@ describe('a payslip', () => {
     expect([...el.querySelectorAll('.lists .line')].map(cell)).toEqual(['Incentive حوافز · Best month L.E 500.00 delete', '10 Sep · from the safe L.E 200.00']);
   });
 
-  it('makes a daily worker’s base pay the days worked at their wage, and deducts no absence', async () => {
+  it('makes a daily worker’s base pay the days worked at their wage, days off as anyone’s, and deducts no absence', async () => {
     payroll.mockReturnValue(of(month([slip(hassan, { status: 'Draft' }, {
       employmentType: 'Daily', dailyWage: 250, monthlySalary: 0, daysWorked: 20, daysOffWorked: 1, baseSalary: 5_000, absentDays: 0, absencePenalty: 0,
     })])));
@@ -207,9 +207,9 @@ describe('a payslip', () => {
 
     const base = el.querySelectorAll('.breakdown tr')[0];
     expect(text(base.querySelector('th')!)).toContain("Days' wages");
-    expect(text(base.querySelector('.how')!)).toBe('20 days worked at L.E 250.00 a day');
+    expect(text(base.querySelector('.how')!)).toBe('19 days worked at L.E 250.00 a day, days off apart');
     const dayOff = [...el.querySelectorAll('.breakdown tr')].find((r) => text(r.querySelector('th')!).startsWith('+ Days off worked'))!;
-    expect(text(dayOff.querySelector('.how')!)).toBe("1 day: in the days' wages above, with no allowance besides");
+    expect(text(dayOff.querySelector('.how')!)).toBe("1 day: a day's pay for half a shift or more, the hours for less");
     const absence = [...el.querySelectorAll('.breakdown tr')].find((r) => text(r.querySelector('th')!).startsWith('− Absence'))!;
     expect(text(absence.querySelector('.how')!)).toBe('Daily pay: a day not worked is not paid, nor deducted');
   });

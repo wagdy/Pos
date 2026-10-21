@@ -21,6 +21,7 @@ builder.Services.AddInventoryApplication();
 builder.Services.AddNodeInfrastructure(builder.Configuration);
 builder.Services.AddTillAuthentication(builder.Configuration);
 builder.Services.AddSingleton<ITillNotifier, TillNotifier>();
+builder.Services.AddSingleton<OtantikPos.Inventory.Application.Hr.IAttendanceNotifier, AttendanceNotifier>();
 builder.Services.AddHostedService<DeliverySystemLinkBroadcaster>();
 builder.Services.AddHostedService<PrinterStatusBroadcaster>();
 
@@ -73,6 +74,9 @@ await app.PrepareDatabaseAsync();
 
 app.UseExceptionHandler();
 app.UseStatusCodePages();
+
+// The attendance device's own port, when there is one: nothing but its /iclock paths there.
+app.UseDevicePort(DevicePort.Of(app.Configuration));
 
 // Before authentication: the page itself is public, and only the API behind it needs a
 // sign-in.

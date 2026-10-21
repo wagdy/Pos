@@ -97,7 +97,7 @@ import { isoDay } from '../costing/financials';
                 <td class="num">
                   {{ f.baseSalary | money }}
                   @if (f.employmentType === 'Daily') {
-                    <div class="muted small">{{ f.daysWorked }} {{ f.daysWorked === 1 ? 'day' : 'days' }} at {{ f.dailyWage | money }}</div>
+                    <div class="muted small">{{ f.daysWorked - f.daysOffWorked }} {{ f.daysWorked - f.daysOffWorked === 1 ? 'day' : 'days' }} at {{ f.dailyWage | money }}</div>
                   }
                 </td>
                 <td class="num">{{ f.incentives | money }}</td>

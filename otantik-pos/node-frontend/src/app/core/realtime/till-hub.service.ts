@@ -3,6 +3,7 @@ import { HttpError, HubConnection, HubConnectionBuilder, HubConnectionState, Log
 import { DeliverySystemLinkStatus, Order, PrinterProblem } from '../api/models';
 import { AuthService } from '../auth/auth.service';
 import { ConnectivityService } from '../connectivity/connectivity.service';
+import { AttendanceSignal } from '../hr/attendance-signal';
 import { MenuService } from '../menu/menu.service';
 import { OrdersStore } from '../orders/orders.store';
 
@@ -11,7 +12,8 @@ import { OrdersStore } from '../orders/orders.store';
 // OrderChanged brings every change to an order this user may see, made anywhere: at another
 // till, or by a captain in the delivery app, whose order the restaurant machine receives from
 // the cloud and passes straight on. DeliverySystemLinkChanged says when the restaurant machine
-// loses or regains the cloud.
+// loses or regains the cloud. AttendanceChanged, to whoever sees HR, says punches came or a day
+// was put right, for who is in now.
 //
 // Pushes sent while this device was disconnected are not replayed, so every (re)connect reloads
 // the open orders, the cloud status and the menu.
@@ -21,6 +23,7 @@ export class TillHubService {
   private readonly orders = inject(OrdersStore);
   private readonly menu = inject(MenuService);
   private readonly connectivity = inject(ConnectivityService);
+  private readonly attendance = inject(AttendanceSignal);
 
   private connection: HubConnection | null = null;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
@@ -50,6 +53,7 @@ export class TillHubService {
     connection.on('OrderChanged', (order: Order) => this.orders.receive(order, 'push'));
     connection.on('DeliverySystemLinkChanged', (status: DeliverySystemLinkStatus) => this.connectivity.setCloud(status));
     connection.on('PrintersChanged', (printers: PrinterProblem[]) => this.connectivity.setPrinters(printers));
+    connection.on('AttendanceChanged', () => this.attendance.changed());
 
     connection.onreconnecting(() => this.connectivity.hub.set('reconnecting'));
     connection.onreconnected(() => {

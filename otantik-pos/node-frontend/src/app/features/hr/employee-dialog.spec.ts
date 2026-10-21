@@ -11,12 +11,15 @@ const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
 const hassan: Employee = {
   id: 'hassan', name: 'Hassan', jobTitle: 'Chef', monthlySalary: 5_400, shiftStartsAt: '16:00:00', shiftEndsAt: '01:00:00', daysOff: ['Friday'],
-  deviceUserId: '7', hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general',
+  deviceUserId: '7', hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general', jobRoleId: null,
 };
 
 const departments: Department[] = [
-  { id: 'general', name: 'General', isGeneral: true, employed: 1, everyone: 1 },
-  { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 0, everyone: 0 },
+  { id: 'general', name: 'General', isGeneral: true, employed: 1, everyone: 1, roles: [] },
+  {
+    id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 0, everyone: 0,
+    roles: [{ id: 'chef', departmentId: 'kitchen', name: 'Chef', employed: 1 }, { id: 'helper', departmentId: 'kitchen', name: 'Kitchen helper', employed: 0 }],
+  },
 ];
 
 describe('the employee form', () => {
@@ -80,7 +83,7 @@ describe('the employee form', () => {
 
     const [id, input] = saveEmployee.mock.lastCall! as [string, EmployeeInput];
     expect(input).toMatchObject({
-      name: 'Mona', jobTitle: 'Waiter', employmentType: 'Monthly', monthlySalary: 4_050, dailyWage: 0, departmentId: 'general', shiftStartsAt: '16:30:00',
+      name: 'Mona', jobTitle: 'Waiter', employmentType: 'Monthly', monthlySalary: 4_050, dailyWage: 0, departmentId: 'general', jobRoleId: null, shiftStartsAt: '16:30:00',
       daysOff: ['Friday'], hiredOn: '2026-10-20', deviceUserId: '12', reason: null,
     });
     expect(id).not.toBe(input.requestId);
@@ -97,6 +100,23 @@ describe('the employee form', () => {
     expect([...el.querySelectorAll('mat-hint')].map(text)).toContain('A day worked: 30.00 an hour; nothing for a day not worked');
     await page['save']();
     expect(saveEmployee.mock.lastCall![1]).toMatchObject({ employmentType: 'Daily', monthlySalary: 0, dailyWage: 270, departmentId: 'kitchen' });
+  });
+
+  it('takes one of the department’s roles, or a new one by its name', async () => {
+    const { el, page, refresh } = await render({ canApprove: true, today: '2026-10-20' });
+    Object.assign(page, { name: 'Samir', jobTitle: ' kitchen HELPER ', salary: 4_000, departmentId: 'kitchen' });
+    await refresh();
+
+    expect([...el.querySelectorAll('mat-hint')].map(text)).toContain("One of the department's roles, or a new one");
+    await page['save']();
+    expect(saveEmployee.mock.lastCall![1]).toMatchObject({ jobTitle: 'Kitchen helper', jobRoleId: 'helper', departmentId: 'kitchen' });
+
+    page['jobTitle'] = 'Dishwasher';
+    await refresh();
+    expect([...el.querySelectorAll('mat-hint')].map(text)).toContain('A new role in Kitchen');
+    expect(page['roles']()).toEqual([]);
+    page['jobTitle'] = 'he';
+    expect(page['roles']().map((r: { name: string }) => r.name)).toEqual(['Chef', 'Kitchen helper']);
   });
 
   it('needs a department that is there', async () => {

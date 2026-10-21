@@ -86,8 +86,11 @@ public sealed partial class Employee : AggregateRoot
 
     public string Name { get; private set; } = string.Empty;
 
-    // What they do (الوظيفة): chef, waiter, cashier.
+    // What they do (الوظيفة): chef, waiter, cashier; their role's name once they hold one.
     public string JobTitle { get; private set; } = string.Empty;
+
+    // Their role in their department; none only before roles were kept.
+    public Guid? JobRoleId { get; private set; }
 
     public EmploymentType EmploymentType { get; private set; } = EmploymentType.Monthly;
 
@@ -169,6 +172,15 @@ public sealed partial class Employee : AggregateRoot
         if (departmentId == Guid.Empty)
             throw new DomainException("Choose the employee's department.");
         DepartmentId = departmentId;
+    }
+
+    // One of their department's roles, and titled by it.
+    public void AssignRole(JobRole role)
+    {
+        if (role.DepartmentId != DepartmentId)
+            throw new DomainException($"The {role.Name} role is another department's: choose one of theirs.");
+        JobRoleId = role.Id;
+        SetJobTitle(role.Name);
     }
 
     // To the minute: the device's punches are, and lateness is counted in minutes. None: flexible

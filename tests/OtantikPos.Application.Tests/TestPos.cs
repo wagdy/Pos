@@ -101,10 +101,13 @@ public sealed class TestPos
         services.AddSingleton<OtantikPos.Hr.Domain.IDeviceCommandRepository>(Hr.Commands);
         services.AddSingleton<OtantikPos.Hr.Domain.IDeviceUserRepository>(Hr.DeviceUsers);
         services.AddSingleton<OtantikPos.Hr.Domain.IDepartmentRepository>(Hr.Departments);
+        services.AddSingleton<OtantikPos.Hr.Domain.IJobRoleRepository>(Hr.Roles);
         services.AddSingleton<OtantikPos.Hr.Domain.IDailyRecordRepository>(Hr.Records);
         services.AddSingleton<OtantikPos.Hr.Domain.IPayrollAdjustmentRepository>(Hr.Adjustments);
         services.AddSingleton<OtantikPos.Hr.Domain.IPayrollSlipRepository>(Hr.Slips);
         services.AddSingleton<OtantikPos.Inventory.Application.Hr.IAttendanceSettings>(Hr.Settings);
+        services.AddSingleton<OtantikPos.Inventory.Application.Hr.IAttendanceNotifier>(Hr.Notifications);
+        services.AddSingleton<OtantikPos.Inventory.Application.Hr.IAttendanceDeviceLink>(Hr.Link);
 
         _services = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }

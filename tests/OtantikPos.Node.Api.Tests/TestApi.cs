@@ -43,7 +43,8 @@ public sealed class TestApi : IAsyncDisposable
 
     public IServiceProvider Services => _factory.Services;
 
-    public static async Task<TestApi> StartAsync()
+    // `settings`: more of the till's settings, for a test that needs one.
+    public static async Task<TestApi> StartAsync(IReadOnlyDictionary<string, string>? settings = null)
     {
         if (DatabaseServer is null)
             Assert.Skip("Set OTANTIKPOS_TEST_DB to a PostgreSQL 15+ connection string (without Database=) to run the API tests.");
@@ -68,6 +69,8 @@ public sealed class TestApi : IAsyncDisposable
             web.UseSetting("Printing:Printers:Kitchen:Port", api.Kitchen.Port.ToString());
             web.UseSetting("Printing:Printers:Receipt:Host", "127.0.0.1");
             web.UseSetting("Printing:Printers:Receipt:Port", api.Receipts.Port.ToString());
+            foreach (var (key, value) in settings ?? new Dictionary<string, string>())
+                web.UseSetting(key, value);
             web.ConfigureLogging(logging => logging.ClearProviders());
         });
 

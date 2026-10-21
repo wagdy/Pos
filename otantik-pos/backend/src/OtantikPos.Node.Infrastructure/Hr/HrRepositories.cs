@@ -23,6 +23,25 @@ internal sealed class EmployeeRepository(NodeDbContext db) : IEmployeeRepository
 
     public async Task<IReadOnlyList<Employee>> GetInDepartmentAsync(Guid departmentId, CancellationToken cancellationToken = default) =>
         await db.Employees.Where(e => e.DepartmentId == departmentId).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<Employee>> GetWithRoleAsync(Guid jobRoleId, CancellationToken cancellationToken = default) =>
+        await db.Employees.Where(e => e.JobRoleId == jobRoleId).ToListAsync(cancellationToken);
+}
+
+internal sealed class JobRoleRepository(NodeDbContext db) : IJobRoleRepository
+{
+    public Task<JobRole?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.JobRoles.SingleOrDefaultAsync(r => r.Id == id, cancellationToken);
+
+    public void Add(JobRole aggregate) => db.JobRoles.Add(aggregate);
+
+    public void Remove(JobRole role) => db.JobRoles.Remove(role);
+
+    public async Task<IReadOnlyList<JobRole>> GetAllAsync(CancellationToken cancellationToken = default) =>
+        await db.JobRoles.AsNoTracking().OrderBy(r => r.Name).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<JobRole>> GetInDepartmentAsync(Guid departmentId, CancellationToken cancellationToken = default) =>
+        await db.JobRoles.Where(r => r.DepartmentId == departmentId).ToListAsync(cancellationToken);
 }
 
 internal sealed class DepartmentRepository(NodeDbContext db) : IDepartmentRepository

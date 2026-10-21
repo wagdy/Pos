@@ -31,6 +31,9 @@ describe('the attendance devices', () => {
   const saveSettings = vi.fn();
   const readDeviceUsers = vi.fn();
   const readDeviceAttendance = vi.fn();
+  const deviceConnection = vi.fn();
+  const testDevice = vi.fn();
+  const syncDevice = vi.fn();
   const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
   const canApprove = signal(true);
@@ -39,7 +42,7 @@ describe('the attendance devices', () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: HrApi, useValue: { devices, settings, approveDevice, revokeDevice, saveSettings, readDeviceUsers, readDeviceAttendance } },
+        { provide: HrApi, useValue: { devices, settings, approveDevice, revokeDevice, saveSettings, readDeviceUsers, readDeviceAttendance, deviceConnection, testDevice, syncDevice } },
         { provide: Approvals, useValue: { canApprove } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
@@ -59,9 +62,14 @@ describe('the attendance devices', () => {
     saveSettings.mockReset().mockImplementation((p: object) => of(p));
     readDeviceUsers.mockReset().mockReturnValue(of(command()));
     readDeviceAttendance.mockReset().mockReturnValue(of(command({ kind: 'ReadAttendance' })));
+    deviceConnection.mockReset().mockReturnValue(of({ devicePort: null, addresses: [] }));
+    testDevice.mockReset();
+    syncDevice.mockReset();
     open.mockReset();
     notify.info.mockReset();
+    notify.error.mockReset();
     canApprove.set(true);
+    localStorage.clear();
   });
 
   it('says where to point the device, and lists those waiting apart from those approved', async () => {
@@ -76,6 +84,17 @@ describe('the attendance devices', () => {
     expect(text(rows[0].querySelector('button')!)).toBe('Approve');
     expect(text(rows[1].querySelector('.status')!)).toBe('Approvedمعتمد');
     expect(text(rows[1].querySelectorAll('td')[1].querySelector('.muted')!)).toBe('by Omar');
+  });
+
+  it('gives the device this machine’s network address and the device’s own port, when the till has one', async () => {
+    deviceConnection.mockReturnValue(of({ devicePort: 5082, addresses: ['192.168.1.132'] }));
+    const { el, fixture } = await render();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const local = ['localhost', '127.0.0.1'].includes(location.hostname);
+    expect([...el.querySelectorAll('.setup dd')].map(text)).toEqual([local ? '192.168.1.132' : location.hostname, '5082']);
+    expect(text(el.querySelector('.setup')!)).toContain('Port 5082 is the device’s own');
   });
 
   it('approves a device by the name a manager gives it, and refuses one again', async () => {
@@ -120,6 +139,69 @@ describe('the attendance devices', () => {
     expect(sync()).toBe('Its users: refused, code -1002: its firmware may not take this command');
   });
 
+  it('tests the connection to the device at the address it last called from, and says how it went', async () => {
+    const { el, page, fixture } = await render();
+    fixture.detectChanges();
+    const card = el.querySelector('section.link')!;
+    expect(text(card.querySelector('h2')!)).toBe('Connection settings إعدادات التوصيل');
+    expect([page['deviceAddress'], page['tcpPort'], page['commKey']]).toEqual(['192.168.1.40', 4370, 0]);
+    expect([...card.querySelectorAll('button')].map(text)).toEqual(['lan Test connection اختبار التوصيل', 'sync Sync device مزامنة']);
+
+    const message = 'Connected to K40 Pro, serial CQZ7232060112: 2 users and 3 punches on it.';
+    testDevice.mockReturnValue(of({ reached: true, message, serialNumber: 'CQZ7232060112', model: 'K40 Pro', firmware: null, users: 2, records: 3 }));
+    await page['test']();
+    fixture.detectChanges();
+    expect(testDevice).toHaveBeenCalledWith('192.168.1.40', 4370, 0);
+    expect(notify.info).toHaveBeenCalledWith(message);
+    expect(text(card.querySelector('.result')!)).toBe(`check_circle ${message}`);
+    expect(localStorage.getItem('otantik.hr.device-address')).toBe('192.168.1.40');
+
+    // No answer: said, in red, and the address not remembered.
+    const none = 'No answer from 192.168.1.50 on port 4370. Is the device on, and is this machine on the restaurant’s network?';
+    page['deviceAddress'] = '192.168.1.50';
+    testDevice.mockReturnValue(of({ reached: false, message: none, serialNumber: null, model: null, firmware: null, users: null, records: null }));
+    await page['test']();
+    fixture.detectChanges();
+    expect(notify.error).toHaveBeenCalledWith(null, none);
+    expect(card.querySelector('.result')!.classList).toContain('bad-text');
+    expect(localStorage.getItem('otantik.hr.device-address')).toBe('192.168.1.40');
+
+    // Not an address: nothing to press.
+    page['deviceAddress'] = 'kitchen door';
+    expect(page['linkable']()).toBe(false);
+    page['deviceAddress'] = '192.168.1.300';
+    expect(page['linkable']()).toBe(false);
+  });
+
+  it('syncs the device: its users and punches read, the new ones said, and the list read again', async () => {
+    localStorage.setItem('otantik.hr.device-address', '192.168.1.106');
+    const { el, page, fixture } = await render();
+    expect(page['deviceAddress']).toBe('192.168.1.106');
+    devices.mockClear();
+
+    syncDevice.mockReturnValue(of({
+      serialNumber: 'CQZ7232060112', deviceName: 'K40 Pro (192.168.1.106)', newDevice: true, users: 2, usersNotOnTheTill: 1, punches: 3, newPunches: 3,
+    }));
+    page['commKey'] = 12345;
+    await page['sync']();
+    fixture.detectChanges();
+    expect(syncDevice).toHaveBeenCalledWith('192.168.1.106', 4370, 12345);
+    expect(text(el.querySelector('section.link .result')!)).toBe(
+      'check_circle K40 Pro (192.168.1.106): 2 users and 3 punches read, 3 new. New to the till: approved, and listed below. ' +
+        '1 of its users is not linked to anyone on the till yet. Link it on the Employees tab',
+    );
+    expect(el.querySelector('section.link .result a')!.getAttribute('href')).toBe('/hr/employees');
+    expect(notify.info).toHaveBeenCalledWith('Synced K40 Pro (192.168.1.106): 3 new punches.');
+    expect(devices).toHaveBeenCalledTimes(1);
+
+    syncDevice.mockReturnValue(of({
+      serialNumber: 'CQZ7232060112', deviceName: 'Kitchen door', newDevice: false, users: 1, usersNotOnTheTill: 0, punches: 1, newPunches: 0,
+    }));
+    await page['sync']();
+    fixture.detectChanges();
+    expect(text(el.querySelector('section.link .result')!)).toBe('check_circle Kitchen door: 1 user and 1 punch read, none of them new.');
+  });
+
   it('saves how punches are read, once changed', async () => {
     const { page } = await render();
     expect(page['settingsChanged']()).toBe(false);
@@ -136,6 +218,7 @@ describe('the attendance devices', () => {
     const { el } = await render();
 
     expect(el.querySelectorAll('tbody button').length).toBe(0);
+    expect(el.querySelector('section.link')).toBeNull();
     expect([...el.querySelectorAll<HTMLInputElement>('.settings input')].every((i) => i.disabled)).toBe(true);
     expect([...el.querySelectorAll('.settings button')].length).toBe(0);
   });

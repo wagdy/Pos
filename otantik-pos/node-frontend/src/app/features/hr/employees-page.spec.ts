@@ -5,7 +5,7 @@ import { of } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
 import { ApprovalRequest } from '../../core/costing/costing.api';
-import { Department, DeviceUser, Employee, HrApi } from '../../core/hr/hr.api';
+import { AttendanceDevice, Department, DeviceCommand, DeviceUser, Employee, HrApi } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { BusinessDay } from '../costing/financials';
@@ -24,7 +24,7 @@ const cell = (el: Element): string =>
 function employee(id: string, name: string, extra: Partial<Employee> = {}): Employee {
   return {
     id, name, jobTitle: 'Chef', monthlySalary: 5_400, shiftStartsAt: '10:00:00', shiftEndsAt: '19:00:00', daysOff: ['Friday'], deviceUserId: null,
-    hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general', ...extra,
+    hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general', jobRoleId: null, ...extra,
   };
 }
 
@@ -32,8 +32,8 @@ const hassan = employee('hassan', 'Hassan', { deviceUserId: '7', daysOff: ['Frid
 const mona = employee('mona', 'Mona', { jobTitle: 'Waiter', monthlySalary: 4_000, dailyRate: 133.33, hourlyRate: 14.81, shiftStartsAt: '16:00:00', shiftEndsAt: '01:00:00', daysOff: [] });
 const gone = employee('gone', 'Gone Already', { isActive: false, leftOn: '2026-09-30' });
 const departments: Department[] = [
-  { id: 'general', name: 'General', isGeneral: true, employed: 2, everyone: 3 },
-  { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 0, everyone: 0 },
+  { id: 'general', name: 'General', isGeneral: true, employed: 2, everyone: 3, roles: [] },
+  { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 0, everyone: 0, roles: [] },
 ];
 
 function deviceUser(number: string, name: string, extra: Partial<DeviceUser> = {}): DeviceUser {
@@ -47,6 +47,8 @@ describe('the employees', () => {
   const employees = vi.fn();
   const deviceUsers = vi.fn();
   const saveEmployee = vi.fn();
+  const devicesOf = vi.fn();
+  const readDeviceUsers = vi.fn();
   const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
   const pending = signal<ApprovalRequest[]>([]);
@@ -61,7 +63,10 @@ describe('the employees', () => {
   async function render(manage = true) {
     TestBed.configureTestingModule({
       providers: [
-        { provide: HrApi, useValue: { employees, deviceUsers, saveEmployee, departments: () => of(departments) } },
+        {
+          provide: HrApi,
+          useValue: { employees, deviceUsers, saveEmployee, departments: () => of(departments), devices: devicesOf, readDeviceUsers },
+        },
         { provide: AuthService, useValue: { can: (p: string) => manage || p !== Permissions.HrManage } },
         { provide: Approvals, useValue: approvals },
         { provide: NotifyService, useValue: notify },
@@ -86,6 +91,8 @@ describe('the employees', () => {
     employees.mockReset().mockReturnValue(of([gone, hassan, mona]));
     deviceUsers.mockReset().mockReturnValue(of([]));
     saveEmployee.mockReset().mockImplementation((id: string) => of({ ...mona, id }));
+    devicesOf.mockReset().mockReturnValue(of([]));
+    readDeviceUsers.mockReset();
     open.mockReset();
     notify.info.mockReset();
     pending.set([]);
@@ -152,6 +159,40 @@ describe('the employees', () => {
     page['department'].set('kitchen');
     await refresh();
     expect(rows().map((r) => r[0])).toEqual(['Samir Chef · Kitchen']);
+  });
+
+  it('syncs the approved devices’ users, reading the list again until they answer', async () => {
+    const asked: DeviceCommand = {
+      id: 'c1', number: 3, kind: 'ReadUsers', text: 'DATA QUERY USERINFO', queuedBy: 'Omar', queuedAtUtc: '2026-10-21T10:00:00Z', sentAtUtc: null,
+      answeredAtUtc: null, returnCode: null,
+    };
+    const door: AttendanceDevice = {
+      id: 'd1', serialNumber: 'CQZ', name: 'Kitchen door', isApproved: true, approvedBy: 'Omar', approvedAtUtc: null, firstSeenAtUtc: '', lastSeenAtUtc: '',
+      lastAddress: '192.168.1.106', commands: [],
+    };
+    const { page } = await render();
+
+    // None approved yet: said so, nothing asked.
+    devicesOf.mockReturnValue(of([{ ...door, isApproved: false }]));
+    await page['sync']();
+    expect(readDeviceUsers).not.toHaveBeenCalled();
+    expect(notify.info).toHaveBeenLastCalledWith('No attendance device is approved yet: approve it on the Attendance devices tab first.');
+
+    vi.useFakeTimers();
+    try {
+      devicesOf.mockReturnValueOnce(of([door])).mockReturnValue(of([{ ...door, commands: [{ ...asked, answeredAtUtc: '2026-10-21T10:00:08Z', returnCode: 0 }] }]));
+      readDeviceUsers.mockReturnValue(of(asked));
+      deviceUsers.mockReturnValue(of([deviceUser('31', 'Youssef')]));
+      const syncing = page['sync']();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await syncing;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(readDeviceUsers).toHaveBeenCalledWith('d1');
+    expect(notify.info).toHaveBeenCalledWith('Asked Kitchen door for its users: they appear below within seconds.');
+    expect(page['unknown']().map((u: DeviceUser) => u.deviceUserId)).toEqual(['31']);
+    expect(page['syncing']()).toBe(false);
   });
 
   it('shows flexible hours for one without a start time', async () => {

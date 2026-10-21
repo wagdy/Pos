@@ -25,6 +25,7 @@
   <ItemGroup>
     <Compile Include="..\OtantikPos.Node.Infrastructure.Tests\FakeDeliverySystem.cs" Link="Fakes\FakeDeliverySystem.cs" />
     <Compile Include="..\OtantikPos.Node.Infrastructure.Tests\FakePrinter.cs" Link="Fakes\FakePrinter.cs" />
+    <Compile Include="..\OtantikPos.Node.Infrastructure.Tests\FakeZkDevice.cs" Link="Fakes\FakeZkDevice.cs" />
   </ItemGroup>
 
   <ItemGroup>

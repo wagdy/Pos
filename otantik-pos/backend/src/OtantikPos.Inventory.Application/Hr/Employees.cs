@@ -15,7 +15,9 @@ namespace OtantikPos.Inventory.Application.Hr;
 public sealed record EmployeeDto(
     Guid Id,
     string Name,
+    // Their role's name; the role itself, in their department.
     string JobTitle,
+    Guid? JobRoleId,
     // A monthly employee's salary, or a daily one's wage; the other is nothing.
     EmploymentType EmploymentType,
     decimal MonthlySalary,
@@ -33,13 +35,15 @@ public sealed record EmployeeDto(
     decimal HourlyRate)
 {
     public static EmployeeDto From(Employee e) => new(
-        e.Id, e.Name, e.JobTitle, e.EmploymentType, e.MonthlySalary, e.DailyWage, e.DepartmentId, e.ShiftStartsAt, e.ShiftStartsAt?.Add(Employee.ShiftLength), Employees.DaysOf(e.DaysOff),
+        e.Id, e.Name, e.JobTitle, e.JobRoleId, e.EmploymentType, e.MonthlySalary, e.DailyWage, e.DepartmentId, e.ShiftStartsAt, e.ShiftStartsAt?.Add(Employee.ShiftLength), Employees.DaysOf(e.DaysOff),
         e.DeviceUserId, e.HiredOn, e.LeftOn, e.IsActive, Math.Round(e.DailyRate, 2, MidpointRounding.AwayFromZero),
         Math.Round(e.HourlyRate, 2, MidpointRounding.AwayFromZero));
 }
 
 // An employee's details as entered. Paid monthly at MonthlySalary or daily at DailyWage; in
-// General when no department is given (a request asked before departments were).
+// General when no department is given (a request asked before departments were). Their role is
+// JobRoleId, one of their department's; given only a JobTitle, it is the department's role of
+// that name, made when there is none.
 public sealed record EmployeeDetails(
     string Name,
     string JobTitle,
@@ -50,7 +54,8 @@ public sealed record EmployeeDetails(
     string? DeviceUserId,
     EmploymentType EmploymentType = EmploymentType.Monthly,
     decimal DailyWage = 0,
-    Guid? DepartmentId = null)
+    Guid? DepartmentId = null,
+    Guid? JobRoleId = null)
 {
     public decimal Pay => EmploymentType == EmploymentType.Daily ? DailyWage : MonthlySalary;
 
@@ -73,7 +78,8 @@ public static class Employees
 
 // Checks, describes and makes an employee's change: for a manager's own and for an approval
 // alike. What it makes is added for the caller to save.
-internal sealed class EmployeeWriter(IEmployeeRepository employees, IAttendanceLogRepository punches, IDepartmentRepository departments)
+internal sealed class EmployeeWriter(
+    IEmployeeRepository employees, IAttendanceLogRepository punches, IDepartmentRepository departments, IJobRoleRepository roles)
 {
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
@@ -90,6 +96,8 @@ internal sealed class EmployeeWriter(IEmployeeRepository employees, IAttendanceL
             draft.SetPay(details.EmploymentType, details.Pay);
             if (await departments.GetByIdAsync(details.Department, cancellationToken) is null)
                 throw new DomainException("Choose the employee's department: that one is not there any more.");
+            if (details.JobRoleId is { } roleId)
+                Check(await roles.GetByIdAsync(roleId, cancellationToken), details);
             if (draft.DeviceUserId is { } number && await employees.GetByDeviceUserIdAsync(number, cancellationToken) is { } holder && holder.Id != employeeId)
                 throw new DomainException($"{holder.Name} has number {number} on the attendance device already.");
             if (existing is { LeftOn: { } left } && details.HiredOn > left)
@@ -130,6 +138,7 @@ internal sealed class EmployeeWriter(IEmployeeRepository employees, IAttendanceL
                 employee = new Employee(employeeId, d.Name, d.JobTitle, 0, d.ShiftStartsAt, Employees.Flags(d.DaysOff), d.HiredOn, d.DeviceUserId);
                 employee.SetPay(d.EmploymentType, d.Pay);
                 employee.MoveTo(d.Department);
+                employee.AssignRole(await RoleAsync(d, cancellationToken));
                 employees.Add(employee);
             }
             else
@@ -138,6 +147,7 @@ internal sealed class EmployeeWriter(IEmployeeRepository employees, IAttendanceL
                 employee.SetJobTitle(d.JobTitle);
                 employee.SetPay(d.EmploymentType, d.Pay);
                 employee.MoveTo(d.Department);
+                employee.AssignRole(await RoleAsync(d, cancellationToken));
                 employee.SetShift(d.ShiftStartsAt);
                 employee.SetDaysOff(Employees.Flags(d.DaysOff));
                 employee.ChangeStart(d.HiredOn);
@@ -156,6 +166,31 @@ internal sealed class EmployeeWriter(IEmployeeRepository employees, IAttendanceL
         else
             employee!.Return(request.ReturnsOn!.Value);
         return employee;
+    }
+
+    // The role chosen, one of their department's; or, given only a title, the department's role of
+    // that name, made (for the caller to save) when there is none.
+    private async Task<JobRole> RoleAsync(EmployeeDetails d, CancellationToken cancellationToken)
+    {
+        if (d.JobRoleId is { } id)
+            return Check(await roles.GetByIdAsync(id, cancellationToken), d);
+        var title = d.JobTitle?.Trim() ?? string.Empty;
+        var named = (await roles.GetInDepartmentAsync(d.Department, cancellationToken))
+            .FirstOrDefault(r => string.Equals(r.Name, title, StringComparison.CurrentCultureIgnoreCase));
+        if (named is not null)
+            return named;
+        var made = new JobRole(Guid.NewGuid(), d.Department, title);
+        roles.Add(made);
+        return made;
+    }
+
+    private static JobRole Check(JobRole? role, EmployeeDetails d)
+    {
+        if (role is null)
+            throw new DomainException("That role is not there any more: choose another.");
+        if (role.DepartmentId != d.Department)
+            throw new DomainException($"The {role.Name} role is another department's: choose one of theirs.");
+        return role;
     }
 
     // "New employee · Hassan · Chef · L.E 5,400.00 a month", and what it changes, line by line.

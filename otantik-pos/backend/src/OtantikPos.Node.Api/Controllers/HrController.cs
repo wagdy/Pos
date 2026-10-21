@@ -39,6 +39,21 @@ public sealed class HrController(ISender sender) : ControllerBase
     public Task<DepartmentDto> SaveDepartment(Guid departmentId, DepartmentRequest request, CancellationToken cancellationToken) =>
         sender.Send(new SaveDepartmentCommand(departmentId, request.Name), cancellationToken);
 
+    // A role added to a department under this id, or renamed for everyone holding it: a manager's.
+    [HttpPut("departments/{departmentId:guid}/roles/{roleId:guid}")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<JobRoleDto> SaveRole(Guid departmentId, Guid roleId, DepartmentRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new SaveJobRoleCommand(roleId, departmentId, request.Name), cancellationToken);
+
+    // Deleted, whoever holds it taking ?moveTo= first, another of the department's roles: a manager's.
+    [HttpDelete("roles/{roleId:guid}")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public async Task<IActionResult> DeleteRole(Guid roleId, [FromQuery] Guid? moveTo, CancellationToken cancellationToken)
+    {
+        await sender.Send(new DeleteJobRoleCommand(roleId, moveTo), cancellationToken);
+        return NoContent();
+    }
+
     // Deleted, its employees moved first to ?moveTo= when it has any: a manager's.
     [HttpDelete("departments/{departmentId:guid}")]
     [Authorize(Policy = Permissions.ApprovalDecide)]
@@ -54,7 +69,7 @@ public sealed class HrController(ISender sender) : ControllerBase
     public Task<IActionResult> SaveEmployee(Guid employeeId, SaveEmployeeRequest request, CancellationToken cancellationToken) =>
         ChangeAsync(employeeId, request.RequestId, new EmployeeRequest(new EmployeeDetails(
             request.Name, request.JobTitle, request.MonthlySalary, request.ShiftStartsAt, request.DaysOff ?? [], request.HiredOn, request.DeviceUserId,
-            request.EmploymentType ?? EmploymentType.Monthly, request.DailyWage ?? 0, request.DepartmentId)),
+            request.EmploymentType ?? EmploymentType.Monthly, request.DailyWage ?? 0, request.DepartmentId, request.JobRoleId)),
             request.Reason, cancellationToken);
 
     // Left: employed and paid to their last day.
@@ -103,6 +118,10 @@ public sealed class HrController(ISender sender) : ControllerBase
         await sender.Send(new SetDayMarkCommand(employeeId, date, request.Kind, request.Notes, StaffName), cancellationToken);
         return NoContent();
     }
+
+    // Who is in now: each employee's state on their own day, from the punches as they come in.
+    [HttpGet("attendance/now")]
+    public Task<PresenceReport> GetPresence(CancellationToken cancellationToken) => sender.Send(new GetPresenceQuery(), cancellationToken);
 
     // The days suspended for a manager: a punch-in left 18 hours without its punch-out. From the
     // first of last month to today unless asked otherwise.
@@ -161,6 +180,25 @@ public sealed class HrController(ISender sender) : ControllerBase
         await sender.Send(new DeletePublicHolidayCommand(holidayId), cancellationToken);
         return NoContent();
     }
+
+    // Where a device reaches this till: the device's own port when one is set, and this
+    // machine's addresses on its networks. No port: the one the screens are served on.
+    [HttpGet("devices/connection")]
+    public object GetDeviceConnection([FromServices] IConfiguration configuration) =>
+        new { DevicePort = Hosting.DevicePort.Of(configuration), Addresses = Hosting.DevicePort.Addresses() };
+
+    // The device reached by the till over its own port (ZKTeco's, 4370), beside ADMS: whether it
+    // answers, and what it is. A manager's, as the till reaches out for it.
+    [HttpPost("devices/test")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<DeviceProbe> TestDevice(DeviceAddressRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new TestDeviceConnectionQuery(request.Address, request.Port ?? 4370, request.CommKey ?? 0), cancellationToken);
+
+    // Its users and attendance log read now and kept; the device approved when it was not.
+    [HttpPost("devices/sync")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<DeviceSyncResult> SyncDevice(DeviceAddressRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new SyncDeviceCommand(request.Address, request.Port ?? 4370, request.CommKey ?? 0, StaffName), cancellationToken);
 
     // A command left for a device: its users read, or its attendance from a day read again. The
     // device takes it the next time it asks, within seconds.
@@ -259,7 +297,9 @@ public sealed record SaveEmployeeRequest(
     // Monthly unless said; a daily one's wage; General unless given.
     EmploymentType? EmploymentType = null,
     decimal? DailyWage = null,
-    Guid? DepartmentId = null);
+    Guid? DepartmentId = null,
+    // One of their department's roles; the job title alone makes one when the department has none of that name.
+    Guid? JobRoleId = null);
 
 public sealed record DepartmentRequest(string Name);
 
@@ -282,6 +322,9 @@ public sealed record HolidayRequest(string Name, DateOnly FirstDay, DateOnly Las
 public sealed record SettleRequest(IReadOnlyList<Guid>? PunchIds);
 
 public sealed record ReadAttendanceRequest(DateOnly? From, DateOnly? To = null);
+
+// The device's IP address; its port, 4370 unless said; its comm key, 0 (none) unless said.
+public sealed record DeviceAddressRequest(string Address, int? Port = null, int? CommKey = null);
 
 public sealed record ApproveDeviceRequest(string? Name);
 

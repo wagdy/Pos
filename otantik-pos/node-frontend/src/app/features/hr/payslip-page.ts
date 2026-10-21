@@ -150,7 +150,8 @@ export class FinalizeDialog {
             <tr>
               @if (f.employmentType === 'Daily') {
                 <th>Days' wages <span class="ar">أجر الأيام</span>
-                  <div class="how">{{ f.daysWorked }} {{ f.daysWorked === 1 ? 'day' : 'days' }} worked at {{ f.dailyWage | money }} a day</div>
+                  @let paidDays = f.daysWorked - f.daysOffWorked;
+                  <div class="how">{{ paidDays }} {{ paidDays === 1 ? 'day' : 'days' }} worked at {{ f.dailyWage | money }} a day, days off apart</div>
                 </th>
               } @else {
                 <th>Base salary <span class="ar">الراتب الأساسي</span>
@@ -165,11 +166,7 @@ export class FinalizeDialog {
             </tr>
             <tr class="plus">
               <th>+ Days off worked <span class="ar">بدل أيام الراحة</span>
-                @if (f.employmentType === 'Daily') {
-                  <div class="how">{{ f.daysOffWorked }} {{ f.daysOffWorked === 1 ? 'day' : 'days' }}: in the days' wages above, with no allowance besides</div>
-                } @else {
-                  <div class="how">{{ f.daysOffWorked }} {{ f.daysOffWorked === 1 ? 'day' : 'days' }}: a day's pay for half a shift or more, the hours for less</div>
-                }
+                <div class="how">{{ f.daysOffWorked }} {{ f.daysOffWorked === 1 ? 'day' : 'days' }}: a day's pay for half a shift or more, the hours for less</div>
               </th>
               <td>{{ f.daysOffWorkedPay | money }}</td>
             </tr>

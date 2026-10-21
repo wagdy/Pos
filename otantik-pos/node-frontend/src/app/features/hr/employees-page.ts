@@ -1,5 +1,5 @@
 import { DatePipe } from '@angular/common';
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
@@ -102,6 +102,11 @@ export class LinkDeviceUserDialog {
       }
       <span class="spacer"></span>
       <span class="muted">{{ active().length }} employed · {{ payroll() | money }} a month@if (daily()) { · {{ daily() }} on daily wages}</span>
+      @if (approvals.canApprove()) {
+        <button mat-stroked-button (click)="sync()" [disabled]="syncing()">
+          <mat-icon>sync</mat-icon> {{ syncing() ? 'Syncing…' : 'Sync device' }} <span class="inline-ar">مزامنة الجهاز</span>
+        </button>
+      }
       @if (canManage()) {
         <button mat-flat-button (click)="add()"><mat-icon>person_add</mat-icon> Add employee <span class="inline-ar">إضافة موظف</span></button>
       }
@@ -300,7 +305,10 @@ export class EmployeesPage {
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
   private readonly businessDay = inject(BusinessDay);
+  private readonly destroyRef = inject(DestroyRef);
+  private destroyed = false;
   protected readonly approvals = inject(Approvals);
+  protected readonly syncing = signal(false);
   protected readonly pendingLabel = pendingLabel;
 
   protected readonly employees = signal<Employee[]>([]);
@@ -326,8 +334,37 @@ export class EmployeesPage {
   protected readonly unnumbered = computed(() => this.active().filter((e) => !e.deviceUserId));
 
   constructor() {
+    this.destroyRef.onDestroy(() => (this.destroyed = true));
     void this.load();
     void this.approvals.refresh();
+  }
+
+  // Every approved device asked for its users, a manager's: their answers come in within seconds,
+  // and the list below is read again until they have, for a minute at most.
+  protected async sync(): Promise<void> {
+    this.syncing.set(true);
+    try {
+      const approved = (await firstValueFrom(this.api.devices())).filter((d) => d.isApproved);
+      if (!approved.length) {
+        this.notify.info('No attendance device is approved yet: approve it on the Attendance devices tab first.');
+        return;
+      }
+      const asked = await Promise.all(approved.map((d) => firstValueFrom(this.api.readDeviceUsers(d.id))));
+      this.notify.info(`Asked ${approved.map((d) => d.name ?? d.serialNumber).join(', ')} for ${approved.length === 1 ? 'its' : 'their'} users: they appear below within seconds.`);
+      for (let round = 0; round < 12 && !this.destroyed; round++) {
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
+        const devices = await firstValueFrom(this.api.devices());
+        this.deviceUsers.set(await firstValueFrom(this.api.deviceUsers()));
+        const answered = asked.every((c) => devices.some((d) => d.commands.some((x) => x.id === c.id && x.answeredAtUtc !== null)));
+        if (answered) {
+          break;
+        }
+      }
+    } catch (error) {
+      this.notify.error(error, 'The device could not be asked for its users.');
+    } finally {
+      this.syncing.set(false);
+    }
   }
 
   protected departmentName(e: Employee): string {
@@ -375,6 +412,7 @@ export class EmployeesPage {
       requestId: crypto.randomUUID(),
       name: employee.name,
       jobTitle: employee.jobTitle,
+      jobRoleId: employee.jobRoleId,
       employmentType: employee.employmentType,
       monthlySalary: employee.monthlySalary,
       dailyWage: employee.dailyWage,

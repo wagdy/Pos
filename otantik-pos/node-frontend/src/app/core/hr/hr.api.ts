@@ -22,14 +22,23 @@ export const weekDays: { day: WeekDay; en: string; ar: string }[] = [
 // How an employee is paid (نوع العمالة): a monthly salary, or a daily wage for each day worked.
 export type EmploymentType = 'Monthly' | 'Daily';
 
-// A department of the restaurant (الأقسام), and how many are in it: employed, and everyone
-// including those who left. General is always there.
+// A job role in a department (الوظيفة), and how many employed hold it.
+export interface JobRole {
+  id: string;
+  departmentId: string;
+  name: string;
+  employed: number;
+}
+
+// A department of the restaurant (الأقسام), how many are in it (employed, and everyone including
+// those who left), and its job roles. General is always there.
 export interface Department {
   id: string;
   name: string;
   isGeneral: boolean;
   employed: number;
   everyone: number;
+  roles: JobRole[];
 }
 
 // Someone on the payroll. A nine-hour shift from shiftStartsAt, or flexible hours with none. Paid
@@ -38,7 +47,9 @@ export interface Department {
 export interface Employee {
   id: string;
   name: string;
+  // Their role's name; the role, one of their department's.
   jobTitle: string;
+  jobRoleId: string | null;
   employmentType: EmploymentType;
   monthlySalary: number;
   dailyWage: number;
@@ -58,7 +69,9 @@ export interface Employee {
 export interface EmployeeInput {
   requestId: string;
   name: string;
+  // One of the department's roles; or none, and the job title makes one of that name.
   jobTitle: string;
+  jobRoleId: string | null;
   employmentType: EmploymentType;
   monthlySalary: number;
   dailyWage: number;
@@ -216,6 +229,26 @@ export interface DeviceCommand {
   returnCode: number | null;
 }
 
+// Who is in now (حالة الموظفين الآن): each employee on their own day, their scans paired in order.
+// NotArrived before their shift (and its grace) starts or on flexible hours; Late once it has.
+export type PresenceState = 'In' | 'Left' | 'NotArrived' | 'Late' | 'Off';
+
+export interface Presence {
+  employee: Employee;
+  day: string;
+  state: PresenceState;
+  // The last scan, when there is one.
+  since: string | null;
+  dueAt: string | null;
+  dayStatus: DayStatus;
+  holidayName: string | null;
+}
+
+export interface PresenceReport {
+  now: string;
+  employees: Presence[];
+}
+
 // A ZKTeco device that has called the till: refused until a manager approves it by name. Its
 // newest commands first.
 export interface AttendanceDevice {
@@ -229,6 +262,29 @@ export interface AttendanceDevice {
   lastSeenAtUtc: string;
   lastAddress: string | null;
   commands: DeviceCommand[];
+}
+
+// The device reached by the till over its own port (ZKTeco's, 4370): whether it answered, and
+// what it says it is and holds.
+export interface DeviceProbe {
+  reached: boolean;
+  message: string;
+  serialNumber: string | null;
+  model: string | null;
+  firmware: string | null;
+  users: number | null;
+  records: number | null;
+}
+
+// Its users and attendance log read and kept: how many of each, and how many punches were new.
+export interface DeviceSyncResult {
+  serialNumber: string;
+  deviceName: string;
+  newDevice: boolean;
+  users: number;
+  usersNotOnTheTill: number;
+  punches: number;
+  newPunches: number;
 }
 
 // Someone enrolled on a device, as it listed them: who on the till has their number, if anyone,
@@ -423,6 +479,16 @@ export class HrApi {
     return this.http.delete<void>(`/api/hr/departments/${id}`, { params: moveTo ? { moveTo } : {} });
   }
 
+  // A role added to a department under this id, or renamed for everyone holding it: a manager's.
+  saveRole(departmentId: string, roleId: string, name: string): Observable<JobRole> {
+    return this.http.put<JobRole>(`/api/hr/departments/${departmentId}/roles/${roleId}`, { name });
+  }
+
+  // Deleted, whoever holds it taking `moveTo` first, another of the department's roles.
+  deleteRole(roleId: string, moveTo: string | null): Observable<void> {
+    return this.http.delete<void>(`/api/hr/roles/${roleId}`, { params: moveTo ? { moveTo } : {} });
+  }
+
   // Added under this id, or changed: made at once for a manager (the employee); asked of one for
   // anyone else (the request).
   saveEmployee(id: string, input: EmployeeInput): Observable<Employee | ApprovalResult> {
@@ -439,6 +505,10 @@ export class HrApi {
 
   attendance(date: string): Observable<AttendanceDayReport> {
     return this.http.get<AttendanceDayReport>('/api/hr/attendance', { params: { date } });
+  }
+
+  presence(): Observable<PresenceReport> {
+    return this.http.get<PresenceReport>('/api/hr/attendance/now');
   }
 
   timesheet(employeeId: string, month: string): Observable<Timesheet> {
@@ -502,6 +572,12 @@ export class HrApi {
     return this.http.put<AttendancePolicy>('/api/hr/settings', policy);
   }
 
+  // Where a device reaches this till: the device's own port when one is set (the till's screens
+  // then stay on its machine), and the machine's addresses on its networks.
+  deviceConnection(): Observable<{ devicePort: number | null; addresses: string[] }> {
+    return this.http.get<{ devicePort: number | null; addresses: string[] }>('/api/hr/devices/connection');
+  }
+
   devices(): Observable<AttendanceDevice[]> {
     return this.http.get<AttendanceDevice[]>('/api/hr/devices');
   }
@@ -512,6 +588,16 @@ export class HrApi {
 
   revokeDevice(id: string): Observable<AttendanceDevice> {
     return this.http.post<AttendanceDevice>(`/api/hr/devices/${id}/revoke`, {});
+  }
+
+  // The till reaching the device at its address, beside ADMS: a test, or its users and whole log
+  // read at once (the device approved if it was not). A manager's.
+  testDevice(address: string, port: number, commKey: number): Observable<DeviceProbe> {
+    return this.http.post<DeviceProbe>('/api/hr/devices/test', { address, port, commKey });
+  }
+
+  syncDevice(address: string, port: number, commKey: number): Observable<DeviceSyncResult> {
+    return this.http.post<DeviceSyncResult>('/api/hr/devices/sync', { address, port, commKey });
   }
 
   // A command left for the device, taken the next time it asks: its users, or its attendance

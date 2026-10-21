@@ -17,14 +17,21 @@ and their monthly pay. This page is the design.
 - **Departments** (الأقسام, `hr.Departments`, migration `EmploymentTypesAndDepartments`): every
   employee is in one. General is made with the table, the employees already entered go to it,
   and it is renamed but never deleted. Another is deleted once its employees, those who left
-  too, are moved to one that stays. A manager's to add, rename and delete.
+  too, are moved to one that stays, its roles going with them (one the other department has by
+  the same name becomes theirs there). A manager's to add, rename and delete.
+- **Job roles** (الوظائف, `hr.JobRoles`, migration `JobRoles`): each department has its roles,
+  one name to a department, and an employee holds one of their own department's, titled by its
+  name. The job titles typed before roles were became their departments' roles. A title given
+  with no role (the form's new one, or a request asked before roles were) becomes the
+  department's role of that name. A role is renamed for everyone holding it, and deleted once
+  they take another of the department's.
 - **How they are paid** (نوع العمالة): monthly (عمالة شهرية), at a salary, or daily (عمالة يومية), at
   a wage for each day worked.
-  - A daily worker's base pay is their wage for each day worked, a day off or a holiday worked
-    included. A day not worked, whatever it is, earns nothing and costs nothing: nothing is
-    absent for them, and a day off worked has no allowance besides its wage. A holiday worked
-    earns its allowance on top, and lateness and overtime count against their shift at their
-    hourly rate (the wage ÷ 9), as anyone's.
+  - A daily worker's base pay is their wage for each day worked on a working day or a holiday.
+    A day not worked, whatever it is, earns nothing and costs nothing: nothing is absent for
+    them. A day off worked is paid as anyone's: a day's wage for half a shift or more, its
+    hours for less. A holiday worked earns its allowance on top, and lateness and overtime count
+    against their shift at their hourly rate (the wage ÷ 9), as anyone's.
 - **The shift is nine hours**, from the employee's shift start, past midnight if need be.
 - **Flexible hours** (an employee with no shift start, migration `FlexibleShiftsAndDeviceSync`):
   nothing is late, early or away for them, and the hours past nine worked in a day are overtime.
@@ -187,6 +194,11 @@ it changes).
   the tablets do: there is no second port.
 - Give the Mac a fixed address (a DHCP reservation on the router), and allow Docker's incoming
   connections in the macOS firewall.
+- **The device's own port** (`Attendance:DevicePort`): when set, the till answers nothing but the
+  device's `/iclock` paths on it, so its screens stay on its machine. `./start.sh` runs the
+  development till this way: the screens on `localhost:5081`, the device on port 5082 of the
+  Mac's network address. `GET /api/hr/devices/connection` gives the port and the addresses, and
+  the Devices tab shows them. Unset, as in the installed till, every port answers everything.
 - On the device: Main Menu → COMM. → Cloud Server Setting.
   - Server mode ADMS, Enable Domain Name off.
   - Server Address = the Mac's address, Server Port = `TILL_PORT`.
@@ -194,9 +206,36 @@ it changes).
   - Menu names vary by firmware.
 - If the Mac sleeps or the till is down, the device holds its punches and sends them when it
   reconnects.
-- **Plan B**, if our unit's firmware has no Cloud Server Setting: pull from the device over its
-  TCP port 4370 (ZKTeco's binary protocol) from a small client in the till. No Windows DLL is
-  needed for that either.
+
+## Reaching the device on its own port (built): TCP 4370
+
+Beside ADMS, the till can reach the device itself over ZKTeco's binary protocol on TCP port
+4370. Nothing Windows-only is used: `ZkClient` (in `Node.Infrastructure/Hr/ZkTeco`) follows the
+open-source pyzk client packet for packet.
+- **Its frames:** `50 50 82 7D`, the length, then command, checksum, session and reply number.
+- **A comm key**, when one is set on the device (COMM. → Comm Key), is sent as pyzk makes it.
+- **Large answers:** the user table and the attendance log come through the device's buffer, in
+  chunks of up to 0xFFC0 bytes.
+- **Record sizes:** 72-byte users and 40-byte punches on the K40, or the older 28 and 16.
+- **What is kept:** a user's number and name only, never passwords, cards or fingerprints.
+
+Two buttons on the Devices tab (Connection settings · إعدادات التوصيل, a manager's), given the
+device's IP address, port 4370 unless said otherwise, and its comm key (0 for none):
+- **Test connection** connects, then reads the serial number, model, firmware and how many
+  users and punches it holds. When it fails, it says why: nothing listening on the port, no
+  answer, a closed connection, or a refused comm key.
+- **Sync device** reads the users and the whole log at once and keeps them as ADMS does:
+  - punches are kept once each, so a sync after ADMS, or ADMS after a sync, keeps nothing twice;
+  - users are listed on Employees for linking;
+  - a device read for the first time is approved by it, as a manager gave its address and asked;
+  - a clash with an ADMS upload of the same punches is read again.
+- **Only local addresses** are accepted: IPv4 in the private ranges, link-local or loopback.
+  The till does not reach further than the restaurant's network.
+- **Timeouts:** each answer is waited on for 5 seconds on a test and 20 on a sync, so a device
+  that stops answering is let go.
+
+ADMS goes on as before; this is for a device whose Cloud Server Setting is off or missing, and
+for reading everything now.
 
 ## Phase 2: the API (built)
 
@@ -223,7 +262,11 @@ it changes).
 | `POST /api/hr/attendance/resolve` | A suspended day's punch-out, from a manager: the day worked out again |
 | `PUT /api/hr/employees/{id}/days/{date}/penalty` | An administrative penalty in hours, with the reason; with no hours, taken off |
 | `GET /api/hr/penalties?month=` | The month's administrative penalties, everyone's, each with what it takes off the pay |
-| `GET /api/hr/departments`, `PUT …/{id}`, `DELETE …/{id}?moveTo=` | The departments with how many are in each; added or renamed, or deleted with its employees moved first: a manager's |
+| `GET /api/hr/departments`, `PUT …/{id}`, `DELETE …/{id}?moveTo=` | The departments with how many are in each and their roles; added or renamed, or deleted with its employees moved first: a manager's |
+| `PUT /api/hr/departments/{id}/roles/{roleId}`, `DELETE /api/hr/roles/{roleId}?moveTo=` | A department's role added or renamed, or deleted with its holders moved to another: a manager's |
+| `GET /api/hr/devices/connection` | Where a device reaches the till: the device's own port, when set, and the machine's addresses |
+| `POST /api/hr/devices/test`, `…/sync` | The till reaching the device at `{ address, port = 4370, commKey = 0 }`: whether it answers and what it holds, or its users and whole log read and kept (approved if new): a manager's |
+| `GET /api/hr/attendance/now` | Who is in now: each employee on the day their own window puts now in, in (an odd number of scans), left (even), not arrived, late (their shift and its grace started) or off; the till's hub says `AttendanceChanged` to whoever sees HR as punches come or a day is put right |
 | `GET /api/hr/holidays?year=` | A year's public holidays |
 | `POST /api/hr/devices/{id}/read-users`, `…/read-attendance` | A command left for the device: list its users, or send its attendance from a day to another again: a manager's |
 | `GET /api/hr/device-users` | The users the devices listed, who on the till has each number, and the punches waiting under it |
@@ -257,16 +300,24 @@ migration `PublicHolidays`); leave allowances entered by a manager are for anyth
 ## The screens
 
 **Built:**
-- HR & Payroll in the top bar (`hr.view`):
+- HR & Payroll in the top bar (`hr.view`), opening on Now (الآن): who is in the restaurant right
+  now, by department, green in since their last scan, grey left, yellow not arrived yet, red
+  late, and off today; with the counts, and what waits on Corrections. Read again the moment the
+  till says punches came, and every minute for the clock. Each card opens the employee's month.
   - Employees: add, change, leave and come back; an accountant's go to a manager;
   - Employees also lists the device's users nobody has the number of yet, to add or link;
-    the form takes the department, monthly or daily pay, and flexible hours (no start time);
-    the list shows each one's department, filters by one, and a daily worker's wage a day;
-  - Departments: each with how many are in it, added, renamed, and deleted with its employees
-    moved first; General kept;
+    the form takes the department, a role of it (picked, or a new one typed), monthly or daily
+    pay, and flexible hours (no start time); the list shows each one's department, filters by
+    one, and a daily worker's wage a day; Sync device asks every approved device for its users
+    and reads the list again as they come;
+  - Departments: each with how many are in it and its roles, added, renamed, and deleted with
+    its employees (or a role's holders) moved first; General kept;
   - Attendance devices: where to point the K40, approve or refuse it, have it list its users or
     send its attendance again (the command's progress shown as it goes), and the grace and
-    double-scan settings.
+    double-scan settings. Connection settings (إعدادات التوصيل) above the list: the device's IP
+    address (the one last used here, or the one it last called from), port and comm key, with
+    Test connection and Sync device over TCP 4370, each with progress, a message at the bottom
+    and the outcome under the buttons.
   - Corrections also lists the punches that came after their month's pay was finalized, a day at
     a time, until a manager marks them seen to.
 - Financials → Advances (السلفيات): the month's advances, each employee's total, a new advance

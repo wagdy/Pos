@@ -286,12 +286,12 @@ public class HrTests
         DayEvaluation Worked(DateOnly d, DayStatus status, int minutes, int late = 0) => new(d, status, null, null, 2, minutes, late, 0, 0, 0);
         var days = PayrollMonth.Days(october).Select(d => d.Day switch
         {
-            // Worked the 5th to the 9th (an hour late on the 7th), a Friday off (the 9th), and a
-            // holiday (the 6th); absent the 12th; on leave the 13th; a holiday off the 14th.
+            // Worked the 5th to the 9th (an hour late on the 7th), three hours of a Friday off (the
+            // 9th), and a holiday (the 6th); absent the 12th; on leave the 13th; a holiday off the 14th.
             5 or 8 => Worked(d, DayStatus.Worked, 540),
             6 => Worked(d, DayStatus.WorkedOnHoliday, 540),
             7 => Worked(d, DayStatus.Worked, 480, late: 60),
-            9 => Worked(d, DayStatus.WorkedOnDayOff, 300),
+            9 => Worked(d, DayStatus.WorkedOnDayOff, 180),
             12 => Nothing(d, DayStatus.Absent),
             13 => Nothing(d, DayStatus.Leave),
             14 => Nothing(d, DayStatus.Holiday),
@@ -301,12 +301,16 @@ public class HrTests
 
         var figures = PayrollCalculator.Calculate(helper, october, days, [], advances: 100, broughtForward: 0);
 
-        // Five days' wages; the holiday's allowance on top; the Friday a day's wage, no more.
-        Assert.Equal((EmploymentType.Daily, 250m, 5, 1_250m), (figures.EmploymentType, figures.DailyWage, figures.DaysWorked, figures.BaseSalary));
-        Assert.Equal((250m, 0m), (figures.HolidaysWorkedPay, figures.DaysOffWorkedPay));
+        // Four days' wages; the holiday's allowance on top; the Friday as anyone's day off worked,
+        // under half a shift: its three hours.
+        Assert.Equal((EmploymentType.Daily, 250m, 5, 1_000m), (figures.EmploymentType, figures.DailyWage, figures.DaysWorked, figures.BaseSalary));
+        Assert.Equal((250m, 1, 83.33m), (figures.HolidaysWorkedPay, figures.DaysOffWorked, figures.DaysOffWorkedPay));
         // Nothing absent, the hour late at 27.78.
         Assert.Equal((0, 0m, 27.78m), (figures.AbsentDays, figures.AbsencePenalty, figures.LatenessPenalty));
-        Assert.Equal(1_250m + 250m - 100m - 27.78m, figures.Net);
+        Assert.Equal(1_000m + 250m + 83.33m - 100m - 27.78m, figures.Net);
+
+        // Half a shift or more of a day off: a day's wage.
+        Assert.Equal(250m, PayrollCalculator.DayOffWorkedPay(helper, PayrollCalculator.HalfShiftMinutes));
 
         // Monthly again: the wage gone, the salary back.
         helper.SetPay(EmploymentType.Monthly, 5_400);
@@ -326,6 +330,24 @@ public class HrTests
         Assert.True(new Department(Department.GeneralId, "General").IsGeneral);
         Assert.Throws<DomainException>(() => chef.MoveTo(Guid.Empty));
         Assert.Throws<DomainException>(() => kitchen.Rename(" "));
+    }
+
+    [Fact]
+    public void An_employee_holds_one_of_their_departments_roles_and_is_titled_by_it()
+    {
+        var chef = Chef();
+        var kitchen = new Department(Guid.NewGuid(), "Kitchen");
+        var headChef = new JobRole(Guid.NewGuid(), kitchen.Id, " Head chef ");
+        Assert.Equal(("Head chef", kitchen.Id), (headChef.Name, headChef.DepartmentId));
+
+        // In General still: the kitchen's role is not theirs to hold.
+        Assert.Throws<DomainException>(() => chef.AssignRole(headChef));
+        chef.MoveTo(kitchen.Id);
+        chef.AssignRole(headChef);
+        Assert.Equal((headChef.Id, "Head chef"), (chef.JobRoleId, chef.JobTitle));
+
+        Assert.Throws<DomainException>(() => new JobRole(Guid.NewGuid(), kitchen.Id, " "));
+        Assert.Throws<DomainException>(() => new JobRole(Guid.NewGuid(), Guid.Empty, "Helper"));
     }
 
     [Fact]

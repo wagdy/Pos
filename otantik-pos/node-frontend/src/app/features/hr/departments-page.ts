@@ -10,7 +10,7 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { Observable, firstValueFrom } from 'rxjs';
 import { errorMessage } from '../../core/http/error-message';
-import { Department, HrApi } from '../../core/hr/hr.api';
+import { Department, HrApi, JobRole } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 
@@ -30,16 +30,16 @@ const dialogStyles = `
   }
 `;
 
-// A department's name, new or changed. Closes with it.
+// A department's or a role's name, new or changed. Closes with it.
 @Component({
   selector: 'app-department-dialog',
   imports: [FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule],
   template: `
-    <h2 mat-dialog-title>{{ data.name ? 'Rename ' + data.name : 'Add a department' }} <span class="ar">قسم</span></h2>
+    <h2 mat-dialog-title>{{ data.title ?? (data.name ? 'Rename ' + data.name : 'Add a department') }} <span class="ar">{{ data.title ? 'وظيفة' : 'قسم' }}</span></h2>
     <mat-dialog-content>
       <mat-form-field class="wide">
         <mat-label>Name · الاسم</mat-label>
-        <input matInput [(ngModel)]="name" maxlength="100" placeholder="Kitchen, Service, Management" aria-label="Name" />
+        <input matInput [(ngModel)]="name" maxlength="100" [placeholder]="data.placeholder ?? 'Kitchen, Service, Management'" aria-label="Name" />
       </mat-form-field>
     </mat-dialog-content>
     <mat-dialog-actions align="end">
@@ -50,8 +50,54 @@ const dialogStyles = `
   styles: dialogStyles,
 })
 export class DepartmentDialog {
-  protected readonly data = inject<{ name?: string }>(MAT_DIALOG_DATA);
+  protected readonly data = inject<NameData>(MAT_DIALOG_DATA);
   protected name = this.data.name ?? '';
+}
+
+export interface NameData {
+  name?: string;
+  // A role's: its own title and example names.
+  title?: string;
+  placeholder?: string;
+}
+
+// A role deleted: which of the department's other roles whoever holds it takes. Closes with that
+// role, or null when nobody holds it.
+@Component({
+  selector: 'app-delete-role-dialog',
+  imports: [FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatSelectModule],
+  template: `
+    <h2 mat-dialog-title>Delete the {{ data.role.name }} role? <span class="ar">حذف الوظيفة</span></h2>
+    <mat-dialog-content>
+      @if (data.others.length) {
+        <p>
+          {{ data.role.employed ? data.role.employed + (data.role.employed === 1 ? ' employee holds' : ' employees hold') + ' it: they take' : 'Whoever held it, those who left too, take' }}
+          another of {{ data.department }}'s roles.
+        </p>
+        <mat-form-field class="wide">
+          <mat-label>They take · ينتقلون إلى</mat-label>
+          <mat-select [(ngModel)]="moveTo" aria-label="They take">
+            @for (r of data.others; track r.id) {
+              <mat-option [value]="r.id">{{ r.name }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+      } @else if (data.role.employed) {
+        <p>{{ data.role.employed }} hold it, and {{ data.department }} has no other role for them: add one first.</p>
+      } @else {
+        <p class="muted">Nobody employed holds it.</p>
+      }
+    </mat-dialog-content>
+    <mat-dialog-actions align="end">
+      <button mat-button mat-dialog-close>Cancel</button>
+      <button mat-flat-button [disabled]="!!data.role.employed && !moveTo" [mat-dialog-close]="{ moveTo: moveTo || null }">Delete</button>
+    </mat-dialog-actions>
+  `,
+  styles: dialogStyles,
+})
+export class DeleteRoleDialog {
+  protected readonly data = inject<{ role: JobRole; department: string; others: JobRole[] }>(MAT_DIALOG_DATA);
+  protected moveTo = '';
 }
 
 // A department deleted: where its employees go first, when it has any. Closes with the department
@@ -90,9 +136,11 @@ export class DeleteDepartmentDialog {
   protected moveTo = '';
 }
 
-// HR's departments (الأقسام): the kitchen, service, management, each employee in one, and how many
-// are in each. A manager's to add, rename and delete; deleting one moves its employees to another
-// first. General is always there, where new employees start: renamed, never deleted.
+// HR's departments (الأقسام): the kitchen, service, management, each employee in one, how many are in
+// each, and their job roles (الوظائف). A manager's to add, rename and delete; deleting a department
+// moves its employees and its roles to another first, and deleting a role has its holders take
+// another of the department's. General is always there, where new employees start: renamed,
+// never deleted.
 @Component({
   selector: 'app-departments-page',
   imports: [MatButtonModule, MatIconModule, MatProgressBarModule, MatTooltipModule],
@@ -130,6 +178,22 @@ export class DeleteDepartmentDialog {
                   @if (d.isGeneral) {
                     <div class="muted small">Where new employees start · always there</div>
                   }
+                  <div class="roles" [attr.aria-label]="d.name + '’s roles'">
+                    @for (r of d.roles; track r.id) {
+                      <span class="role">
+                        {{ r.name }}<span class="muted"> · {{ r.employed }}</span>
+                        @if (canChange()) {
+                          <button mat-icon-button class="mini" (click)="renameRole(d, r)" [attr.aria-label]="'Rename the ' + r.name + ' role'"><mat-icon>edit</mat-icon></button>
+                          <button mat-icon-button class="mini danger" (click)="removeRole(d, r)" [attr.aria-label]="'Delete the ' + r.name + ' role'"><mat-icon>close</mat-icon></button>
+                        }
+                      </span>
+                    } @empty {
+                      <span class="muted small">No roles yet</span>
+                    }
+                    @if (canChange()) {
+                      <button mat-button class="add-role" (click)="addRole(d)"><mat-icon>add</mat-icon> Role</button>
+                    }
+                  </div>
                 </td>
                 <td class="num">{{ d.employed }}</td>
                 <td class="num">{{ d.everyone }}</td>
@@ -163,6 +227,32 @@ export class DeleteDepartmentDialog {
     }
     .danger {
       color: var(--mat-sys-error);
+    }
+    .roles {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px 8px;
+      margin-top: 6px;
+    }
+    .role {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 2px 0 10px;
+      border-radius: 999px;
+      background: var(--mat-sys-surface-container-high);
+      font: var(--mat-sys-body-small);
+    }
+    .mini {
+      width: 28px;
+      height: 28px;
+      padding: 2px;
+
+      mat-icon {
+        font-size: 16px;
+        width: 16px;
+        height: 16px;
+      }
     }
   `,
 })
@@ -210,8 +300,37 @@ export class DepartmentsPage {
     }
   }
 
-  private askName(data: { name?: string }): Promise<string | undefined> {
-    return firstValueFrom(this.dialog.open<DepartmentDialog, { name?: string }, string>(DepartmentDialog, { data, width: '420px' }).afterClosed());
+  protected async addRole(d: Department): Promise<void> {
+    const name = await this.askName({ title: `Add a role to ${d.name}`, placeholder: 'Chef, helper, waiter, captain' });
+    if (name) {
+      await this.act(() => this.api.saveRole(d.id, crypto.randomUUID(), name), `${name} added to ${d.name}.`);
+    }
+  }
+
+  protected async renameRole(d: Department, r: JobRole): Promise<void> {
+    const name = await this.askName({ title: `Rename the ${r.name} role`, name: r.name, placeholder: 'Chef, helper, waiter, captain' });
+    if (name && name !== r.name) {
+      await this.act(() => this.api.saveRole(d.id, r.id, name), `Renamed ${name}, for whoever holds it.`);
+    }
+  }
+
+  protected async removeRole(d: Department, r: JobRole): Promise<void> {
+    const answer = await firstValueFrom(
+      this.dialog
+        .open<DeleteRoleDialog, { role: JobRole; department: string; others: JobRole[] }, { moveTo: string | null }>(DeleteRoleDialog, {
+          data: { role: r, department: d.name, others: d.roles.filter((o) => o.id !== r.id) },
+          width: '440px',
+        })
+        .afterClosed(),
+    );
+    if (answer) {
+      const to = d.roles.find((o) => o.id === answer.moveTo);
+      await this.act(() => this.api.deleteRole(r.id, answer.moveTo), to ? `The ${r.name} role deleted: they are ${to.name} now.` : `The ${r.name} role deleted.`);
+    }
+  }
+
+  private askName(data: NameData): Promise<string | undefined> {
+    return firstValueFrom(this.dialog.open<DepartmentDialog, NameData, string>(DepartmentDialog, { data, width: '420px' }).afterClosed());
   }
 
   // Does it, says so, and reads the list again; a refusal is said as the till says it.

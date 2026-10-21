@@ -22,6 +22,7 @@ public static class DependencyInjection
         services.AddScoped<Hr.EmployeeWriter>();
         services.AddScoped<Hr.Timesheets>();
         services.AddScoped<Hr.PayrollWorker>();
+        services.AddScoped<Hr.DeviceIntake>();
         return services;
     }
 }

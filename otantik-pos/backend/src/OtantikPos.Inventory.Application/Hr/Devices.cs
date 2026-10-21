@@ -109,31 +109,47 @@ public sealed record DevicePunchesResult(int Received, int Kept);
 public sealed record RecordDevicePunchesCommand(string SerialNumber, IReadOnlyList<DevicePunch> Punches, string? Stamp, string? Address)
     : IRequest<DevicePunchesResult?>, IRetryOnConflict;
 
-internal sealed class RecordDevicePunchesHandler(
-    IAttendanceDeviceRepository devices, IAttendanceLogRepository logs, IEmployeeRepository employees, IUnitOfWork unitOfWork)
+internal sealed class RecordDevicePunchesHandler(IAttendanceDeviceRepository devices, DeviceIntake intake, IUnitOfWork unitOfWork)
     : IRequestHandler<RecordDevicePunchesCommand, DevicePunchesResult?>
 {
-    // Saved this many at a time, so a device back after weeks away is not one long save.
-    public const int SaveEvery = 1_000;
-
     public async Task<DevicePunchesResult?> Handle(RecordDevicePunchesCommand request, CancellationToken cancellationToken)
     {
         var device = await devices.GetBySerialNumberAsync(request.SerialNumber.Trim(), cancellationToken);
         if (device is not { IsApproved: true })
             return null;
 
+        if (!string.IsNullOrWhiteSpace(request.Stamp))
+            device.Acknowledge(request.Stamp);
+        device.Seen(DateTime.UtcNow, request.Address);
+        var kept = await intake.KeepPunchesAsync(device, request.Punches, cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return new DevicePunchesResult(request.Punches.Count, kept);
+    }
+}
+
+// What a device sends or is read for, kept the same way whichever way it came (ADMS, or port 4370):
+// its punches once each, to whoever has their number; its users by number and name.
+internal sealed class DeviceIntake(
+    IAttendanceLogRepository logs, IEmployeeRepository employees, IDeviceUserRepository users, IUnitOfWork unitOfWork, IAttendanceNotifier notifier)
+{
+    // Saved this many at a time, so a device back after weeks away is not one long save.
+    public const int SaveEvery = 1_000;
+
+    // How many were new; saved, and the screens told when any were.
+    public async Task<int> KeepPunchesAsync(AttendanceDevice device, IReadOnlyList<DevicePunch> punches, CancellationToken cancellationToken)
+    {
         var kept = 0;
-        if (request.Punches.Count > 0)
+        if (punches.Count > 0)
         {
-            var from = request.Punches.Min(p => p.PunchedAt).AddSeconds(-1);
-            var to = request.Punches.Max(p => p.PunchedAt).AddSeconds(1);
+            var from = punches.Min(p => p.PunchedAt).AddSeconds(-1);
+            var to = punches.Max(p => p.PunchedAt).AddSeconds(1);
             var already = (await logs.GetFromDeviceAsync(device.SerialNumber, from, to, cancellationToken))
                 .Select(l => (l.DeviceUserId, l.PunchedAt))
                 .ToHashSet();
             var people = (await employees.GetAllAsync(cancellationToken))
                 .Where(e => e.DeviceUserId is not null)
                 .ToDictionary(e => e.DeviceUserId!, e => e.Id);
-            foreach (var p in request.Punches)
+            foreach (var p in punches)
             {
                 var punch = AttendanceLog.FromDevice(device.SerialNumber, p.DeviceUserId, p.PunchedAt, p.Status, p.VerifyMode,
                     people.TryGetValue(p.DeviceUserId.Trim(), out var id) ? id : null);
@@ -148,11 +164,32 @@ internal sealed class RecordDevicePunchesHandler(
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(request.Stamp))
-            device.Acknowledge(request.Stamp);
-        device.Seen(DateTime.UtcNow, request.Address);
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        return new DevicePunchesResult(request.Punches.Count, kept);
+        if (kept > 0)
+            await notifier.AttendanceChangedAsync(cancellationToken);
+        return kept;
+    }
+
+    public async Task KeepUsersAsync(AttendanceDevice device, IReadOnlyList<DeviceUserLine> lines, CancellationToken cancellationToken)
+    {
+        var now = DateTime.UtcNow;
+        var known = (await users.GetForDeviceAsync(device.SerialNumber, cancellationToken)).ToDictionary(u => u.DeviceUserId);
+        foreach (var line in lines)
+        {
+            var number = line.DeviceUserId.Trim();
+            if (known.TryGetValue(number, out var user))
+            {
+                user.Seen(line.Name, now);
+            }
+            else
+            {
+                user = new DeviceUser(device.SerialNumber, number, line.Name, now);
+                users.Add(user);
+                known[number] = user;
+            }
+        }
+
+        await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 }
 
@@ -239,7 +276,7 @@ public sealed record DeviceUserLine(string DeviceUserId, string? Name);
 // The users a device sent, kept or brought up to date; null when the device is not approved.
 public sealed record RecordDeviceUsersCommand(string SerialNumber, IReadOnlyList<DeviceUserLine> Users) : IRequest<int?>, IRetryOnConflict;
 
-internal sealed class RecordDeviceUsersHandler(IAttendanceDeviceRepository devices, IDeviceUserRepository users, IUnitOfWork unitOfWork)
+internal sealed class RecordDeviceUsersHandler(IAttendanceDeviceRepository devices, DeviceIntake intake)
     : IRequestHandler<RecordDeviceUsersCommand, int?>
 {
     public async Task<int?> Handle(RecordDeviceUsersCommand request, CancellationToken cancellationToken)
@@ -247,24 +284,7 @@ internal sealed class RecordDeviceUsersHandler(IAttendanceDeviceRepository devic
         var device = await devices.GetBySerialNumberAsync(request.SerialNumber.Trim(), cancellationToken);
         if (device is not { IsApproved: true })
             return null;
-        var now = DateTime.UtcNow;
-        var known = (await users.GetForDeviceAsync(device.SerialNumber, cancellationToken)).ToDictionary(u => u.DeviceUserId);
-        foreach (var line in request.Users)
-        {
-            var number = line.DeviceUserId.Trim();
-            if (known.TryGetValue(number, out var user))
-            {
-                user.Seen(line.Name, now);
-            }
-            else
-            {
-                user = new DeviceUser(device.SerialNumber, number, line.Name, now);
-                users.Add(user);
-                known[number] = user;
-            }
-        }
-
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+        await intake.KeepUsersAsync(device, request.Users, cancellationToken);
         return request.Users.Count;
     }
 }

@@ -18,6 +18,7 @@ internal sealed class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
         builder.Property(e => e.EmploymentType).IsEnumName();
         builder.Ignore(e => e.IsDaily);
         builder.HasOne<Department>().WithMany().HasForeignKey(e => e.DepartmentId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<JobRole>().WithMany().HasForeignKey(e => e.JobRoleId).OnDelete(DeleteBehavior.Restrict);
         builder.Property(e => e.JobTitle).HasMaxLength(Employee.MaxJobTitleLength);
         // By name, "Friday, Saturday", as the other enums are stored.
         builder.Property(e => e.DaysOff).HasConversion<string>().HasMaxLength(100);
@@ -41,6 +42,18 @@ internal sealed class DepartmentConfiguration : IEntityTypeConfiguration<Departm
         builder.Ignore(d => d.IsGeneral);
         // There from the start, for the employees already entered.
         builder.HasData(new { Id = Department.GeneralId, Name = "General", CreatedAtUtc = new DateTime(2026, 10, 21, 0, 0, 0, DateTimeKind.Utc) });
+    }
+}
+
+internal sealed class JobRoleConfiguration : IEntityTypeConfiguration<JobRole>
+{
+    public void Configure(EntityTypeBuilder<JobRole> builder)
+    {
+        builder.ToTable("JobRoles", NodeDbContext.HrSchema);
+        builder.Property(r => r.Name).HasMaxLength(JobRole.MaxNameLength);
+        builder.HasOne<Department>().WithMany().HasForeignKey(r => r.DepartmentId).OnDelete(DeleteBehavior.Restrict);
+        // One name to a department.
+        builder.HasIndex(r => new { r.DepartmentId, r.Name }).IsUnique();
     }
 }
 

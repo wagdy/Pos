@@ -12,6 +12,7 @@ public sealed class HrStore
 {
     public EmployeeStore Employees { get; } = new();
     public DepartmentStore Departments { get; } = new();
+    public JobRoleStore Roles { get; } = new();
     public DeviceStore Devices { get; } = new();
     public PunchStore Punches { get; } = new();
     public DayMarkStore Marks { get; } = new();
@@ -23,6 +24,8 @@ public sealed class HrStore
     public AdjustmentStore Adjustments { get; } = new();
     public SlipStore Slips { get; } = new();
     public AttendanceSettingsStore Settings { get; } = new();
+    public AttendanceNotifications Notifications { get; } = new();
+    public DeviceLink Link { get; } = new();
 }
 
 public abstract class ListStore<T> : IRepository<T> where T : AggregateRoot
@@ -46,6 +49,20 @@ public sealed class EmployeeStore : ListStore<Employee>, IEmployeeRepository
 
     public Task<IReadOnlyList<Employee>> GetInDepartmentAsync(Guid departmentId, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<Employee>>(Items.Where(e => e.DepartmentId == departmentId).ToList());
+
+    public Task<IReadOnlyList<Employee>> GetWithRoleAsync(Guid jobRoleId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<Employee>>(Items.Where(e => e.JobRoleId == jobRoleId).ToList());
+}
+
+public sealed class JobRoleStore : ListStore<JobRole>, IJobRoleRepository
+{
+    public Task<IReadOnlyList<JobRole>> GetAllAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<JobRole>>(Items.OrderBy(r => r.Name).ToList());
+
+    public Task<IReadOnlyList<JobRole>> GetInDepartmentAsync(Guid departmentId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<JobRole>>(Items.Where(r => r.DepartmentId == departmentId).ToList());
+
+    public void Remove(JobRole role) => Items.Remove(role);
 }
 
 // General there from the start, as the migration makes it.
@@ -172,4 +189,30 @@ public sealed class AttendanceSettingsStore : IAttendanceSettings
         Policy = policy;
         return Task.CompletedTask;
     }
+}
+
+// The screens told of punches: counted, for a test to see.
+public sealed class AttendanceNotifications : IAttendanceNotifier
+{
+    public int Sent { get; private set; }
+
+    public Task AttendanceChangedAsync(CancellationToken cancellationToken)
+    {
+        Sent++;
+        return Task.CompletedTask;
+    }
+}
+
+// A device reached on its own port: whatever a test gives it to hold.
+public sealed class DeviceLink : IAttendanceDeviceLink
+{
+    public DeviceReading? Holds { get; set; }
+
+    public Task<DeviceProbe> ProbeAsync(string address, int port, int commKey, CancellationToken cancellationToken) =>
+        Task.FromResult(Holds is { } d
+            ? new DeviceProbe(true, $"Connected to {d.Model}", d.SerialNumber, d.Model, null, d.Users.Count, d.Punches.Count)
+            : new DeviceProbe(false, $"No answer from {address} on port {port}."));
+
+    public Task<DeviceReading> ReadAsync(string address, int port, int commKey, CancellationToken cancellationToken) =>
+        Holds is { } d ? Task.FromResult(d) : throw new Otantik.BuildingBlocks.DomainException($"No answer from {address} on port {port}.");
 }

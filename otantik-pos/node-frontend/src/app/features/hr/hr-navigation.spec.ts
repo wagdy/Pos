@@ -25,11 +25,12 @@ function find(list: Route[] | undefined, path: string): Route | undefined {
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
 describe('the HR navigation', () => {
-  it('gives HR & Payroll a section of its own, guarded, opening on the employees', () => {
+  it('gives HR & Payroll a section of its own, guarded, opening on who is in now', () => {
     const hr = find(routes, 'hr')!;
     expect(hr.canActivate?.length).toBe(1);
     expect(hr.children!.map((r) => [r.path, r.redirectTo ?? (r.loadComponent ? 'page' : undefined)])).toEqual([
-      ['', 'employees'],
+      ['', 'now'],
+      ['now', 'page'],
       ['employees', 'page'],
       ['departments', 'page'],
       ['attendance', 'page'],
@@ -43,7 +44,7 @@ describe('the HR navigation', () => {
     expect(find(find(routes, 'financials')!.children, 'advances')!.canActivate?.length).toBe(1);
   });
 
-  it('has a tab each for the employees, departments, attendance, its corrections, payroll, holidays and the devices, counting what waits', async () => {
+  it('has a tab each for now, the employees, departments, attendance, corrections, payroll, holidays and devices, counting what waits', async () => {
     const count = signal(0);
     const refresh = vi.fn();
     TestBed.configureTestingModule({ providers: [provideRouter([]), { provide: CorrectionsCount, useValue: { count, refresh } }] });
@@ -53,13 +54,13 @@ describe('the HR navigation', () => {
     const el = fixture.nativeElement as HTMLElement;
 
     expect(text(el.querySelector('h1')!)).toBe('HR & Payroll الموارد البشرية والرواتب');
-    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('href'))).toEqual(['/employees', '/departments', '/attendance', '/corrections', '/payroll', '/holidays', '/devices']);
+    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('href'))).toEqual(['/now', '/employees', '/departments', '/attendance', '/corrections', '/payroll', '/holidays', '/devices']);
     expect(refresh).toHaveBeenCalled();
     expect(el.querySelector('.count')).toBeNull();
 
     count.set(2);
     fixture.detectChanges();
-    expect(el.querySelectorAll('nav a')[3].querySelector('.count')!.getAttribute('aria-label')).toBe('2 waiting');
+    expect(el.querySelectorAll('nav a')[4].querySelector('.count')!.getAttribute('aria-label')).toBe('2 waiting');
     expect(text(el.querySelector('.count')!)).toBe('2');
   });
 

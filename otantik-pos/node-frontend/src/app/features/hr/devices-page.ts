@@ -99,6 +99,11 @@ export class ReadAttendanceDialog {
 // The device keeps its punches while the till is away, and sends them all when it is back: the
 // laptop needs the same address on the network each time (a reservation on the router), as the
 // device is given it once.
+//
+// Beside that, the till can reach the device itself, at its address on ZKTeco's own port (4370):
+// to test that it answers, and to read its users and its whole log at once (Connection settings,
+// a manager's). The punches read are kept as ADMS's are, once each; a device read for the first
+// time is approved by it.
 @Component({
   selector: 'app-devices-page',
   imports: [
@@ -119,14 +124,16 @@ export class ReadAttendanceDialog {
       <dl>
         <div>
           <dt>Server address</dt>
-          <dd>{{ address }}</dd>
+          <dd>{{ address() }}</dd>
         </div>
         <div>
           <dt>Server port</dt>
-          <dd>{{ port }}</dd>
+          <dd>{{ port() }}</dd>
         </div>
       </dl>
-      @if (local) {
+      @if (devicePort()) {
+        <p class="muted small">Port {{ devicePort() }} is the device’s own: it answers nothing but the device, and the till’s screens stay on this machine.</p>
+      } @else if (local) {
         <p class="muted small">This screen is open on the till itself: give the device this machine’s address on the restaurant’s network, not “localhost”.</p>
       }
       <p class="muted small">It shows up below within a minute, waiting. Approve it, and its punches start coming in, the ones it already holds too.</p>
@@ -135,6 +142,52 @@ export class ReadAttendanceDialog {
         can reach this address again.
       </p>
     </section>
+
+    @if (canApprove()) {
+      <section class="link" aria-label="Connection settings">
+        <h2>Connection settings <span class="inline-ar">إعدادات التوصيل</span></h2>
+        <p class="muted small">
+          The till reaches the device at its own address, to test it answers and to read its users and its whole log now. Its punches keep coming
+          over ADMS too; none is kept twice.
+        </p>
+        <div class="fields">
+          <mat-form-field>
+            <mat-label>Device IP address · عنوان الجهاز</mat-label>
+            <input matInput [(ngModel)]="deviceAddress" placeholder="192.168.1.106" inputmode="decimal" aria-label="Device IP address" />
+            <mat-hint>On the device: COMM. → Ethernet → IP Address</mat-hint>
+          </mat-form-field>
+          <mat-form-field class="short">
+            <mat-label>Port · المنفذ</mat-label>
+            <input matInput type="number" min="1" max="65535" [(ngModel)]="tcpPort" aria-label="Device port" />
+          </mat-form-field>
+          <mat-form-field class="short">
+            <mat-label>Comm key · مفتاح الاتصال</mat-label>
+            <input matInput type="number" min="0" [(ngModel)]="commKey" aria-label="Comm key" />
+            <mat-hint>0 unless one is set on it</mat-hint>
+          </mat-form-field>
+          <button mat-stroked-button (click)="test()" [disabled]="!linkable() || linking() !== null">
+            <mat-icon>lan</mat-icon> Test connection <span class="inline-ar">اختبار التوصيل</span>
+          </button>
+          <button mat-flat-button (click)="sync()" [disabled]="!linkable() || linking() !== null">
+            <mat-icon>sync</mat-icon> Sync device <span class="inline-ar">مزامنة</span>
+          </button>
+        </div>
+        @if (linking(); as doing) {
+          <mat-progress-bar mode="indeterminate" />
+          <p class="muted small">{{ doing === 'test' ? 'Reaching the device…' : 'Reading its users and its whole log: up to a minute when it holds a lot…' }}</p>
+        } @else if (linked(); as r) {
+          <p class="result" [class.bad-text]="!r.ok">
+            <mat-icon>{{ r.ok ? 'check_circle' : 'error' }}</mat-icon>
+            <span>
+              {{ r.text }}
+              @if (r.unlinked) {
+                <a routerLink="/hr/employees">Link {{ r.unlinked === 1 ? 'it' : 'them' }} on the Employees tab</a>
+              }
+            </span>
+          </p>
+        }
+      </section>
+    }
 
     @if (loading()) {
       <mat-progress-bar mode="indeterminate" />
@@ -258,6 +311,49 @@ export class ReadAttendanceDialog {
         margin: 4px 0;
       }
     }
+    .link {
+      margin-bottom: 16px;
+      padding: 12px 16px;
+      border-radius: 12px;
+      border: 1px solid var(--mat-sys-outline-variant);
+      background: var(--mat-sys-surface);
+
+      h2 {
+        margin: 0 0 8px;
+        font: var(--mat-sys-title-medium);
+      }
+      p {
+        margin: 4px 0;
+      }
+      .fields {
+        margin-top: 8px;
+      }
+      mat-form-field.short {
+        width: 150px;
+      }
+      mat-progress-bar {
+        margin-top: 8px;
+      }
+    }
+    .result {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+
+      mat-icon {
+        flex: none;
+        color: #2e7d32;
+      }
+      &.bad-text mat-icon {
+        color: var(--mat-sys-error);
+      }
+      a {
+        margin-left: 4px;
+      }
+    }
+    .bad-text {
+      color: var(--mat-sys-error);
+    }
     .settings {
       margin: 16px 0 0;
     }
@@ -339,14 +435,93 @@ export class DevicesPage {
   protected grace = 0;
   protected doubleScan = 3;
 
-  // Where the device reaches this till: the address and port this screen is served from.
-  protected readonly address = location.hostname;
-  protected readonly port = location.port || (location.protocol === 'https:' ? '443' : '80');
+  // Where the device reaches this till: the device's own port and this machine's network address
+  // when the till has one; otherwise the address and port this screen is served from.
   protected readonly local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(location.hostname);
+  protected readonly devicePort = signal<number | null>(null);
+  private readonly addresses = signal<string[]>([]);
+  protected readonly address = computed(() =>
+    this.devicePort() && this.local && this.addresses().length ? this.addresses().join(' or ') : location.hostname,
+  );
+  protected readonly port = computed(() => String(this.devicePort() ?? (location.port || (location.protocol === 'https:' ? '443' : '80'))));
+
+  // Where the till reaches the device: its address as last used here, else the address an
+  // approved device last called from; ZKTeco's port; no comm key unless one is set on it.
+  protected deviceAddress = stored(AddressKey) ?? '';
+  protected tcpPort = 4370;
+  protected commKey = 0;
+  protected readonly linking = signal<'test' | 'sync' | null>(null);
+  protected readonly linked = signal<{ ok: boolean; text: string; unlinked?: number } | null>(null);
 
   constructor() {
     this.destroyRef.onDestroy(() => this.stopWatching());
     void this.load();
+    void firstValueFrom(this.api.deviceConnection()).then(
+      (c) => {
+        this.devicePort.set(c.devicePort);
+        this.addresses.set(c.addresses);
+      },
+      () => undefined,
+    );
+  }
+
+  protected linkable(): boolean {
+    const parts = this.deviceAddress.trim().split('.');
+    const port = Number(this.tcpPort);
+    return (
+      parts.length === 4 &&
+      parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255) &&
+      Number.isInteger(port) &&
+      port >= 1 &&
+      port <= 65535 &&
+      Number(this.commKey) >= 0
+    );
+  }
+
+  protected async test(): Promise<void> {
+    const address = this.deviceAddress.trim();
+    this.linking.set('test');
+    this.linked.set(null);
+    try {
+      const probe = await firstValueFrom(this.api.testDevice(address, Number(this.tcpPort), Number(this.commKey) || 0));
+      this.linked.set({ ok: probe.reached, text: probe.message });
+      if (probe.reached) {
+        keep(AddressKey, address);
+        this.notify.info(probe.message);
+      } else {
+        this.notify.error(null, probe.message);
+      }
+    } catch (error) {
+      this.linked.set({ ok: false, text: errorMessage(error, 'The device could not be tested.') });
+      this.notify.error(error, 'The device could not be tested.');
+    } finally {
+      this.linking.set(null);
+    }
+  }
+
+  protected async sync(): Promise<void> {
+    const address = this.deviceAddress.trim();
+    this.linking.set('sync');
+    this.linked.set(null);
+    try {
+      const r = await firstValueFrom(this.api.syncDevice(address, Number(this.tcpPort), Number(this.commKey) || 0));
+      keep(AddressKey, address);
+      const text =
+        `${r.deviceName}: ${count(r.users, 'user')} and ${count(r.punches, 'punch', 'punches')} read, ` +
+        `${r.newPunches === 0 ? 'none of them new' : `${r.newPunches} new`}.` +
+        (r.newDevice ? ' New to the till: approved, and listed below.' : '') +
+        (r.usersNotOnTheTill
+          ? ` ${r.usersNotOnTheTill} of its users ${r.usersNotOnTheTill === 1 ? 'is' : 'are'} not linked to anyone on the till yet.`
+          : '');
+      this.linked.set({ ok: true, text, unlinked: r.usersNotOnTheTill });
+      this.notify.info(`Synced ${r.deviceName}: ${r.newPunches} new ${r.newPunches === 1 ? 'punch' : 'punches'}.`);
+      await this.load(false);
+    } catch (error) {
+      this.linked.set({ ok: false, text: errorMessage(error, 'The device could not be read.') });
+      this.notify.error(error, 'The device could not be read.');
+    } finally {
+      this.linking.set(null);
+    }
   }
 
   protected what(c: DeviceCommand): string {
@@ -458,6 +633,7 @@ export class DevicesPage {
     try {
       const [devices, settings] = await Promise.all([firstValueFrom(this.api.devices()), firstValueFrom(this.api.settings())]);
       this.devices.set(devices);
+      this.deviceAddress ||= devices.map((d) => d.lastAddress?.replace(/^::ffff:/, '') ?? '').find((a) => /^\d+\.\d+\.\d+\.\d+$/.test(a)) ?? '';
       if (!this.saved()) {
         this.grace = settings.graceMinutes;
         this.doubleScan = settings.doubleScanMinutes;
@@ -470,6 +646,29 @@ export class DevicesPage {
       this.loading.set(false);
     }
   }
+}
+
+const AddressKey = 'otantik.hr.device-address';
+
+// What this browser remembers for the screen, when it can: a private window may not.
+function stored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function keep(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Not remembered: typed again next time.
+  }
+}
+
+function count(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
 }
 
 function isoDate(day: Date): string {

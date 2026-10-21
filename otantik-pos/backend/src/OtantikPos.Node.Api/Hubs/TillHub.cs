@@ -4,6 +4,7 @@ using Otantik.SharedKernel.Authorization;
 using Otantik.SharedKernel.Orders;
 using OtantikPos.Node.Api.Auth;
 using OtantikPos.Node.Infrastructure.DeliverySystem;
+using OtantikPos.Inventory.Application.Hr;
 using OtantikPos.Node.Infrastructure.Printing;
 using OtantikPos.Ordering.Application.Ports;
 
@@ -23,6 +24,9 @@ public sealed class TillHub : Hub<ITillClient>
 
     internal const string EveryOrder = "orders:all";
 
+    // Whoever sees HR: told when punches come or change, for who is in now.
+    internal const string Attendance = "attendance";
+
     internal static string OrdersCreatedBy(string userId) => $"orders:created-by:{userId}";
 
     // The same rule as GetOpenOrdersQuery: whoever may see every order gets every push, and
@@ -37,6 +41,8 @@ public sealed class TillHub : Hub<ITillClient>
             await Groups.AddToGroupAsync(Context.ConnectionId, EveryOrder);
         else if (role is { } own && RolePermissions.Has(own, Permissions.OrderViewOwn) && StaffClaims.IdOf(user) is { } userId)
             await Groups.AddToGroupAsync(Context.ConnectionId, OrdersCreatedBy(userId));
+        if (role is { } hr && RolePermissions.Has(hr, Permissions.HrView))
+            await Groups.AddToGroupAsync(Context.ConnectionId, Attendance);
 
         await base.OnConnectedAsync();
     }
@@ -53,6 +59,26 @@ public interface ITillClient
     // The printers holding tickets they cannot print, all of them each time: empty once
     // everything has printed.
     Task PrintersChanged(IReadOnlyList<PrinterProblem> printers);
+
+    // Punches came from a device, or a day was put right: who is in now is read again.
+    Task AttendanceChanged();
+}
+
+// HR's IAttendanceNotifier: to whoever sees HR, after punches are saved.
+internal sealed class AttendanceNotifier(IHubContext<TillHub, ITillClient> hub, ILogger<AttendanceNotifier> logger) : IAttendanceNotifier
+{
+    // Never throws: the punches are saved, and a screen that missed it reads again on its minute.
+    public async Task AttendanceChangedAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await hub.Clients.Group(TillHub.Attendance).AttendanceChanged();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not tell the HR screens about new punches; they read again within a minute");
+        }
+    }
 }
 
 // Ordering's ITillNotifier. OrderWorkflow calls it after every commit; the cloud listener and

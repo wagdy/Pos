@@ -100,6 +100,8 @@ public static class DependencyInjection
         services.AddScoped<OtantikPos.Hr.Domain.IDeviceCommandRepository, Hr.DeviceCommandRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IDeviceUserRepository, Hr.DeviceUserRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IDepartmentRepository, Hr.DepartmentRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IJobRoleRepository, Hr.JobRoleRepository>();
+        services.AddSingleton<Inventory.Application.Hr.IAttendanceDeviceLink, Hr.ZkTeco.ZkDeviceLink>();
         services.AddScoped<OtantikPos.Hr.Domain.IDailyRecordRepository, Hr.DailyRecordRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IPayrollAdjustmentRepository, Hr.PayrollAdjustmentRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IPayrollSlipRepository, Hr.PayrollSlipRepository>();

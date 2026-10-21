@@ -16,6 +16,20 @@ public interface IEmployeeRepository : IRepository<Employee>
 
     // Tracked: everyone in a department, left or not.
     Task<IReadOnlyList<Employee>> GetInDepartmentAsync(Guid departmentId, CancellationToken cancellationToken = default);
+
+    // Tracked: everyone holding a role, left or not.
+    Task<IReadOnlyList<Employee>> GetWithRoleAsync(Guid jobRoleId, CancellationToken cancellationToken = default);
+}
+
+public interface IJobRoleRepository : IRepository<JobRole>
+{
+    // Every department's, by name.
+    Task<IReadOnlyList<JobRole>> GetAllAsync(CancellationToken cancellationToken = default);
+
+    // Tracked: a department's.
+    Task<IReadOnlyList<JobRole>> GetInDepartmentAsync(Guid departmentId, CancellationToken cancellationToken = default);
+
+    void Remove(JobRole role);
 }
 
 public interface IDepartmentRepository : IRepository<Department>

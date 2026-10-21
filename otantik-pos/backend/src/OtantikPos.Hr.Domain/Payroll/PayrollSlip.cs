@@ -29,9 +29,10 @@ public enum PayrollSlipStatus
 // month's slip (BroughtForward there).
 //
 // A daily employee (EmploymentType.Daily) has no salary: their base pay is their daily wage for
-// each day worked, a day off and a holiday included. A day not worked earns nothing and costs
-// nothing, so nothing is absent; a day off worked is a day's wage, with no allowance besides. A
-// holiday worked earns its allowance on top, and lateness and overtime count as anyone's.
+// each day worked on a working day or a holiday. A day not worked earns nothing and costs
+// nothing, so nothing is absent. A day off worked is paid as anyone's (DaysOffWorkedPay): a day's
+// wage for half a shift or more, its hours for less. A holiday worked earns its allowance on top,
+// and lateness and overtime count as anyone's.
 public sealed record PayrollFigures(
     decimal MonthlySalary,
     int DaysInMonth,
@@ -130,14 +131,14 @@ public static class PayrollCalculator
         var daysInMonth = DateTime.DaysInMonth(month.Year, month.Month);
         var daily = employee.IsDaily;
         var daysWorked = Count(DayStatus.Worked) + Count(DayStatus.WorkedOnDayOff) + Count(DayStatus.WorkedOnHoliday);
-        var baseSalary = daily ? employee.DailyWage * daysWorked
+        var baseSalary = daily ? employee.DailyWage * (daysWorked - Count(DayStatus.WorkedOnDayOff))
             : employed.Count == daysInMonth ? employee.MonthlySalary
             : employee.MonthlySalary * employed.Count / daysInMonth;
         var overtime = counted.Sum(d => d?.OvertimeMinutes ?? 0);
         var shortMinutes = counted.Sum(d => d is null ? 0 : CountedShortMinutes(d));
         var absent = daily ? 0 : Count(DayStatus.Absent);
         var penaltyHours = counted.Sum(d => d?.PenaltyHours ?? 0);
-        var daysOffWorkedPay = daily ? 0 : counted
+        var daysOffWorkedPay = counted
             .Where(d => d?.Status == DayStatus.WorkedOnDayOff)
             .Sum(d => DayOffWorkedPay(employee, d!.WorkedMinutes));
         var holidaysWorked = counted.Where(d => d?.Status == DayStatus.WorkedOnHoliday).ToList();

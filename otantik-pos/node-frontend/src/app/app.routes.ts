@@ -244,7 +244,12 @@ export const routes: Routes = [
         canActivate: [permissionGuard(Permissions.HrView)],
         loadComponent: () => import('./features/hr/hr-shell').then((m) => m.HrShell),
         children: [
-          { path: '', pathMatch: 'full', redirectTo: 'employees' },
+          { path: '', pathMatch: 'full', redirectTo: 'now' },
+          {
+            // Who is in now, live from the attendance device.
+            path: 'now',
+            loadComponent: () => import('./features/hr/now-page').then((m) => m.NowPage),
+          },
           {
             path: 'employees',
             loadComponent: () => import('./features/hr/employees-page').then((m) => m.EmployeesPage),

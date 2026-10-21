@@ -1001,6 +1001,9 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
+                    b.Property<Guid?>("JobRoleId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("JobTitle")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -1039,11 +1042,43 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .IsUnique()
                         .HasFilter("\"DeviceUserId\" IS NOT NULL");
 
+                    b.HasIndex("JobRoleId");
+
                     b.HasIndex("StaffMemberId")
                         .IsUnique()
                         .HasFilter("\"StaffMemberId\" IS NOT NULL");
 
                     b.ToTable("Employees", "hr");
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Employees.JobRole", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("DepartmentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DepartmentId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("JobRoles", "hr");
                 });
 
             modelBuilder.Entity("OtantikPos.Hr.Domain.Payroll.PayrollAdjustment", b =>
@@ -2878,6 +2913,20 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                 });
 
             modelBuilder.Entity("OtantikPos.Hr.Domain.Employees.Employee", b =>
+                {
+                    b.HasOne("OtantikPos.Hr.Domain.Employees.Department", null)
+                        .WithMany()
+                        .HasForeignKey("DepartmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OtantikPos.Hr.Domain.Employees.JobRole", null)
+                        .WithMany()
+                        .HasForeignKey("JobRoleId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Employees.JobRole", b =>
                 {
                     b.HasOne("OtantikPos.Hr.Domain.Employees.Department", null)
                         .WithMany()

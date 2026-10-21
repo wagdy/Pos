@@ -1,6 +1,7 @@
 import { DecimalPipe } from '@angular/common';
 import { Component, ElementRef, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { MatButtonModule } from '@angular/material/button';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatCheckboxModule } from '@angular/material/checkbox';
@@ -11,7 +12,7 @@ import { MatSelectModule } from '@angular/material/select';
 import { firstValueFrom } from 'rxjs';
 import { ApprovalResult } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
-import { Department, Employee, EmployeeInput, EmploymentType, HrApi, WeekDay, weekDays } from '../../core/hr/hr.api';
+import { Department, Employee, EmployeeInput, EmploymentType, HrApi, JobRole, WeekDay, weekDays } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { FormChecks, FormProblem } from '../costing/form-checks';
 
@@ -36,6 +37,7 @@ export interface EmployeeDialogData {
   imports: [
     DecimalPipe,
     FormsModule,
+    MatAutocompleteModule,
     MatButtonModule,
     MatButtonToggleModule,
     MatCheckboxModule,
@@ -60,11 +62,6 @@ export interface EmployeeDialogData {
           <mat-error>{{ checks.message('Name') }}</mat-error>
         </mat-form-field>
         <mat-form-field>
-          <mat-label>Role · الوظيفة</mat-label>
-          <input matInput [(ngModel)]="jobTitle" maxlength="100" aria-label="Role" placeholder="Chef, waiter, cashier" [errorStateMatcher]="checks.field('Role')" />
-          <mat-error>{{ checks.message('Role') }}</mat-error>
-        </mat-form-field>
-        <mat-form-field>
           <mat-label>Department · القسم</mat-label>
           <mat-select [(ngModel)]="departmentId" aria-label="Department" [errorStateMatcher]="checks.field('Department')">
             @for (d of data.departments; track d.id) {
@@ -72,6 +69,29 @@ export interface EmployeeDialogData {
             }
           </mat-select>
           <mat-error>{{ checks.message('Department') }}</mat-error>
+        </mat-form-field>
+        <mat-form-field>
+          <mat-label>Role · الوظيفة</mat-label>
+          <input
+            matInput
+            [(ngModel)]="jobTitle"
+            [matAutocomplete]="roleList"
+            maxlength="100"
+            aria-label="Role"
+            placeholder="Chef, waiter, cashier"
+            [errorStateMatcher]="checks.field('Role')"
+          />
+          <mat-autocomplete #roleList="matAutocomplete">
+            @for (r of roles(); track r.id) {
+              <mat-option [value]="r.name">{{ r.name }}</mat-option>
+            }
+          </mat-autocomplete>
+          @if (jobTitle.trim() && !role() && department(); as d) {
+            <mat-hint>A new role in {{ d.name }}</mat-hint>
+          } @else {
+            <mat-hint>One of the department's roles, or a new one</mat-hint>
+          }
+          <mat-error>{{ checks.message('Role') }}</mat-error>
         </mat-form-field>
         <div class="pay-type">
           <span class="label">Paid · نوع العمالة</span>
@@ -272,6 +292,22 @@ export class EmployeeDialog {
 
   protected readonly checks = new FormChecks(() => this.problems());
 
+  protected department(): Department | undefined {
+    return this.data.departments.find((d) => d.id === this.departmentId);
+  }
+
+  // The department's roles, those matching what is typed.
+  protected roles(): JobRole[] {
+    const typed = this.jobTitle.trim().toLowerCase();
+    return (this.department()?.roles ?? []).filter((r) => r.name.toLowerCase().includes(typed));
+  }
+
+  // The department's role of the name typed, when it has one.
+  protected role(): JobRole | undefined {
+    const typed = this.jobTitle.trim().toLowerCase();
+    return this.department()?.roles.find((r) => r.name.toLowerCase() === typed);
+  }
+
   // When the nine hours end: "19:00", or "01:00 the next day".
   protected shiftEnd(): string | null {
     const match = /^(\d{2}):(\d{2})$/.exec(this.shiftStart ?? '');
@@ -320,7 +356,8 @@ export class EmployeeDialog {
     const input: EmployeeInput = {
       requestId: this.requestId,
       name: this.name.trim(),
-      jobTitle: this.jobTitle.trim(),
+      jobTitle: this.role()?.name ?? this.jobTitle.trim(),
+      jobRoleId: this.role()?.id ?? null,
       employmentType: this.employmentType,
       monthlySalary: this.employmentType === 'Monthly' ? this.salary! : 0,
       dailyWage: this.employmentType === 'Daily' ? this.salary! : 0,

@@ -376,6 +376,63 @@ public class HrApiTests
     }
 
     [Fact]
+    public async Task Job_roles_are_a_departments_and_the_employees_titles_follow_them()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var today = await TodayAsync(manager);
+        async Task<JsonElement> DepartmentNamed(string name) =>
+            (await Json(await accountant.GetAsync("/api/hr/departments", Cancel))).EnumerateArray().Single(d => d.GetProperty("name").GetString() == name);
+        async Task<JsonElement> Employee(Guid id) =>
+            (await Json(await accountant.GetAsync("/api/hr/employees", Cancel))).EnumerateArray().Single(e => e.GetProperty("id").GetGuid() == id);
+
+        // A title typed with no role becomes the department's role of that name.
+        var hassan = await HireAsync(manager, "Hassan", today.AddMonths(-2));
+        var chef = (await DepartmentNamed("General")).GetProperty("roles").EnumerateArray().Single();
+        Assert.Equal(("Chef", 1), (chef.GetProperty("name").GetString(), chef.GetProperty("employed").GetInt32()));
+        Assert.Equal(chef.GetProperty("id").GetGuid(), (await Employee(hassan)).GetProperty("jobRoleId").GetGuid());
+
+        // Roles are a manager's to add, one name to a department.
+        var kitchen = Guid.NewGuid();
+        await Json(await manager.PutAsJsonAsync($"/api/hr/departments/{kitchen}", new { name = "Kitchen" }, Cancel));
+        var helper = Guid.NewGuid();
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.PutAsJsonAsync($"/api/hr/departments/{kitchen}/roles/{helper}", new { name = "Helper" }, Cancel)).StatusCode);
+        await Json(await manager.PutAsJsonAsync($"/api/hr/departments/{kitchen}/roles/{helper}", new { name = "Helper" }, Cancel));
+        Assert.Contains("already", await Problem(await manager.PutAsJsonAsync($"/api/hr/departments/{kitchen}/roles/{Guid.NewGuid()}", new { name = " helper " }, Cancel)));
+
+        // A role is one of the employee's own department's.
+        object Details(Guid department, Guid role, string title) => new
+        {
+            requestId = Guid.NewGuid(), name = "Hassan", jobTitle = title, monthlySalary = 5_400, departmentId = department, jobRoleId = role, shiftStartsAt = "10:00:00",
+            daysOff = Array.Empty<string>(), hiredOn = Iso(today.AddMonths(-2)),
+        };
+        Assert.Contains("another department's", await Problem(await manager.PutAsJsonAsync($"/api/hr/employees/{hassan}", Details(Department.GeneralId, helper, "Helper"), Cancel)));
+        await Json(await manager.PutAsJsonAsync($"/api/hr/employees/{hassan}", Details(kitchen, helper, "Helper"), Cancel));
+        Assert.Equal(("Helper", kitchen), ((await Employee(hassan)).GetProperty("jobTitle").GetString(), (await Employee(hassan)).GetProperty("departmentId").GetGuid()));
+
+        // Renamed for whoever holds it.
+        await Json(await manager.PutAsJsonAsync($"/api/hr/departments/{kitchen}/roles/{helper}", new { name = "Kitchen helper" }, Cancel));
+        Assert.Equal("Kitchen helper", (await Employee(hassan)).GetProperty("jobTitle").GetString());
+
+        // Deleted once its holders take another of the department's.
+        var cook = Guid.NewGuid();
+        await Json(await manager.PutAsJsonAsync($"/api/hr/departments/{kitchen}/roles/{cook}", new { name = "Cook" }, Cancel));
+        Assert.Contains("say which role", await Problem(await manager.DeleteAsync($"/api/hr/roles/{helper}", Cancel)));
+        Assert.Contains("same department's", await Problem(await manager.DeleteAsync($"/api/hr/roles/{helper}?moveTo={chef.GetProperty("id").GetGuid()}", Cancel)));
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.DeleteAsync($"/api/hr/roles/{helper}?moveTo={cook}", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await manager.DeleteAsync($"/api/hr/roles/{helper}?moveTo={cook}", Cancel)).StatusCode);
+        Assert.Equal(("Cook", cook), ((await Employee(hassan)).GetProperty("jobTitle").GetString(), (await Employee(hassan)).GetProperty("jobRoleId").GetGuid()));
+
+        // The kitchen deleted: its people to General, its Cook role with them.
+        Assert.Equal(HttpStatusCode.NoContent, (await manager.DeleteAsync($"/api/hr/departments/{kitchen}?moveTo={Department.GeneralId}", Cancel)).StatusCode);
+        var general = await DepartmentNamed("General");
+        Assert.Equal(["Chef", "Cook"], general.GetProperty("roles").EnumerateArray().Select(r => r.GetProperty("name").GetString()).Order());
+        Assert.Equal((Department.GeneralId, cook, "Cook"), ((await Employee(hassan)).GetProperty("departmentId").GetGuid(),
+            (await Employee(hassan)).GetProperty("jobRoleId").GetGuid(), (await Employee(hassan)).GetProperty("jobTitle").GetString()));
+    }
+
+    [Fact]
     public async Task Flexible_hours_have_no_shift_to_be_late_for_and_overtime_past_nine_hours()
     {
         await using var api = await TestApi.StartAsync();
@@ -482,6 +539,129 @@ public class HrApiTests
     }
 
     [Fact]
+    public async Task Who_is_in_now_is_each_ones_scans_today_paired_in_order()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var today = await TodayAsync(manager);
+        var hassan = await HireAsync(manager, "Hassan", today.AddMonths(-2));
+        var mona = await HireAsync(manager, "Mona", today.AddMonths(-2));
+        var karim = Guid.NewGuid();
+        await Json(await manager.PutAsJsonAsync($"/api/hr/employees/{karim}", new
+        {
+            requestId = Guid.NewGuid(), name = "Karim", jobTitle = "Delivery", monthlySalary = 4_000, shiftStartsAt = (string?)null, daysOff = Array.Empty<string>(),
+            hiredOn = Iso(today.AddMonths(-2)),
+        }, Cancel));
+
+        // Their day now: a 10:00 shift's runs from 04:00, as flexible hours' does.
+        var now = DateTime.Now;
+        var day = DateOnly.FromDateTime(now.AddHours(-4));
+        var dayStarts = day.ToDateTime(new TimeOnly(4, 0));
+        var punchedIn = now.AddMinutes(-2) < dayStarts ? dayStarts.AddSeconds(30) : now.AddMinutes(-2);
+        string At(DateTime time) => time.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
+        async Task Punch(DateTime time) => await Json(await manager.PostAsJsonAsync("/api/hr/punches", new
+        {
+            punchId = Guid.NewGuid(), employeeId = hassan, punchedAt = At(time), reason = "Device down",
+        }, Cancel));
+        async Task<Dictionary<string, JsonElement>> Now() => (await Json(await accountant.GetAsync("/api/hr/attendance/now", Cancel)))
+            .GetProperty("employees").EnumerateArray().ToDictionary(e => e.GetProperty("employee").GetProperty("name").GetString()!);
+
+        await Punch(punchedIn);
+        var first = await Now();
+        Assert.Equal(("In", At(punchedIn), Iso(day)), (first["Hassan"].GetProperty("state").GetString(), first["Hassan"].GetProperty("since").GetString(),
+            first["Hassan"].GetProperty("day").GetString()));
+        // No punch yet: late once their 10:00 has passed; on flexible hours never late.
+        Assert.Equal(now > day.ToDateTime(new TimeOnly(10, 0)) ? "Late" : "NotArrived", first["Mona"].GetProperty("state").GetString());
+        Assert.Equal(("NotArrived", JsonValueKind.Null), (first["Karim"].GetProperty("state").GetString(), first["Karim"].GetProperty("dueAt").ValueKind));
+
+        // A finger put on twice is one scan: in still. A second scan past that: out. A day off
+        // marked: off.
+        await Punch(punchedIn.AddMinutes(1));
+        Assert.Equal("In", (await Now())["Hassan"].GetProperty("state").GetString());
+        await Punch(punchedIn.AddMinutes(5));
+        Assert.Equal(HttpStatusCode.NoContent, (await manager.PutAsJsonAsync($"/api/hr/employees/{mona}/days/{Iso(day)}", new { kind = "DayOff" }, Cancel)).StatusCode);
+        var second = await Now();
+        Assert.Equal(("Left", At(punchedIn.AddMinutes(5))), (second["Hassan"].GetProperty("state").GetString(), second["Hassan"].GetProperty("since").GetString()));
+        Assert.Equal("Off", second["Mona"].GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task The_device_port_answers_only_the_device()
+    {
+        // The test server takes every request on port 0: as if each came in on the device's port.
+        await using var api = await TestApi.StartAsync(new Dictionary<string, string> { ["Attendance:DevicePort"] = "0" });
+        var device = api.Anonymous();
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await device.GetAsync("/iclock/cdata?SN=CQZ7232060112&options=all", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await device.GetAsync("/api/auth/staff", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await device.GetAsync("/", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await device.GetAsync("/health", Cancel)).StatusCode);
+    }
+
+    [Fact]
+    public async Task The_device_is_reached_on_its_own_port_and_synced_at_once()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var today = await TodayAsync(manager);
+        var day = today.AddDays(-3);
+        await HireAsync(manager, "Hassan", today.AddMonths(-2), "7");
+        using var k40 = new OtantikPos.Node.Infrastructure.Tests.FakeZkDevice();
+        k40.Users.AddRange([(1, "7", "Hassan"), (2, "12", "منى")]);
+        k40.Punches.AddRange([
+            ("7", day.ToDateTime(new TimeOnly(10, 4)), 0, 1), ("7", day.ToDateTime(new TimeOnly(19, 30)), 1, 1), ("12", day.ToDateTime(new TimeOnly(11, 0)), 0, 15),
+        ]);
+        object At(string address, int port) => new { address, port };
+
+        // A manager's: the till reaches out for it.
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.PostAsJsonAsync("/api/hr/devices/test", At("127.0.0.1", k40.Port), Cancel)).StatusCode);
+        var test = await Json(await manager.PostAsJsonAsync("/api/hr/devices/test", At("127.0.0.1", k40.Port), Cancel));
+        Assert.Equal((true, "CQZ7232060112", "K40 Pro", 2, 3), (test.GetProperty("reached").GetBoolean(), test.GetProperty("serialNumber").GetString(),
+            test.GetProperty("model").GetString(), test.GetProperty("users").GetInt32(), test.GetProperty("records").GetInt32()));
+        Assert.Equal("Connected to K40 Pro, serial CQZ7232060112: 2 users and 3 punches on it.", test.GetProperty("message").GetString());
+
+        // Nothing there, or not on a local network: said plainly.
+        var closed = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        closed.Start();
+        var nothing = ((IPEndPoint)closed.LocalEndpoint).Port;
+        closed.Stop();
+        var refused = await Json(await manager.PostAsJsonAsync("/api/hr/devices/test", At("127.0.0.1", nothing), Cancel));
+        Assert.False(refused.GetProperty("reached").GetBoolean());
+        Assert.Contains($"nothing listens on port {nothing}", refused.GetProperty("message").GetString());
+        Assert.Contains("not on a local network", await Problem(await manager.PostAsJsonAsync("/api/hr/devices/test", At("8.8.8.8", 4370), Cancel)));
+        Assert.Contains("IP address", await Problem(await manager.PostAsJsonAsync("/api/hr/devices/sync", At("kitchen-door", 4370), Cancel)));
+        Assert.Contains($"nothing listens on port {nothing}", await Problem(await manager.PostAsJsonAsync("/api/hr/devices/sync", At("127.0.0.1", nothing), Cancel)));
+
+        // Synced: the device approved as it is new, its users listed, its punches the day's.
+        var sync = await Json(await manager.PostAsJsonAsync("/api/hr/devices/sync", At("127.0.0.1", k40.Port), Cancel));
+        Assert.Equal((true, "K40 Pro (127.0.0.1)", 2, 1, 3, 3), (sync.GetProperty("newDevice").GetBoolean(), sync.GetProperty("deviceName").GetString(),
+            sync.GetProperty("users").GetInt32(), sync.GetProperty("usersNotOnTheTill").GetInt32(), sync.GetProperty("punches").GetInt32(), sync.GetProperty("newPunches").GetInt32()));
+        var device = (await Json(await manager.GetAsync("/api/hr/devices", Cancel))).EnumerateArray().Single();
+        Assert.Equal((true, "127.0.0.1", "Boss"), (device.GetProperty("isApproved").GetBoolean(), device.GetProperty("lastAddress").GetString(), device.GetProperty("approvedBy").GetString()));
+        var users = (await Json(await accountant.GetAsync("/api/hr/device-users", Cancel))).EnumerateArray().ToDictionary(u => u.GetProperty("deviceUserId").GetString()!);
+        Assert.Equal(("Hassan", "منى", 1), (users["7"].GetProperty("employeeName").GetString(), users["12"].GetProperty("name").GetString(), users["12"].GetProperty("waitingPunches").GetInt32()));
+        var hassanDay = (await Json(await accountant.GetAsync($"/api/hr/attendance?date={Iso(day)}", Cancel))).GetProperty("employees").EnumerateArray()
+            .Single(e => e.GetProperty("employee").GetProperty("name").GetString() == "Hassan").GetProperty("day");
+        Assert.Equal(("Worked", 4, 2), (hassanDay.GetProperty("status").GetString(), hassanDay.GetProperty("lateMinutes").GetInt32(), hassanDay.GetProperty("punches").GetArrayLength()));
+
+        // Synced again, as ADMS sends them again: nothing kept twice; a new punch kept.
+        k40.Punches.Add(("7", today.ToDateTime(new TimeOnly(10, 0)), 0, 1));
+        sync = await Json(await manager.PostAsJsonAsync("/api/hr/devices/sync", At("127.0.0.1", k40.Port), Cancel));
+        Assert.Equal((false, 4, 1), (sync.GetProperty("newDevice").GetBoolean(), sync.GetProperty("punches").GetInt32(), sync.GetProperty("newPunches").GetInt32()));
+
+        // One that called over ADMS and waits: approved by its first sync, and it keeps its serial's place.
+        using var door = new OtantikPos.Node.Infrastructure.Tests.FakeZkDevice { SerialNumber = "CQZ0000000002", Model = "K40" };
+        Assert.Equal(HttpStatusCode.Forbidden, (await api.Anonymous().GetAsync("/iclock/cdata?SN=CQZ0000000002&options=all", Cancel)).StatusCode);
+        sync = await Json(await manager.PostAsJsonAsync("/api/hr/devices/sync", At("127.0.0.1", door.Port), Cancel));
+        Assert.Equal((false, "K40 (127.0.0.1)", 0), (sync.GetProperty("newDevice").GetBoolean(), sync.GetProperty("deviceName").GetString(), sync.GetProperty("punches").GetInt32()));
+        var both = (await Json(await manager.GetAsync("/api/hr/devices", Cancel))).EnumerateArray().ToList();
+        Assert.Equal(2, both.Count);
+        Assert.All(both, d => Assert.True(d.GetProperty("isApproved").GetBoolean()));
+    }
+
+    [Fact]
     public async Task The_attendance_device_is_refused_until_approved_and_its_punches_make_the_day()
     {
         await using var api = await TestApi.StartAsync();
@@ -505,6 +685,11 @@ public class HrApiTests
         var deviceId = waiting.GetProperty("id").GetGuid();
         Assert.Equal(HttpStatusCode.Forbidden, (await accountant.PostAsJsonAsync($"/api/hr/devices/{deviceId}/approve", new { name = "Door" }, Cancel)).StatusCode);
         await Json(await manager.PostAsJsonAsync($"/api/hr/devices/{deviceId}/approve", new { name = "Kitchen door" }, Cancel));
+
+        // Where it reaches the till: no device port here, and this machine's addresses.
+        var connection = await Json(await accountant.GetAsync("/api/hr/devices/connection", Cancel));
+        Assert.Equal(JsonValueKind.Null, connection.GetProperty("devicePort").ValueKind);
+        Assert.Equal(JsonValueKind.Array, connection.GetProperty("addresses").ValueKind);
 
         var options = await (await device.GetAsync("/iclock/cdata?SN=CQZ7232060112&options=all", Cancel)).Content.ReadAsStringAsync(Cancel);
         Assert.StartsWith("GET OPTION FROM: CQZ7232060112\r\nATTLOGStamp=None\r\n", options);
