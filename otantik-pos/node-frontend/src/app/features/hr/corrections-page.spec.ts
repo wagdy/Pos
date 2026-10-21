@@ -33,7 +33,7 @@ function suspendedDay(date: string, next: string, punches: Punch[]): AttendanceD
   return {
     date, status: 'Suspended', shiftStartsAt: `${date}T16:00:00`, shiftEndsAt: `${next}T01:00:00`, firstIn: punches[0].punchedAt, lastOut: null,
     workedMinutes: 0, lateMinutes: 0, earlyLeaveMinutes: 0, awayMinutes: 0, overtimeMinutes: 0, shortMinutes: 0, isWeeklyDayOff: false, mark: null,
-    markNotes: null, punches, penaltyHours: 0, penaltyReason: null, penaltySetBy: null,
+    markNotes: null, punches, penaltyHours: 0, penaltyReason: null, penaltySetBy: null, holidayName: null,
   };
 }
 

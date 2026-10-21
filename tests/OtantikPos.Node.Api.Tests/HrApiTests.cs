@@ -266,6 +266,62 @@ public class HrApiTests
     }
 
     [Fact]
+    public async Task A_public_holiday_is_everyones_paid_day_off_and_worked_earns_a_days_pay()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var today = await TodayAsync(manager);
+        var day = today.AddDays(-3);
+        var month = new DateOnly(day.Year, day.Month, 1);
+        var hassan = await HireAsync(manager, "Hassan", today.AddMonths(-2));
+        await HireAsync(manager, "Mona", today.AddMonths(-2));
+
+        // A manager's to enter, one holiday to a day.
+        object Holiday(string name, DateOnly first, DateOnly last) => new { name, firstDay = Iso(first), lastDay = Iso(last) };
+        var id = Guid.NewGuid();
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.PutAsJsonAsync($"/api/hr/holidays/{id}", Holiday("Armed Forces Day", day, day), Cancel)).StatusCode);
+        var added = await Json(await manager.PutAsJsonAsync($"/api/hr/holidays/{id}", Holiday("Armed Forces Day", day, day), Cancel));
+        Assert.Equal(("Armed Forces Day", 1), (added.GetProperty("name").GetString(), added.GetProperty("days").GetInt32()));
+        Assert.Contains("already", await Problem(await manager.PutAsJsonAsync($"/api/hr/holidays/{Guid.NewGuid()}", Holiday("Eid", day.AddDays(-1), day), Cancel)));
+        var listed = (await Json(await accountant.GetAsync($"/api/hr/holidays?year={day.Year}", Cancel))).EnumerateArray().Single();
+        Assert.Equal(Iso(day), listed.GetProperty("firstDay").GetString());
+
+        // Hassan works it, half an hour late: measured against his shift, and a day's pay on top.
+        foreach (var time in new[] { "10:30:00", "19:00:00" })
+        {
+            await Json(await manager.PostAsJsonAsync("/api/hr/punches", new
+            {
+                punchId = Guid.NewGuid(), employeeId = hassan, punchedAt = $"{Iso(day)}T{time}", reason = "Holiday shift",
+            }, Cancel));
+        }
+
+        async Task<Dictionary<string, JsonElement>> Days() => (await Json(await accountant.GetAsync($"/api/hr/attendance?date={Iso(day)}", Cancel)))
+            .GetProperty("employees").EnumerateArray().ToDictionary(e => e.GetProperty("employee").GetProperty("name").GetString()!, e => e.GetProperty("day"));
+        var days = await Days();
+        Assert.Equal(("WorkedOnHoliday", 30, "Armed Forces Day"), (days["Hassan"].GetProperty("status").GetString(),
+            days["Hassan"].GetProperty("lateMinutes").GetInt32(), days["Hassan"].GetProperty("holidayName").GetString()));
+        // Mona stays home: a holiday, not an absence.
+        Assert.Equal("Holiday", days["Mona"].GetProperty("status").GetString());
+        var slip = (await Json(await accountant.GetAsync($"/api/hr/payroll?month={Iso(month)}", Cancel))).GetProperty("slips").EnumerateArray()
+            .Single(s => s.GetProperty("employee").GetProperty("name").GetString() == "Hassan").GetProperty("figures");
+        Assert.Equal((1, 180m), (slip.GetProperty("holidaysWorked").GetInt32(), slip.GetProperty("holidaysWorkedPay").GetDecimal()));
+
+        // Taken off, a manager's: the day is a working day again.
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.DeleteAsync($"/api/hr/holidays/{id}", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await manager.DeleteAsync($"/api/hr/holidays/{id}", Cancel)).StatusCode);
+        Assert.Equal("Absent", (await Days())["Mona"].GetProperty("status").GetString());
+
+        // A month whose pay is finalized keeps its holidays as they were.
+        var lastMonth = new DateOnly(today.Year, today.Month, 1).AddMonths(-1);
+        var lastDay = lastMonth.AddMonths(1).AddDays(-1);
+        var ali = await HireAsync(manager, "Ali", lastDay);
+        Assert.Equal(HttpStatusCode.NoContent, (await manager.PutAsJsonAsync($"/api/hr/employees/{ali}/days/{Iso(lastDay)}", new { kind = "Leave" }, Cancel)).StatusCode);
+        await Json(await manager.PostAsync($"/api/hr/payroll/{ali}/finalize?month={Iso(lastMonth)}", null, Cancel));
+        Assert.Contains("is finalized", await Problem(await manager.PutAsJsonAsync($"/api/hr/holidays/{Guid.NewGuid()}", Holiday("Late one", lastDay, lastDay), Cancel)));
+    }
+
+    [Fact]
     public async Task The_attendance_device_is_refused_until_approved_and_its_punches_make_the_day()
     {
         await using var api = await TestApi.StartAsync();

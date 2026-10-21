@@ -50,8 +50,19 @@ export interface EmployeeInput {
   reason: string | null;
 }
 
-// Suspended: a punch-in left 18 hours without its punch-out, waiting for a manager.
-export type DayStatus = 'Open' | 'Worked' | 'Suspended' | 'Absent' | 'DayOff' | 'Leave' | 'WorkedOnDayOff' | 'NotEmployed';
+// Suspended: a punch-in left 18 hours without its punch-out, waiting for a manager. Holiday: a
+// public holiday, everyone's paid day off; WorkedOnHoliday earns a holiday allowance.
+export type DayStatus =
+  | 'Open'
+  | 'Worked'
+  | 'Suspended'
+  | 'Absent'
+  | 'DayOff'
+  | 'Leave'
+  | 'WorkedOnDayOff'
+  | 'NotEmployed'
+  | 'Holiday'
+  | 'WorkedOnHoliday';
 
 export const dayStatusLabels: Record<DayStatus, { en: string; ar: string }> = {
   Open: { en: 'Today so far', ar: 'جارٍ' },
@@ -62,6 +73,8 @@ export const dayStatusLabels: Record<DayStatus, { en: string; ar: string }> = {
   Leave: { en: 'Leave', ar: 'إجازة' },
   WorkedOnDayOff: { en: 'Worked a day off', ar: 'عمل يوم راحة' },
   NotEmployed: { en: 'Not employed', ar: 'غير معيّن' },
+  Holiday: { en: 'Public holiday', ar: 'عطلة رسمية' },
+  WorkedOnHoliday: { en: 'Worked a holiday', ar: 'عمل يوم عطلة' },
 };
 
 // WorkingDay: a weekly day off worked in exchange for another, counted as a normal shift.
@@ -104,6 +117,8 @@ export interface AttendanceDay {
   penaltyHours: number;
   penaltyReason: string | null;
   penaltySetBy: string | null;
+  // The public holiday the day is, by its name.
+  holidayName: string | null;
 }
 
 export interface AttendancePolicy {
@@ -177,8 +192,9 @@ export const adjustmentLabels: Record<AdjustmentKind, { en: string; ar: string }
 };
 
 // Every figure of a month's slip. Net = base + incentives + leave allowances + days off worked +
-// overtime − advances − last month's shortfall − lateness − absence. Days off worked earn their
-// allowance by themselves: a day's pay from half a shift, their hours before.
+// holidays worked + overtime − advances − last month's shortfall − lateness − absence −
+// penalties. Days off and holidays worked earn their allowance by themselves: a day's pay from
+// half a shift, their hours before.
 export interface PayrollFigures {
   monthlySalary: number;
   daysInMonth: number;
@@ -202,6 +218,9 @@ export interface PayrollFigures {
   // A manager's administrative penalties, in hours, and their deduction at the hourly rate.
   administrativePenaltyHours: number;
   administrativePenalty: number;
+  // Public holidays worked, and their holiday allowance.
+  holidaysWorked: number;
+  holidaysWorkedPay: number;
   gross: number;
   deductions: number;
   net: number;
@@ -270,8 +289,52 @@ export interface PayrollMonth {
     wagesCost: number;
     salaryPaid: number;
     daysOffWorkedPay: number;
+    holidaysWorkedPay: number;
   };
   slips: PayrollSlip[];
+}
+
+// A public holiday (عطلة رسمية): everyone's paid day off, from its first day to its last.
+export interface PublicHoliday {
+  id: string;
+  name: string;
+  firstDay: string;
+  lastDay: string;
+  days: number;
+  setBy: string;
+  setAtUtc: string;
+}
+
+// Egypt's official holidays that fall on the same date each year, and Sham El-Nessim, the Monday
+// after Coptic Easter: offered for a year, to be entered as the government announces them (it
+// moves some to a Thursday). The Eids, Arafat, the Hijri New Year and the Prophet's Birthday
+// follow the moon, and are entered once announced.
+export function egyptFixedHolidays(year: number): { name: string; ar: string; day: string }[] {
+  const on = (month: number, date: number) => `${year}-${String(month).padStart(2, '0')}-${String(date).padStart(2, '0')}`;
+  return [
+    { name: 'Coptic Christmas', ar: 'عيد الميلاد المجيد', day: on(1, 7) },
+    { name: 'January 25 Revolution and Police Day', ar: 'ثورة 25 يناير وعيد الشرطة', day: on(1, 25) },
+    { name: 'Sinai Liberation Day', ar: 'عيد تحرير سيناء', day: on(4, 25) },
+    { name: 'Sham El-Nessim', ar: 'شم النسيم', day: shamElNessim(year) },
+    { name: 'Labour Day', ar: 'عيد العمال', day: on(5, 1) },
+    { name: 'June 30 Revolution', ar: 'ثورة 30 يونيو', day: on(6, 30) },
+    { name: 'July 23 Revolution', ar: 'ثورة 23 يوليو', day: on(7, 23) },
+    { name: 'Armed Forces Day', ar: 'عيد القوات المسلحة', day: on(10, 6) },
+  ].sort((a, b) => a.day.localeCompare(b.day));
+}
+
+// The Monday after Orthodox Easter: Easter by the Julian calendar (Meeus), moved to the Gregorian
+// one, 13 days on from 1900 to 2099.
+export function shamElNessim(year: number): string {
+  const a = year % 4;
+  const b = year % 7;
+  const c = year % 19;
+  const d = (19 * c + 15) % 30;
+  const e = (2 * a + 4 * b - d + 34) % 7;
+  const month = Math.floor((d + e + 114) / 31);
+  const date = ((d + e + 114) % 31) + 1;
+  const monday = new Date(Date.UTC(year, month - 1, date + 13 + 1));
+  return monday.toISOString().slice(0, 10);
 }
 
 @Injectable({ providedIn: 'root' })
@@ -338,6 +401,19 @@ export class HrApi {
 
   penalties(month: string): Observable<AdministrativePenalty[]> {
     return this.http.get<AdministrativePenalty[]>('/api/hr/penalties', { params: { month } });
+  }
+
+  holidays(year: number): Observable<PublicHoliday[]> {
+    return this.http.get<PublicHoliday[]>('/api/hr/holidays', { params: { year } });
+  }
+
+  // Added under this id, or changed: a manager's.
+  saveHoliday(id: string, name: string, firstDay: string, lastDay: string): Observable<PublicHoliday> {
+    return this.http.put<PublicHoliday>(`/api/hr/holidays/${id}`, { name, firstDay, lastDay });
+  }
+
+  deleteHoliday(id: string): Observable<void> {
+    return this.http.delete<void>(`/api/hr/holidays/${id}`);
   }
 
   settings(): Observable<AttendancePolicy> {

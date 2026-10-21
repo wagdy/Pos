@@ -35,13 +35,14 @@ describe('the HR navigation', () => {
       ['payroll', 'page'],
       ['payroll/:employeeId', 'page'],
       ['corrections', 'page'],
+      ['holidays', 'page'],
       ['devices', 'page'],
     ]);
     // Advances in Financials are HR's too: guarded the same way.
     expect(find(find(routes, 'financials')!.children, 'advances')!.canActivate?.length).toBe(1);
   });
 
-  it('has a tab each for the employees, attendance, its corrections, payroll and the attendance devices, counting the days waiting', async () => {
+  it('has a tab each for the employees, attendance, its corrections, payroll, holidays and the attendance devices, counting the days waiting', async () => {
     const count = signal(0);
     const refresh = vi.fn();
     TestBed.configureTestingModule({ providers: [provideRouter([]), { provide: SuspendedCount, useValue: { count, refresh } }] });
@@ -51,7 +52,7 @@ describe('the HR navigation', () => {
     const el = fixture.nativeElement as HTMLElement;
 
     expect(text(el.querySelector('h1')!)).toBe('HR & Payroll الموارد البشرية والرواتب');
-    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('href'))).toEqual(['/employees', '/attendance', '/corrections', '/payroll', '/devices']);
+    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('href'))).toEqual(['/employees', '/attendance', '/corrections', '/payroll', '/holidays', '/devices']);
     expect(refresh).toHaveBeenCalled();
     expect(el.querySelector('.count')).toBeNull();
 

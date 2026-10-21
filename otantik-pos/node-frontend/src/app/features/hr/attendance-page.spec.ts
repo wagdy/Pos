@@ -35,7 +35,7 @@ function day(date: string, extra: Partial<AttendanceDay> = {}): AttendanceDay {
     date, status: 'Worked', shiftStartsAt: `${date}T16:00:00`, shiftEndsAt: `${tomorrow}T01:00:00`, firstIn: `${date}T16:12:00`,
     lastOut: `${tomorrow}T01:20:00`, workedMinutes: 548, lateMinutes: 12, earlyLeaveMinutes: 0, awayMinutes: 0, overtimeMinutes: 20, shortMinutes: 12,
     isWeeklyDayOff: false, mark: null, markNotes: null, punches: [punch('p1', `${date}T16:12:00`), punch('p2', `${tomorrow}T01:20:00`)],
-    penaltyHours: 0, penaltyReason: null, penaltySetBy: null, ...extra,
+    penaltyHours: 0, penaltyReason: null, penaltySetBy: null, holidayName: null, ...extra,
   };
 }
 
@@ -124,7 +124,7 @@ describe('the attendance', () => {
 
     expect(attendance).toHaveBeenCalledWith('2026-09-21');
     expect([...el.querySelectorAll('.totals .chip')].map(text)).toEqual([
-      '1 came in · حضور', '1 late · تأخير', '1 absent · غياب', '0 suspended · موقوف للمراجعة', '0 off or on leave · راحة وإجازات', '20m overtime · إضافي',
+      '1 came in · حضور', '1 late · تأخير', '1 absent · غياب', '0 suspended · موقوف للمراجعة', '0 off, on leave or a holiday · راحة وإجازات', '20m overtime · إضافي',
     ]);
     const rows = [...el.querySelectorAll('tbody tr')];
     expect(cells(rows[0])).toEqual(['16:00–01:00 +1', '16:12', '01:20 +1', '9h 08m', '12m', '—', '—', '20m']);
@@ -201,6 +201,21 @@ describe('the attendance', () => {
     expect(resolveDay).toHaveBeenCalledWith('hassan', '2026-09-21', '2026-09-22T01:00:00', 'Forgot to scan out');
     expect(notify.info).toHaveBeenCalledWith('Punch-out entered.');
     expect(suspended.refresh).toHaveBeenCalled();
+  });
+
+  it('says when the day is a public holiday: worked by some, a paid day off for the rest', async () => {
+    attendance.mockReturnValue(of({
+      ...report,
+      employees: [
+        { employee: hassan, day: day('2026-10-06', { status: 'WorkedOnHoliday', holidayName: 'Armed Forces Day' }) },
+        { employee: mona, day: day('2026-10-06', { status: 'Holiday', holidayName: 'Armed Forces Day', firstIn: null, lastOut: null, punches: [] }) },
+      ],
+    }));
+    const { el } = await render();
+
+    expect(text(el.querySelector('.holiday')!)).toBe('celebration Public holiday: Armed Forces Day عطلة رسمية');
+    expect([...el.querySelectorAll('tbody tr .status')].map((s) => s.firstChild!.textContent!.trim())).toEqual(['Worked a holiday', 'Public holiday']);
+    expect(el.querySelectorAll('tbody tr')[1].classList).toContain('status-Holiday');
   });
 
   it('offers a working day, a swap, only for a weekly day off', async () => {

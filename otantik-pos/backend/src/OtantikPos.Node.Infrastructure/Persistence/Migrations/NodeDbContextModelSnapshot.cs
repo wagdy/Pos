@@ -796,6 +796,43 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.ToTable("DayMarks", "hr");
                 });
 
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Attendance.PublicHoliday", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("FirstDay")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly>("LastDay")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime>("SetAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("SetBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FirstDay", "LastDay");
+
+                    b.ToTable("PublicHolidays", "hr");
+                });
+
             modelBuilder.Entity("OtantikPos.Hr.Domain.Employees.Employee", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1016,6 +1053,13 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
 
                             b1.Property<int>("DaysWorked")
                                 .HasColumnType("integer");
+
+                            b1.Property<int>("HolidaysWorked")
+                                .HasColumnType("integer");
+
+                            b1.Property<decimal>("HolidaysWorkedPay")
+                                .HasPrecision(10, 2)
+                                .HasColumnType("numeric(10,2)");
 
                             b1.Property<decimal>("Incentives")
                                 .HasPrecision(10, 2)

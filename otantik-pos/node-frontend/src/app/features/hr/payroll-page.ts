@@ -97,9 +97,12 @@ import { isoDay } from '../costing/financials';
                 <td class="num">{{ f.baseSalary | money }}</td>
                 <td class="num">{{ f.incentives | money }}</td>
                 <td class="num">
-                  {{ f.leaveAllowances + f.daysOffWorkedPay | money }}
+                  {{ f.leaveAllowances + f.daysOffWorkedPay + f.holidaysWorkedPay | money }}
                   @if (f.daysOffWorked) {
                     <div class="muted small">{{ f.daysOffWorked }} {{ f.daysOffWorked === 1 ? 'day' : 'days' }} off worked</div>
+                  }
+                  @if (f.holidaysWorked) {
+                    <div class="muted small">{{ f.holidaysWorked }} {{ f.holidaysWorked === 1 ? 'holiday' : 'holidays' }} worked</div>
                   }
                 </td>
                 <td class="num">{{ f.overtimePay | money }}</td>
@@ -135,7 +138,7 @@ import { isoDay } from '../costing/financials';
                 <td>Total · الإجمالي</td>
                 <td class="num">{{ p.totals.baseSalaries | money }}</td>
                 <td class="num">{{ p.totals.incentives | money }}</td>
-                <td class="num">{{ p.totals.leaveAllowances + p.totals.daysOffWorkedPay | money }}</td>
+                <td class="num">{{ p.totals.leaveAllowances + p.totals.daysOffWorkedPay + p.totals.holidaysWorkedPay | money }}</td>
                 <td class="num">{{ p.totals.overtimePay | money }}</td>
                 <td class="num">{{ p.totals.advances | money }}</td>
                 <td class="num">{{ p.totals.latenessPenalties | money }}</td>

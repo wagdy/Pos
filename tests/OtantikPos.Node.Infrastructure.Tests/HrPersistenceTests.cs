@@ -23,8 +23,13 @@ public class HrPersistenceTests
         await using var node = await TestNode.StartAsync();
         var chef = new Employee(Guid.NewGuid(), "حسن", "Chef", 5_400, new TimeOnly(10, 0), WeekDays.Friday | WeekDays.Saturday, new DateOnly(2026, 1, 1), "7");
         var day = Timesheet.Evaluate(chef, Monday, [PunchIn, PunchIn.AddHours(9)], null, AttendancePolicy.Default, new DateTime(2026, 10, 20)) with { PenaltyHours = 1.5m };
+        // Armed Forces Day, Tuesday 6 October, worked.
+        var armedForcesDay = new DateOnly(2026, 10, 6);
+        var holiday = Timesheet.Evaluate(
+            chef, armedForcesDay, [armedForcesDay.ToDateTime(new TimeOnly(10, 0)), armedForcesDay.ToDateTime(new TimeOnly(19, 0))], null,
+            AttendancePolicy.Default, new DateTime(2026, 10, 20), holiday: true);
         var incentive = new PayrollAdjustment(Guid.NewGuid(), chef.Id, October, AdjustmentKind.Incentive, 500, "Best month", "Omar");
-        var figures = PayrollCalculator.Calculate(chef, October, [day], [incentive], advances: 300, broughtForward: 0);
+        var figures = PayrollCalculator.Calculate(chef, October, [day, holiday], [incentive], advances: 300, broughtForward: 0);
         await node.Db(async db =>
         {
             db.Employees.Add(chef);
@@ -37,6 +42,8 @@ public class HrPersistenceTests
             db.DayMarks.Add(new DayMark(chef.Id, Monday.AddDays(1), DayMarkKind.Leave, "Wedding", "Omar"));
             db.AdministrativePenalties.Add(new AdministrativePenalty(chef.Id, Monday, 1.5m, "Left the kitchen open", "Omar"));
             db.DailyRecords.Add(new DailyRecord(chef.Id, day));
+            db.DailyRecords.Add(new DailyRecord(chef.Id, holiday));
+            db.PublicHolidays.Add(new PublicHoliday(Guid.NewGuid(), "Armed Forces Day", armedForcesDay, armedForcesDay, "Omar"));
             db.PayrollAdjustments.Add(incentive);
             db.SafeTransactions.Add(SafeTransaction.EmployeeAdvance(Guid.NewGuid(), 300, Monday, chef.Id, October, null, "Omar", revenueDate: Monday));
             db.PayrollSlips.Add(new PayrollSlip(Guid.NewGuid(), chef.Id, October, figures));
@@ -59,8 +66,11 @@ public class HrPersistenceTests
 
             // Four minutes late with no grace, made up at the end: no overtime, as nine hours were not
             // passed. The day's administrative penalty kept with it.
-            var record = await db.DailyRecords.SingleAsync();
+            var record = await db.DailyRecords.SingleAsync(r => r.Date == Monday);
             Assert.Equal(day, record.ToEvaluation());
+            Assert.Equal(holiday, (await db.DailyRecords.SingleAsync(r => r.Date == armedForcesDay)).ToEvaluation());
+            var kept = await db.PublicHolidays.SingleAsync();
+            Assert.Equal(("Armed Forces Day", armedForcesDay, armedForcesDay, 1), (kept.Name, kept.FirstDay, kept.LastDay, kept.Days));
             Assert.Equal((DayStatus.Worked, 540, 4, 0, 1.5m), (record.Status, record.WorkedMinutes, record.LateMinutes, record.OvertimeMinutes, record.AdministrativePenaltyHours));
             var penalty = await db.AdministrativePenalties.SingleAsync();
             Assert.Equal((1.5m, "Left the kitchen open"), (penalty.Hours, penalty.Reason));
@@ -69,6 +79,7 @@ public class HrPersistenceTests
 
             var slip = await db.PayrollSlips.SingleAsync();
             Assert.Equal(figures, slip.Figures);
+            Assert.Equal((DayStatus.WorkedOnHoliday, 1, 180m), (holiday.Status, slip.Figures.HolidaysWorked, slip.Figures.HolidaysWorkedPay));
             Assert.Equal((PayrollSlipStatus.Draft, figures.NetPayable, figures.WagesCost), (slip.Status, slip.NetPayable, slip.WagesCost));
 
             var advance = await db.SafeTransactions.SingleAsync(t => t.Kind == SafeTransactionKind.EmployeeAdvance);

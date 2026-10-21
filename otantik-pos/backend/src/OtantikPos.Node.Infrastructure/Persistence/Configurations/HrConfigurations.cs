@@ -96,6 +96,19 @@ internal sealed class AdministrativePenaltyConfiguration : IEntityTypeConfigurat
     }
 }
 
+internal sealed class PublicHolidayConfiguration : IEntityTypeConfiguration<PublicHoliday>
+{
+    public void Configure(EntityTypeBuilder<PublicHoliday> builder)
+    {
+        builder.ToTable("PublicHolidays", NodeDbContext.HrSchema);
+        builder.Property(h => h.Name).HasMaxLength(PublicHoliday.MaxNameLength);
+        builder.Property(h => h.SetBy).HasMaxLength(200);
+        builder.Ignore(h => h.Days);
+        // Read by the days they cover.
+        builder.HasIndex(h => new { h.FirstDay, h.LastDay });
+    }
+}
+
 internal sealed class DailyRecordConfiguration : IEntityTypeConfiguration<DailyRecord>
 {
     public void Configure(EntityTypeBuilder<DailyRecord> builder)

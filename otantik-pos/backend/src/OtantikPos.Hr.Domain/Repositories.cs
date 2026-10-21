@@ -53,6 +53,14 @@ public interface IAdministrativePenaltyRepository : IRepository<AdministrativePe
     void Remove(AdministrativePenalty penalty);
 }
 
+public interface IPublicHolidayRepository : IRepository<PublicHoliday>
+{
+    // The holidays with a day from `from` to `to`, both included, by their first day.
+    Task<IReadOnlyList<PublicHoliday>> GetBetweenAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default);
+
+    void Remove(PublicHoliday holiday);
+}
+
 public interface IDailyRecordRepository : IRepository<DailyRecord>
 {
     // Tracked: worked out again when a slip is.

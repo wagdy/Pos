@@ -30,6 +30,14 @@ public enum DayStatus
 
     // Before they started or after they left.
     NotEmployed = 8,
+
+    // A public holiday (عطلة رسمية) with no punches: a paid day off, whatever the day would have
+    // been.
+    Holiday = 9,
+
+    // Punched on a public holiday: measured as the day would have been (against the shift on a
+    // working day, with nothing late on a day off), and a holiday allowance for it on the payslip.
+    WorkedOnHoliday = 10,
 }
 
 // How punches are read: the grace for arriving late (up to that many minutes after the shift
@@ -89,6 +97,9 @@ public sealed record DayEvaluation(
 // So late, early, away and the shift's time worked add up to its nine hours. On a day off or
 // leave there is no shift: the time is worked, and nothing is late or overtime.
 //
+// A public holiday is a paid day off for everyone: never an absence. Worked, it is measured as
+// the day would have been otherwise (a working day against its shift, a day off without one).
+//
 // A punch-in left without its punch-out stays open for 18 hours from it, then the day is
 // suspended for a manager: an abandoned shift is never closed by guessing.
 public static class Timesheet
@@ -110,8 +121,9 @@ public static class Timesheet
         DateOnly.FromDateTime(time - (employee.ShiftStartsAt.ToTimeSpan() - DayStartsBeforeShift));
 
     // `now` is local time, as the punches are: a day is over once its window has closed.
+    // `holiday`: the day is a public holiday.
     public static DayEvaluation Evaluate(
-        Employee employee, DateOnly day, IEnumerable<DateTime> punches, DayMarkKind? mark, AttendancePolicy policy, DateTime now)
+        Employee employee, DateOnly day, IEnumerable<DateTime> punches, DayMarkKind? mark, AttendancePolicy policy, DateTime now, bool holiday = false)
     {
         if (!employee.IsEmployedOn(day))
             return Nothing(day, DayStatus.NotEmployed);
@@ -122,13 +134,15 @@ public static class Timesheet
         // A weekly day off marked as a working day is one: a swap.
         var off = mark is DayMarkKind.Leave or DayMarkKind.DayOff || (mark != DayMarkKind.WorkingDay && employee.IsDayOff(day));
         if (times.Count == 0)
-            return Nothing(day, mark == DayMarkKind.Leave ? DayStatus.Leave : off ? DayStatus.DayOff : over ? DayStatus.Absent : DayStatus.Open);
+            return Nothing(
+                day, holiday ? DayStatus.Holiday : mark == DayMarkKind.Leave ? DayStatus.Leave : off ? DayStatus.DayOff : over ? DayStatus.Absent : DayStatus.Open);
 
         var complete = times.Count % 2 == 0;
         var pairs = Enumerable.Range(0, times.Count / 2).Select(i => (In: times[2 * i], Out: times[2 * i + 1])).ToList();
         var worked = Minutes(pairs.Aggregate(TimeSpan.Zero, (sum, p) => sum + (p.Out - p.In)));
         var status = !complete ? (now >= times[^1] + AbandonedAfter ? DayStatus.Suspended : DayStatus.Open)
             : !over ? DayStatus.Open
+            : holiday ? DayStatus.WorkedOnHoliday
             : off ? DayStatus.WorkedOnDayOff
             : DayStatus.Worked;
         var first = times[0];

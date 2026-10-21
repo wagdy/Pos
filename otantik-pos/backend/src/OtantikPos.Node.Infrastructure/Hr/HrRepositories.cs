@@ -92,6 +92,22 @@ internal sealed class AdministrativePenaltyRepository(NodeDbContext db) : IAdmin
         await db.AdministrativePenalties.AsNoTracking().Where(p => p.Date >= from && p.Date <= to).ToListAsync(cancellationToken);
 }
 
+internal sealed class PublicHolidayRepository(NodeDbContext db) : IPublicHolidayRepository
+{
+    public Task<PublicHoliday?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.PublicHolidays.SingleOrDefaultAsync(h => h.Id == id, cancellationToken);
+
+    public void Add(PublicHoliday aggregate) => db.PublicHolidays.Add(aggregate);
+
+    public void Remove(PublicHoliday holiday) => db.PublicHolidays.Remove(holiday);
+
+    public async Task<IReadOnlyList<PublicHoliday>> GetBetweenAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default) =>
+        await db.PublicHolidays.AsNoTracking()
+            .Where(h => h.FirstDay <= to && h.LastDay >= from)
+            .OrderBy(h => h.FirstDay)
+            .ToListAsync(cancellationToken);
+}
+
 internal sealed class DailyRecordRepository(NodeDbContext db) : IDailyRecordRepository
 {
     public Task<DailyRecord?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>

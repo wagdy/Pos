@@ -4,7 +4,7 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { SuspendedCount } from './suspended-count';
 
 // HR & Payroll (الموارد البشرية والرواتب): the employees, their attendance and its corrections, the
-// monthly payroll, and the attendance devices that send their punches. The Corrections tab counts
+// monthly payroll, the public holidays, and the attendance devices that send their punches. The Corrections tab counts
 // the days waiting for a manager's punch-out. Managers and accountants (HrView); an
 // accountant's changes go to a manager. Advances are paid in Financials and in the daily batch,
 // from the safe or a day's takings.
@@ -63,6 +63,7 @@ export class HrShell {
     { path: 'attendance', en: 'Attendance', ar: 'الحضور والانصراف' },
     { path: 'corrections', en: 'Corrections', ar: 'مراجعة وجزاءات' },
     { path: 'payroll', en: 'Payroll', ar: 'مسير الرواتب' },
+    { path: 'holidays', en: 'Holidays', ar: 'العطلات الرسمية' },
     { path: 'devices', en: 'Attendance devices', ar: 'أجهزة البصمة' },
   ];
 

@@ -269,6 +269,11 @@ export const routes: Routes = [
             loadComponent: () => import('./features/hr/corrections-page').then((m) => m.CorrectionsPage),
           },
           {
+            // A year's public holidays: ?year= not needed, it opens on the business day's.
+            path: 'holidays',
+            loadComponent: () => import('./features/hr/holidays-page').then((m) => m.HolidaysPage),
+          },
+          {
             path: 'devices',
             loadComponent: () => import('./features/hr/devices-page').then((m) => m.DevicesPage),
           },

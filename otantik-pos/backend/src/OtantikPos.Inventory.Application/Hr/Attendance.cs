@@ -73,7 +73,9 @@ public sealed record AttendanceDayDto(
     // A manager's administrative penalty on the day: its hours, why, and who set it.
     decimal PenaltyHours = 0,
     string? PenaltyReason = null,
-    string? PenaltySetBy = null)
+    string? PenaltySetBy = null,
+    // The public holiday the day is, by its name.
+    string? HolidayName = null)
 {
     public static AttendanceDayDto From(Employee employee, TimesheetDay day)
     {
@@ -82,7 +84,7 @@ public sealed record AttendanceDayDto(
         return new AttendanceDayDto(
             e.Day, e.Status, start, start + Employee.ShiftLength, e.FirstIn, e.LastOut, e.WorkedMinutes, e.LateMinutes, e.EarlyLeaveMinutes, e.AwayMinutes,
             e.OvertimeMinutes, e.ShortMinutes, employee.IsDayOff(e.Day), day.Mark?.Kind, day.Mark?.Notes, day.Punches.Select(PunchDto.From).ToList(),
-            e.PenaltyHours, day.Penalty?.Reason, day.Penalty?.SetBy);
+            e.PenaltyHours, day.Penalty?.Reason, day.Penalty?.SetBy, day.Holiday?.Name);
     }
 }
 
@@ -101,13 +103,20 @@ public sealed record TimesheetTotals(
 // One employee's month, day by day.
 public sealed record TimesheetDto(EmployeeDto Employee, DateOnly Month, AttendancePolicyDto Policy, TimesheetTotals Totals, IReadOnlyList<AttendanceDayDto> Days);
 
-public sealed record TimesheetDay(DayEvaluation Evaluation, IReadOnlyList<AttendanceLog> Punches, DayMark? Mark, AdministrativePenalty? Penalty = null);
+public sealed record TimesheetDay(
+    DayEvaluation Evaluation, IReadOnlyList<AttendanceLog> Punches, DayMark? Mark, AdministrativePenalty? Penalty = null, PublicHoliday? Holiday = null);
 
 public sealed record EmployeeSheet(Employee Employee, IReadOnlyList<TimesheetDay> Days);
 
-// Works the days out from the punches, the marks and the settings, as they are now.
+// Works the days out from the punches, the marks, the public holidays and the settings, as they
+// are now.
 internal sealed class Timesheets(
-    IAttendanceLogRepository logs, IDayMarkRepository marks, IAdministrativePenaltyRepository penalties, IAttendanceSettings settings, IRecordDescriptions clock)
+    IAttendanceLogRepository logs,
+    IDayMarkRepository marks,
+    IAdministrativePenaltyRepository penalties,
+    IPublicHolidayRepository holidays,
+    IAttendanceSettings settings,
+    IRecordDescriptions clock)
 {
     public async Task<(AttendancePolicy Policy, IReadOnlyList<EmployeeSheet> Sheets)> ReadAsync(
         IReadOnlyList<Employee> people, DateOnly from, DateOnly to, CancellationToken cancellationToken)
@@ -120,6 +129,7 @@ internal sealed class Timesheets(
             cancellationToken);
         var dayMarks = (await marks.GetBetweenAsync(from, to, cancellationToken)).ToDictionary(m => (m.EmployeeId, m.Date));
         var dayPenalties = (await penalties.GetBetweenAsync(from, to, cancellationToken)).ToDictionary(p => (p.EmployeeId, p.Date));
+        var publicHolidays = await holidays.GetBetweenAsync(from, to, cancellationToken);
 
         var sheets = new List<EmployeeSheet>();
         foreach (var person in people)
@@ -132,9 +142,11 @@ internal sealed class Timesheets(
                 var inDay = theirs.Where(p => p.PunchedAt >= windowFrom && p.PunchedAt < windowTo).ToList();
                 var mark = dayMarks.GetValueOrDefault((person.Id, day));
                 var penalty = dayPenalties.GetValueOrDefault((person.Id, day));
-                var evaluation = Timesheet.Evaluate(person, day, inDay.Where(p => !p.IsIgnored).Select(p => p.PunchedAt), mark?.Kind, policy, now)
+                var holiday = publicHolidays.FirstOrDefault(h => h.Covers(day));
+                var evaluation = Timesheet.Evaluate(
+                        person, day, inDay.Where(p => !p.IsIgnored).Select(p => p.PunchedAt), mark?.Kind, policy, now, holiday is not null)
                     with { PenaltyHours = penalty is not null && person.IsEmployedOn(day) ? penalty.Hours : 0 };
-                days.Add(new TimesheetDay(evaluation, inDay, mark, penalty));
+                days.Add(new TimesheetDay(evaluation, inDay, mark, penalty, holiday));
             }
 
             sheets.Add(new EmployeeSheet(person, days));
@@ -147,7 +159,8 @@ internal sealed class Timesheets(
     {
         var list = days.ToList();
         return new TimesheetTotals(
-            list.Count(d => d.Status is DayStatus.Worked or DayStatus.WorkedOnDayOff), list.Sum(d => d.WorkedMinutes), list.Sum(d => d.LateMinutes),
+            list.Count(d => d.Status is DayStatus.Worked or DayStatus.WorkedOnDayOff or DayStatus.WorkedOnHoliday), list.Sum(d => d.WorkedMinutes),
+            list.Sum(d => d.LateMinutes),
             list.Sum(d => d.EarlyLeaveMinutes), list.Sum(d => d.AwayMinutes), list.Sum(d => d.OvertimeMinutes), list.Count(d => d.Status == DayStatus.Absent),
             list.Count(d => d.Status == DayStatus.Suspended));
     }
@@ -174,7 +187,7 @@ internal sealed class GetAttendanceDayHandler(IEmployeeRepository employees, IAt
             days.Count(d => d.LateMinutes > 0),
             days.Count(d => d.Status == DayStatus.Absent),
             days.Count(d => d.Status == DayStatus.Suspended),
-            days.Count(d => d.Status is DayStatus.DayOff or DayStatus.Leave),
+            days.Count(d => d.Status is DayStatus.DayOff or DayStatus.Leave or DayStatus.Holiday),
             days.Sum(d => d.OvertimeMinutes));
         return new AttendanceDayReport(request.Date, AttendancePolicyDto.From(policy), totals, rows, unassigned);
     }

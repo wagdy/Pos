@@ -30,9 +30,10 @@ function figures(extra: Partial<PayrollFigures> = {}): PayrollFigures {
   const f = {
     monthlySalary: 5_400, daysInMonth: 30, daysEmployed: 30, baseSalary: 5_400, incentives: 500, leaveAllowances: 0, overtimeMinutes: 120, overtimePay: 40,
     shortMinutes: 101, latenessPenalty: 33.67, absentDays: 1, absencePenalty: 180, advances: 200, broughtForward: 0, daysWorked: 25, daysOffWorked: 0,
-    missingPunchDays: 0, openDays: 0, daysOffWorkedPay: 0, administrativePenaltyHours: 0, administrativePenalty: 0, ...extra,
+    missingPunchDays: 0, openDays: 0, daysOffWorkedPay: 0, administrativePenaltyHours: 0, administrativePenalty: 0, holidaysWorked: 0, holidaysWorkedPay: 0,
+    ...extra,
   };
-  const gross = f.baseSalary + f.incentives + f.leaveAllowances + f.daysOffWorkedPay + f.overtimePay;
+  const gross = f.baseSalary + f.incentives + f.leaveAllowances + f.daysOffWorkedPay + f.holidaysWorkedPay + f.overtimePay;
   const deductions = f.advances + f.broughtForward + f.latenessPenalty + f.absencePenalty + f.administrativePenalty;
   const net = Math.round((gross - deductions) * 100) / 100;
   return {
@@ -58,6 +59,7 @@ function month(slips: PayrollSlip[]): PayrollMonth {
       latenessPenalties: sum((f) => f.latenessPenalty), absencePenalties: sum((f) => f.absencePenalty), netPayable: sum((f) => f.netPayable),
       carriedForward: sum((f) => f.carriedForward), wagesCost: sum((f) => f.wagesCost), salaryPaid: slips.reduce((s, x) => s + x.salaryPaid, 0),
       daysOffWorkedPay: sum((f) => f.daysOffWorkedPay),
+      holidaysWorkedPay: sum((f) => f.holidaysWorkedPay),
     },
     slips,
   };
@@ -109,13 +111,13 @@ describe('the monthly payroll', () => {
     expect(el.querySelector('tbody a')!.getAttribute('href')).toBe('/hassan?month=2026-09-01');
   });
 
-  it('counts the days off worked with the leave allowances entered', async () => {
-    payroll.mockReturnValue(of(month([slip(hassan, {}, { leaveAllowances: 100, daysOffWorked: 2, daysOffWorkedPay: 360 })])));
+  it('counts the days off and holidays worked with the leave allowances entered', async () => {
+    payroll.mockReturnValue(of(month([slip(hassan, {}, { leaveAllowances: 100, daysOffWorked: 2, daysOffWorkedPay: 360, holidaysWorked: 1, holidaysWorkedPay: 180 })])));
     const { el } = await render();
 
     const leave = el.querySelectorAll('tbody tr')[0].querySelectorAll('td')[3];
-    expect(cell(leave)).toBe('L.E 460.00 2 days off worked');
-    expect(cell(el.querySelectorAll('tfoot td')[3])).toBe('L.E 460.00');
+    expect(cell(leave)).toBe('L.E 640.00 2 days off worked 1 holiday worked');
+    expect(cell(el.querySelectorAll('tfoot td')[3])).toBe('L.E 640.00');
   });
 
   it('saves the drafts for whoever manages HR, and offers no calculating to anyone else', async () => {
@@ -195,6 +197,16 @@ describe('a payslip', () => {
     expect(text(el.querySelectorAll('.breakdown tr')[4].querySelector('.how')!)).toBe('2h 00m at L.E 20.00 an hour');
     expect(text(el.querySelectorAll('.breakdown tr')[8].querySelector('.how')!)).toBe('1 day at L.E 180.00');
     expect([...el.querySelectorAll('.lists .line')].map(cell)).toEqual(['Incentive حوافز · Best month L.E 500.00 delete', '10 Sep · from the safe L.E 200.00']);
+  });
+
+  it('shows the holidays worked as their own line, when there are any', async () => {
+    payroll.mockReturnValue(of(month([slip(hassan, { status: 'Draft' }, { holidaysWorked: 2, holidaysWorkedPay: 360 })])));
+    const { el } = await render();
+
+    const line = [...el.querySelectorAll('.breakdown tr')].find((r) => text(r.querySelector('th')!).startsWith('+ Holidays worked'))!;
+    expect(text(line.querySelector('.how')!)).toBe("2 holidays: a day's pay for half a shift or more, the hours for less");
+    expect(text(line.querySelector('td')!)).toBe('L.E 360.00');
+    expect(text(el.querySelector('.breakdown tr.total td')!)).toBe('L.E 5,886.33');
   });
 
   it('shows a manager’s administrative penalties as their own deduction', async () => {

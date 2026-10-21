@@ -163,6 +163,14 @@ export class FinalizeDialog {
               </th>
               <td>{{ f.daysOffWorkedPay | money }}</td>
             </tr>
+            @if (f.holidaysWorked) {
+              <tr class="plus">
+                <th>+ Holidays worked <span class="ar">بدل العطلات الرسمية</span>
+                  <div class="how">{{ f.holidaysWorked }} {{ f.holidaysWorked === 1 ? 'holiday' : 'holidays' }}: a day's pay for half a shift or more, the hours for less</div>
+                </th>
+                <td>{{ f.holidaysWorkedPay | money }}</td>
+              </tr>
+            }
             <tr class="plus">
               <th>+ Leave allowances <span class="ar">بدل إجازات</span><div class="how">as entered below</div></th>
               <td>{{ f.leaveAllowances | money }}</td>
@@ -215,6 +223,9 @@ export class FinalizeDialog {
         <dl class="days">
           <div><dt>Days worked</dt><dd>{{ f.daysWorked }}</dd></div>
           <div><dt>Days off worked</dt><dd>{{ f.daysOffWorked }}</dd></div>
+          @if (f.holidaysWorked) {
+            <div><dt>Holidays worked</dt><dd>{{ f.holidaysWorked }}</dd></div>
+          }
           <div><dt>Absent</dt><dd>{{ f.absentDays }}</dd></div>
           <div><dt>Suspended</dt><dd [class.warn]="f.missingPunchDays > 0">{{ f.missingPunchDays }}</dd></div>
           @if (f.openDays) {

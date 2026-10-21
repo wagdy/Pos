@@ -5,8 +5,8 @@ and their monthly pay. This page is the design.
 
 - **Phase 1, built:** the domain, its tables and this plan.
 - **Phase 2, built:** every endpoint below, the ADMS receiver, and the screens:
-  - HR & Payroll's Employees, Attendance, Corrections, Payroll and Attendance devices tabs,
-    with a payslip page;
+  - HR & Payroll's Employees, Attendance, Corrections, Payroll, Holidays and Attendance devices
+    tabs, with a payslip page;
   - advances in Financials and the daily batch.
 
 ## The rules
@@ -50,7 +50,17 @@ and their monthly pay. This page is the design.
     entering the punch-out (after the punch-in, within the day), or by ignoring the stray punch.
     The month's slip cannot be finalized while a day is suspended;
   - a manager can put an **administrative penalty** (جزاء إداري) on a day: hours, with the
-    reason, one a day. It is deducted on the payslip at the hourly rate.
+    reason, one a day. It is deducted on the payslip at the hourly rate;
+  - a **public holiday** (عطلة رسمية, `hr.PublicHolidays`, migration `PublicHolidays`) is
+    everyone's paid day off, entered by a manager with its name and days (one to ten: the Eids
+    run several). Not worked, it is a holiday whatever the day would have been, never an
+    absence. Worked, it is measured as the day would have been (against the shift on a working
+    day, with lateness, leaving early and overtime; nothing late on a weekly day off) and earns a
+    **holiday allowance** by itself, as a day off worked does: a day's pay for half a shift or
+    more, the hours for less. On a weekly day off it is paid once, as a holiday. Its lateness
+    never takes more than its allowance gives: worked for less than half a shift, it counts no
+    more short minutes than it worked, so coming in on a holiday never pays less than staying
+    home. A month whose pay is finalized for anyone keeps its holidays.
 - **Advances (سلفيات)** leave the safe or a day's takings at once, as a safe entry of kind
   `EmployeeAdvance` that names the employee and the payroll month it is deducted in.
   - **Not an expense:** the employee owes it until their payslip deducts it. The wages are
@@ -62,8 +72,9 @@ and their monthly pay. This page is the design.
 - **The payslip (مسير الرواتب)**, per employee per month:
 
   ```
-  Net = base salary + incentives + leave allowances + days off worked + overtime pay
-        − advances − last month's shortfall − lateness − absence − administrative penalties
+  Net = base salary + incentives + leave allowances + days off worked + holidays worked
+        + overtime pay − advances − last month's shortfall − lateness − absence
+        − administrative penalties
   ```
 
   - Overtime and lateness (late + early + away) are at the minute rate; an absence costs a
@@ -180,6 +191,8 @@ unit with a capture of its first requests before they are fixed.
 | `POST /api/hr/attendance/resolve` | A suspended day's punch-out, from a manager: the day worked out again |
 | `PUT /api/hr/employees/{id}/days/{date}/penalty` | An administrative penalty in hours, with the reason; with no hours, taken off |
 | `GET /api/hr/penalties?month=` | The month's administrative penalties, everyone's, each with what it takes off the pay |
+| `GET /api/hr/holidays?year=` | A year's public holidays |
+| `PUT /api/hr/holidays/{id}`, `DELETE …/{id}` | A public holiday added or changed, or taken off: a manager's |
 | `GET`/`PUT /api/hr/settings` | The grace, and how close two scans are to be one |
 | `GET /api/hr/devices`, `POST …/{id}/approve`, `…/revoke` | The devices, approved by name |
 | `GET /api/hr/payroll?month=` | Every slip as it stands |
@@ -202,10 +215,8 @@ entered. The old "سلفيات" expense item is archived once advances are enter
 is already entered stays as it is.
 
 A day off worked earns its leave allowance by itself (the slip's `DaysOffWorkedPay`, migration
-`DaysOffWorkedPay`); leave allowances entered by a manager are for anything else, a public
-holiday worked say.
-
-**To decide:** public holidays.
+`DaysOffWorkedPay`), and a public holiday worked its holiday allowance (`HolidaysWorkedPay`,
+migration `PublicHolidays`); leave allowances entered by a manager are for anything else.
 
 ## The screens
 
@@ -233,6 +244,12 @@ holiday worked say.
     adds one for whoever is employed in the month (told when it replaces the day's own), and
     changes or takes one off.
   - Accountants see both, with nothing to change.
+- Holidays (العطلات الرسمية), a year at a time: the holidays entered, each changed or taken off
+  by a manager; and Egypt's fixed-date holidays not entered yet (the seven fixed dates, and Sham
+  El-Nessim, the Monday after Coptic Easter), each added once checked against the government's
+  announcement. The Eids, Arafat, the Hijri New Year and the Prophet's Birthday follow the moon,
+  and are added once announced. Attendance names the holiday on its days, and the payroll and
+  payslip show the holidays worked.
 - Payroll: the month's slips, each part of the formula a column, with totals.
   - Calculate drafts saves them.
   - Each row opens the employee's payslip: the formula line by line from base salary to net

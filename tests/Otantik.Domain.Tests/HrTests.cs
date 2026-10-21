@@ -195,6 +195,76 @@ public class HrTests
     }
 
     [Fact]
+    public void A_public_holiday_is_a_paid_day_off_and_worked_is_measured_as_the_day_would_have_been()
+    {
+        var chef = Chef();
+        DayEvaluation Holiday(DateOnly day, DayMarkKind? mark = null, DateTime? now = null, params DateTime[] punches) =>
+            Timesheet.Evaluate(chef, day, punches, mark, TenMinutesGrace, now ?? Later, holiday: true);
+
+        // Not worked: a holiday, never an absence, on a working day, a day off or one marked; known
+        // before the day is over.
+        Assert.Equal(DayStatus.Holiday, Holiday(Monday).Status);
+        Assert.Equal(DayStatus.Holiday, Holiday(Friday).Status);
+        Assert.Equal(DayStatus.Holiday, Holiday(Monday, DayMarkKind.Leave).Status);
+        Assert.Equal(DayStatus.Holiday, Holiday(Monday, now: At(Monday, 9)).Status);
+
+        // Worked on a working day: against the shift, 30 minutes late.
+        var worked = Holiday(Monday, punches: [At(Monday, 10, 30), At(Monday, 19)]);
+        Assert.Equal((DayStatus.WorkedOnHoliday, 510, 30), (worked.Status, worked.WorkedMinutes, worked.LateMinutes));
+        // On their day off: no shift to be late for.
+        var off = Holiday(Friday, punches: [At(Friday, 12), At(Friday, 16)]);
+        Assert.Equal((DayStatus.WorkedOnHoliday, 240, 0), (off.Status, off.WorkedMinutes, off.ShortMinutes));
+    }
+
+    [Fact]
+    public void A_holiday_worked_earns_a_days_pay_once_and_never_costs_more_than_it_gives()
+    {
+        var chef = Chef();
+        var october = new DateOnly(2026, 10, 1);
+        DayEvaluation Worked(DateOnly d, DayStatus status, int minutes, int late = 0, int early = 0) => new(d, status, null, null, 2, minutes, late, early, 0, 0);
+        var days = PayrollMonth.Days(october).Select(d => d.Day switch
+        {
+            // Holidays: not worked; a full shift; two hours late; three hours, then gone; four hours
+            // on their Friday off.
+            5 => Nothing(d, DayStatus.Holiday),
+            6 => Worked(d, DayStatus.WorkedOnHoliday, 540),
+            7 => Worked(d, DayStatus.WorkedOnHoliday, 420, late: 120),
+            8 => Worked(d, DayStatus.WorkedOnHoliday, 180, early: 360),
+            16 => Worked(d, DayStatus.WorkedOnHoliday, 240),
+            _ when chef.IsDayOff(d) => Nothing(d, DayStatus.DayOff),
+            _ => Worked(d, DayStatus.Worked, 540),
+        }).ToList();
+
+        var figures = PayrollCalculator.Calculate(chef, october, days, [], advances: 0, broughtForward: 0);
+
+        // A day's pay twice, three hours, four hours: 180 + 180 + 60 + 80, and the Friday is not
+        // also a day off worked.
+        Assert.Equal((4, 500m), (figures.HolidaysWorked, figures.HolidaysWorkedPay));
+        Assert.Equal((0, 0m), (figures.DaysOffWorked, figures.DaysOffWorkedPay));
+        // Two hours late counts; of the six hours missed on the 8th only its three worked do, so
+        // coming in cost nothing: 5 hours at 20.
+        Assert.Equal((300, 100m, 0), (figures.ShortMinutes, figures.LatenessPenalty, figures.AbsentDays));
+        Assert.Equal((5_900m, 5_800m), (figures.Gross, figures.Net));
+        // October's 26 days that are not Fridays, less the 5th not worked, and the Friday worked.
+        Assert.Equal(26, figures.DaysWorked);
+    }
+
+    [Fact]
+    public void A_public_holiday_has_a_name_and_runs_one_day_to_ten()
+    {
+        Assert.Throws<DomainException>(() => new PublicHoliday(Guid.NewGuid(), " ", Monday, Monday, "Omar"));
+        Assert.Throws<DomainException>(() => new PublicHoliday(Guid.NewGuid(), "Eid", Monday, Monday.AddDays(-1), "Omar"));
+        Assert.Throws<DomainException>(() => new PublicHoliday(Guid.NewGuid(), "Eid", Monday, Monday.AddDays(10), "Omar"));
+
+        var eid = new PublicHoliday(Guid.NewGuid(), " Eid al-Adha ", Monday, Monday.AddDays(3), "Omar");
+        Assert.Equal(("Eid al-Adha", 4), (eid.Name, eid.Days));
+        Assert.True(eid.Covers(Monday.AddDays(3)));
+        Assert.False(eid.Covers(Friday));
+        Assert.True(eid.Overlaps(Monday.AddDays(-2), Monday));
+        Assert.False(eid.Overlaps(Friday, Friday));
+    }
+
+    [Fact]
     public void A_punch_in_left_18_hours_without_its_punch_out_suspends_the_day_for_a_manager()
     {
         var chef = Chef();

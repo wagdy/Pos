@@ -107,6 +107,9 @@ interface Row {
       <p class="error">{{ error() }}</p>
     }
 
+    @if (holiday(); as name) {
+      <p class="holiday"><mat-icon>celebration</mat-icon> Public holiday: {{ name }} <span class="inline-ar">عطلة رسمية</span></p>
+    }
     @if (totals().length) {
       <div class="totals" aria-label="Totals">
         @for (t of totals(); track t.label) {
@@ -155,6 +158,9 @@ interface Row {
                 <td class="num" [class.good]="d.overtimeMinutes > 0">{{ duration(d.overtimeMinutes) }}</td>
                 <td>
                   <span class="status" [class]="d.status">{{ labels[d.status].en }}<span class="ar">{{ labels[d.status].ar }}</span></span>
+                  @if (d.holidayName && mode() === 'employee') {
+                    <div class="muted small">{{ d.holidayName }}</div>
+                  }
                   @if (d.mark) {
                     <div class="muted small">{{ markLabels[d.mark] }}@if (d.markNotes) { · {{ d.markNotes }}}</div>
                   }
@@ -234,7 +240,8 @@ interface Row {
         Each shift is nine hours. Late counts from the shift's start{{ p.graceMinutes ? ', once past ' + p.graceMinutes + ' minutes’ grace' : ': no grace is set' }};
         overtime is time after the shift ends, beyond nine hours worked, so staying late to make up for being late isn't overtime;
         scans within {{ p.doubleScanMinutes }} minutes of each other are one. A day ends six hours before the next shift starts, so a shift past
-        midnight is one day. A punch-in left 18 hours without a punch-out is suspended until a manager enters it, here or on Corrections.
+        midnight is one day. A punch-in left 18 hours without a punch-out is suspended until a manager enters it, here or on Corrections. A public
+        holiday is everyone's paid day off; worked, it is measured as the day would have been, and earns a holiday allowance.
       </p>
     }
   `,
@@ -250,6 +257,19 @@ interface Row {
       min-width: 130px;
       text-align: center;
       font: var(--mat-sys-title-medium);
+    }
+    .holiday {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0 0;
+      padding: 6px 12px;
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--mat-sys-tertiary) 12%, transparent);
+
+      mat-icon {
+        color: var(--mat-sys-tertiary);
+      }
     }
     .totals {
       display: flex;
@@ -282,8 +302,12 @@ interface Row {
       &.Worked {
         background: color-mix(in srgb, #2e7d32 16%, transparent);
       }
-      &.WorkedOnDayOff {
+      &.WorkedOnDayOff,
+      &.WorkedOnHoliday {
         background: color-mix(in srgb, var(--mat-sys-primary) 16%, transparent);
+      }
+      &.Holiday {
+        background: color-mix(in srgb, var(--mat-sys-tertiary) 16%, transparent);
       }
       &.Suspended {
         background: color-mix(in srgb, var(--till-warn) 24%, transparent);
@@ -295,7 +319,8 @@ interface Row {
     }
     tr.status-NotEmployed td,
     tr.status-DayOff td,
-    tr.status-Leave td {
+    tr.status-Leave td,
+    tr.status-Holiday td {
       color: var(--mat-sys-on-surface-variant);
     }
     td.bad,
@@ -393,6 +418,8 @@ export class AttendancePage {
 
   protected readonly policy = computed<AttendancePolicy | null>(() => (this.mode() === 'day' ? this.report()?.policy : this.sheet()?.policy) ?? null);
   protected readonly unassigned = computed<Punch[]>(() => this.report()?.unassigned ?? []);
+  // Everyone's day that is a public holiday, by its name.
+  protected readonly holiday = computed(() => (this.mode() === 'day' ? (this.report()?.employees.find((e) => e.day.holidayName)?.day.holidayName ?? null) : null));
 
   protected readonly rows = computed<Row[]>(() => {
     if (this.mode() === 'day') {
@@ -420,7 +447,7 @@ export class AttendancePage {
             { label: 'late · تأخير', value: String(t.late), tone: t.late ? 'warn' : '' },
             { label: 'absent · غياب', value: String(t.absent), tone: t.absent ? 'bad' : '' },
             { label: 'suspended · موقوف للمراجعة', value: String(t.missingPunch), tone: t.missingPunch ? 'warn' : '' },
-            { label: 'off or on leave · راحة وإجازات', value: String(t.offOrOnLeave), tone: '' },
+            { label: 'off, on leave or a holiday · راحة وإجازات', value: String(t.offOrOnLeave), tone: '' },
             { label: 'overtime · إضافي', value: duration(t.overtimeMinutes), tone: '' },
           ]
         : [];

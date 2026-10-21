@@ -113,6 +113,25 @@ public sealed class HrController(ISender sender) : ControllerBase
     public Task<IReadOnlyList<AdministrativePenaltyDto>> GetPenalties([FromQuery] DateOnly month, CancellationToken cancellationToken) =>
         sender.Send(new GetAdministrativePenaltiesQuery(month), cancellationToken);
 
+    // A year's public holidays, by their first day.
+    [HttpGet("holidays")]
+    public Task<IReadOnlyList<PublicHolidayDto>> GetHolidays([FromQuery] int year, CancellationToken cancellationToken) =>
+        sender.Send(new GetPublicHolidaysQuery(year), cancellationToken);
+
+    // A public holiday added under this id, or changed: a manager's.
+    [HttpPut("holidays/{holidayId:guid}")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<PublicHolidayDto> SaveHoliday(Guid holidayId, HolidayRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new SavePublicHolidayCommand(holidayId, request.Name, request.FirstDay, request.LastDay, StaffName), cancellationToken);
+
+    [HttpDelete("holidays/{holidayId:guid}")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public async Task<IActionResult> DeleteHoliday(Guid holidayId, CancellationToken cancellationToken)
+    {
+        await sender.Send(new DeletePublicHolidayCommand(holidayId), cancellationToken);
+        return NoContent();
+    }
+
     [HttpGet("settings")]
     public Task<AttendancePolicyDto> GetSettings(CancellationToken cancellationToken) => sender.Send(new GetAttendanceSettingsQuery(), cancellationToken);
 
@@ -204,6 +223,8 @@ public sealed record DayMarkRequest(DayMarkKind? Kind, string? Notes = null);
 public sealed record ResolveDayRequest(Guid PunchId, Guid EmployeeId, DateOnly Date, DateTime PunchedOutAt, string Reason);
 
 public sealed record PenaltyRequest(decimal? Hours, string? Reason = null);
+
+public sealed record HolidayRequest(string Name, DateOnly FirstDay, DateOnly LastDay);
 
 public sealed record ApproveDeviceRequest(string? Name);
 
