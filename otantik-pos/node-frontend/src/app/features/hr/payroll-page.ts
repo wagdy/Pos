@@ -12,6 +12,7 @@ import { errorMessage } from '../../core/http/error-message';
 import { HrApi, PayrollMonth, PayrollSlip } from '../../core/hr/hr.api';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
+import { saveBlob } from '../../core/ui/save-blob';
 import { isoDay } from '../costing/financials';
 
 // The monthly payroll (مسير الرواتب): every employee's pay for the month, each part of it a column,
@@ -21,7 +22,8 @@ import { isoDay } from '../costing/financials';
 // The leave allowances are the ones entered and the days off worked, which earn theirs by
 // themselves.
 // A draft is worked out from the month's attendance as it stands now; calculating saves the
-// drafts. Each row opens the employee's payslip, where it is finalized and paid.
+// drafts. Each row opens the employee's payslip, where it is finalized and paid. The month goes to
+// the accounts as an Excel sheet, its columns and totals as here.
 @Component({
   selector: 'app-payroll-page',
   imports: [DatePipe, MatButtonModule, MatIconModule, MatProgressBarModule, MatTooltipModule, MoneyPipe, RouterLink],
@@ -36,6 +38,9 @@ import { isoDay } from '../costing/financials';
           <mat-icon>calculate</mat-icon> Calculate drafts <span class="inline-ar">احتساب المسودات</span>
         </button>
       }
+      <button mat-button (click)="exportExcel()" [disabled]="!payroll() || exporting()">
+        <mat-icon>file_download</mat-icon> Export Excel <span class="inline-ar">تصدير إكسيل</span>
+      </button>
       <button mat-button (click)="print()" [disabled]="!payroll()"><mat-icon>print</mat-icon> Print</button>
     </div>
     @if (loading()) {
@@ -271,6 +276,20 @@ export class PayrollPage {
     const start = new Date(`${this.month()}T12:00:00`);
     this.month.set(isoDay(new Date(start.getFullYear(), start.getMonth() + by, 1)));
     void this.load();
+  }
+
+  protected readonly exporting = signal(false);
+
+  protected async exportExcel(): Promise<void> {
+    const month = this.month();
+    this.exporting.set(true);
+    try {
+      saveBlob(await firstValueFrom(this.api.exportPayroll(month)), `payroll-${month.slice(0, 7)}.xlsx`);
+    } catch (error) {
+      this.notify.error(error, 'The payroll could not be exported.');
+    } finally {
+      this.exporting.set(false);
+    }
   }
 
   protected async calculate(): Promise<void> {

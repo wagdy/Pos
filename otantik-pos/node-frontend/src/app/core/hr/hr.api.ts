@@ -264,6 +264,23 @@ export interface AttendanceDevice {
   commands: DeviceCommand[];
 }
 
+// Employees brought in from Excel: each added, or asked of a manager (requested); the rows
+// skipped and why; the departments the sheet added.
+export interface ImportedEmployee {
+  row: number;
+  id: string;
+  name: string;
+  department: string;
+  jobTitle: string;
+  requested: boolean;
+}
+
+export interface EmployeeImportResult {
+  imported: ImportedEmployee[];
+  skipped: { row: number; name: string | null; reason: string }[];
+  departmentsAdded: string[];
+}
+
 // The device reached by the till over its own port (ZKTeco's, 4370): whether it answered, and
 // what it says it is and holds.
 export interface DeviceProbe {
@@ -570,6 +587,26 @@ export class HrApi {
 
   saveSettings(policy: AttendancePolicy): Observable<AttendancePolicy> {
     return this.http.put<AttendancePolicy>('/api/hr/settings', policy);
+  }
+
+  // Excel: the template to fill in, a filled-in one imported, everyone employed exported, and a
+  // month's payroll for the accounts. Files come as blobs, for the browser to save.
+  employeesTemplate(): Observable<Blob> {
+    return this.http.get('/api/hr/employees/template', { responseType: 'blob' });
+  }
+
+  importEmployees(file: File): Observable<EmployeeImportResult> {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return this.http.post<EmployeeImportResult>('/api/hr/employees/import', form);
+  }
+
+  exportEmployees(): Observable<Blob> {
+    return this.http.get('/api/hr/employees/export', { responseType: 'blob' });
+  }
+
+  exportPayroll(month: string): Observable<Blob> {
+    return this.http.get('/api/hr/payroll/export', { params: { month }, responseType: 'blob' });
   }
 
   // Where a device reaches this till: the device's own port when one is set (the till's screens

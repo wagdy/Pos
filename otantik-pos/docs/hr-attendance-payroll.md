@@ -237,6 +237,27 @@ device's IP address, port 4370 unless said otherwise, and its comm key (0 for no
 ADMS goes on as before; this is for a device whose Cloud Server Setting is off or missing, and
 for reading everything now.
 
+## Excel (built)
+
+ClosedXML, as the raw materials and prep items imports use, in `Node.Infrastructure/Excel`
+(`EmployeeWorkbook`, `PayrollWorkbook`); what a row becomes is `ImportEmployeesCommand`'s.
+- **The template:** Name, Employment Type, Base Salary, Department, Job Role, Shift Start, Days
+  Off, Hired On and Device No., each headed in English and Arabic. Dropdowns list monthly or
+  daily, the departments and the roles; a sheet says how to fill it, with examples.
+- **Reading a sheet:** columns are found by heading, in either language and in any order. It
+  takes times as cells or typed ("10:00", "4 PM", "٤ م"), and Flexible (مرن) for flexible hours.
+  Days off are English or Arabic ("الجمعة والسبت"). Dates are cells, ISO or day first
+  ("1/10/2026"), and Arabic digits are read too.
+- **What a row becomes:**
+  - a department not on the till is added (a manager's import only: anyone else's row waits for
+    a manager to add it), and a role not in its department is made;
+  - a name or device number already on the till, asked for, or earlier on the sheet is skipped,
+    so a sheet imported twice adds no one twice;
+  - a manager's rows are added at once; anyone else's are each a request a manager approves.
+- **The export** is in the template's columns, so it can be added to and imported again (those on
+  the till are skipped). The payroll export is for the accounts: a title, each slip's columns as
+  the Payroll tab shows them, and a totals row of sums.
+
 ## Phase 2: the API (built)
 
 **Permissions:**
@@ -254,6 +275,10 @@ for reading everything now.
 | `GET /api/hr/employees` | The employees, left ones too |
 | `PUT /api/hr/employees/{id}` | Add or change an employee: 200 for a manager, 202 (a request) for anyone else |
 | `POST /api/hr/employees/{id}/leave`, `…/return` | Leave on a last day; come back from a day |
+| `GET /api/hr/employees/template` | The Excel template to bring employees in from, with the departments and roles as dropdowns: whoever manages HR |
+| `POST /api/hr/employees/import` | A filled-in sheet (multipart `file`, 5 MB at most): each good row an employee, a manager's at once and anyone else's a request; the rows skipped and why, and the departments added |
+| `GET /api/hr/employees/export` | Everyone employed now as a styled Excel table, in the template's columns plus their day and hour rates |
+| `GET /api/hr/payroll/export?month=` | The month's payroll as an Excel sheet: each slip's columns as the Payroll tab shows them, its status and what is paid, with the totals |
 | `GET /api/hr/attendance?date=` | Everyone's day, plus punches under numbers nobody has |
 | `GET /api/hr/employees/{id}/timesheet?month=` | One employee's month, day by day, with totals |
 | `POST /api/hr/punches`, `…/{id}/ignore`, `…/{id}/restore` | A manual punch with its reason; ignoring or restoring one |
@@ -313,6 +338,8 @@ migration `PublicHolidays`); leave allowances entered by a manager are for anyth
     approved device last called from), its users listed and its new punches kept; an approved
     device not read that way (its port closed while it uses ADMS, or no address known) is asked
     for its users over ADMS instead, and the list read again as they come;
+  - Employees' Excel menu: Download template (تحميل القالب), Import Excel (رفع إكسيل) and
+    Export employees (تصدير الموظفين); what an import did shown row by row;
   - Departments: each with how many are in it and its roles, added, renamed, and deleted with
     its employees (or a role's holders) moved first; General kept;
   - Attendance devices: where to point the K40, approve or refuse it, have it list its users or
@@ -324,6 +351,7 @@ migration `PublicHolidays`); leave allowances entered by a manager are for anyth
     and the outcome under the buttons.
   - Corrections also lists the punches that came after their month's pay was finalized, a day at
     a time, until a manager marks them seen to.
+- Payroll's Export Excel (تصدير إكسيل): the month as a sheet for the accounts.
 - Financials → Advances (السلفيات): the month's advances, each employee's total, a new advance
   from the safe or a day's takings, and voids.
 - The daily batch: an employee advance block beside the supplier payments.

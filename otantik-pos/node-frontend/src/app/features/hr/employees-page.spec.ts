@@ -12,6 +12,7 @@ import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { BusinessDay } from '../costing/financials';
 import { EmployeeDialog } from './employee-dialog';
+import { EmployeeImportDialog } from './employee-import-dialog';
 import { EmployeesPage, LinkDeviceUserDialog } from './employees-page';
 import { EmploymentDialog } from './employment-dialog';
 
@@ -52,6 +53,9 @@ describe('the employees', () => {
   const devicesOf = vi.fn();
   const readDeviceUsers = vi.fn();
   const syncDevice = vi.fn();
+  const employeesTemplate = vi.fn();
+  const importEmployees = vi.fn();
+  const exportEmployees = vi.fn();
   const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn(), attention: vi.fn() };
   const pending = signal<ApprovalRequest[]>([]);
@@ -68,7 +72,8 @@ describe('the employees', () => {
       providers: [
         {
           provide: HrApi,
-          useValue: { employees, deviceUsers, saveEmployee, departments: () => of(departments), devices: devicesOf, readDeviceUsers, syncDevice },
+          useValue: { employees, deviceUsers, saveEmployee, departments: () => of(departments), devices: devicesOf, readDeviceUsers, syncDevice,
+            employeesTemplate, importEmployees, exportEmployees },
         },
         { provide: AuthService, useValue: { can: (p: string) => manage || p !== Permissions.HrManage } },
         { provide: Approvals, useValue: approvals },
@@ -97,6 +102,9 @@ describe('the employees', () => {
     devicesOf.mockReset().mockReturnValue(of([]));
     readDeviceUsers.mockReset();
     syncDevice.mockReset();
+    employeesTemplate.mockReset().mockReturnValue(of(new Blob(['xlsx'])));
+    importEmployees.mockReset();
+    exportEmployees.mockReset().mockReturnValue(of(new Blob(['xlsx'])));
     open.mockReset();
     notify.info.mockReset();
     notify.error.mockReset();
@@ -166,6 +174,68 @@ describe('the employees', () => {
     page['department'].set('kitchen');
     await refresh();
     expect(rows().map((r) => r[0])).toEqual(['Samir Chef · Kitchen']);
+  });
+
+  describe('Excel', () => {
+    const imported = {
+      imported: [{ row: 2, id: 'new', name: 'Samir', department: 'Kitchen', jobTitle: 'Chef', requested: false }],
+      skipped: [{ row: 3, name: 'Karim', reason: 'Karim is on the till already.' }],
+      departmentsAdded: ['Kitchen'],
+    };
+
+    function saving() {
+      const files: string[] = [];
+      const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+        files.push(this.download);
+      });
+      URL.createObjectURL = vi.fn(() => 'blob:file');
+      URL.revokeObjectURL = vi.fn();
+      return { files, done: () => click.mockRestore() };
+    }
+
+    const picked = (file: File | null) => ({ files: file ? [file] : [], value: 'C:\\fakepath\\x.xlsx' }) as unknown as HTMLInputElement;
+
+    it('downloads the template and exports the employees under their own names', async () => {
+      const { page } = await render();
+      const saved = saving();
+
+      await page['downloadTemplate']();
+      await page['exportEmployees']();
+      expect(employeesTemplate).toHaveBeenCalled();
+      expect(exportEmployees).toHaveBeenCalled();
+      expect(saved.files).toEqual(['employees-template.xlsx', 'employees-2026-10-20.xlsx']);
+      expect(page['excelBusy']()).toBe(false);
+      saved.done();
+    });
+
+    it('imports the chosen sheet, shows what it did, and reads the list again', async () => {
+      importEmployees.mockReturnValue(of(imported));
+      const { page } = await render();
+      const file = new File(['xlsx'], 'staff.xlsx');
+      const input = picked(file);
+
+      await page['importFile'](input);
+      expect(importEmployees).toHaveBeenCalledWith(file);
+      expect(input.value).toBe('');
+      expect(open).toHaveBeenCalledWith(EmployeeImportDialog, expect.objectContaining({ data: imported }));
+      expect(employees).toHaveBeenCalledTimes(2);
+      expect(approvals.refresh).toHaveBeenCalled();
+
+      importEmployees.mockReturnValue(throwError(() => new Error('That file could not be read as an Excel workbook (.xlsx).')));
+      await page['importFile'](picked(new File(['?'], 'notes.xlsx')));
+      expect(notify.error).toHaveBeenCalledWith(expect.anything(), 'The file could not be imported.');
+
+      importEmployees.mockClear();
+      await page['importFile'](picked(null));
+      expect(importEmployees).not.toHaveBeenCalled();
+    });
+
+    it('offers whoever only sees HR the export alone', async () => {
+      const { el } = await render(false);
+      (el.querySelector('button[aria-label="Excel"]') as HTMLButtonElement).click();
+      await new Promise((resolve) => setTimeout(resolve));
+      expect([...document.querySelectorAll('.mat-mdc-menu-item')].map(text)).toEqual(['file_download Export employees · تصدير الموظفين']);
+    });
   });
 
   describe('Sync device', () => {

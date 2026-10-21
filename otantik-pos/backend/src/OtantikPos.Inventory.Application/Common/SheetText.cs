@@ -11,7 +11,11 @@ internal static class SheetText
         string.IsNullOrWhiteSpace(text) ? null : string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     // A number as written, in Western or Arabic digits, with or without thousands separators.
-    public static decimal? Amount(string text)
+    public static decimal? Amount(string text) =>
+        decimal.TryParse(Western(text), NumberStyles.Number, CultureInfo.InvariantCulture, out var amount) ? amount : null;
+
+    // Arabic digits, and their decimal and thousands marks, written as Western ones.
+    public static string Western(string text)
     {
         var western = new StringBuilder(text.Length);
         foreach (var c in text)
@@ -23,7 +27,7 @@ internal static class SheetText
                 '٬' => ',',
                 _ => c,
             });
-        return decimal.TryParse(western.ToString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var amount) ? amount : null;
+        return western.ToString();
     }
 
     // A name as two spellings of it are compared: capitals and spacing aside, an underscore as a

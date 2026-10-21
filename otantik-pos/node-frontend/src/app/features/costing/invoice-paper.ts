@@ -7,6 +7,7 @@ import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { firstValueFrom } from 'rxjs';
 import { CostingApi } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
+import { saveBlob } from '../../core/ui/save-blob';
 
 // An invoice's photo or scan, fetched with the manager's sign-in (a plain link would carry none)
 // and shown in the page: a photo as it is, a PDF in the browser's own viewer. A till running
@@ -159,14 +160,4 @@ export function paperIcon(fileName: string): string {
 
 export function viewInvoicePaper(dialog: MatDialog, invoiceId: string, fileName: string): void {
   dialog.open<InvoicePaperDialog, InvoicePaperData>(InvoicePaperDialog, { data: { invoiceId, fileName }, maxWidth: '95vw' });
-}
-
-// Hands a file fetched with the sign-in to the browser to save.
-export function saveBlob(blob: Blob, fileName: string): void {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = fileName;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

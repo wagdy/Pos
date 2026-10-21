@@ -5,6 +5,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
+import { MatMenuModule } from '@angular/material/menu';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
@@ -15,12 +16,14 @@ import { Permissions } from '../../core/auth/permissions';
 import { ApprovalResult, isRequested } from '../../core/costing/costing.api';
 import { addressOf, DeviceLink, savedDeviceLink, ZkPort } from '../../core/hr/device-link';
 import { errorMessage } from '../../core/http/error-message';
-import { Department, DeviceUser, Employee, EmployeeInput, HrApi, weekDays } from '../../core/hr/hr.api';
+import { Department, DeviceUser, Employee, EmployeeImportResult, EmployeeInput, HrApi, weekDays } from '../../core/hr/hr.api';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
+import { saveBlob } from '../../core/ui/save-blob';
 import { Approvals, pendingLabel } from '../costing/approvals';
 import { BusinessDay } from '../costing/financials';
 import { EmployeeDialog, EmployeeDialogData } from './employee-dialog';
+import { EmployeeImportDialog } from './employee-import-dialog';
 import { EmploymentDialog, EmploymentDialogData } from './employment-dialog';
 
 // Who on the till gets a device user's number: an employee without one yet.
@@ -81,6 +84,7 @@ export class LinkDeviceUserDialog {
     MatButtonModule,
     MatFormFieldModule,
     MatIconModule,
+    MatMenuModule,
     MatProgressBarModule,
     MatSelectModule,
     MatSlideToggleModule,
@@ -103,6 +107,18 @@ export class LinkDeviceUserDialog {
       }
       <span class="spacer"></span>
       <span class="muted">{{ active().length }} employed · {{ payroll() | money }} a month@if (daily()) { · {{ daily() }} on daily wages}</span>
+      <button mat-stroked-button [matMenuTriggerFor]="excel" [disabled]="excelBusy()" aria-label="Excel">
+        <mat-icon>table_view</mat-icon> Excel <span class="inline-ar">إكسيل</span>
+      </button>
+      <mat-menu #excel="matMenu">
+        @if (canManage()) {
+          <button mat-menu-item (click)="downloadTemplate()"><mat-icon>download</mat-icon> Download template · تحميل القالب</button>
+          <button mat-menu-item (click)="picker.click()"><mat-icon>upload_file</mat-icon> Import Excel · رفع إكسيل</button>
+        }
+        <button mat-menu-item (click)="exportEmployees()"><mat-icon>file_download</mat-icon> Export employees · تصدير الموظفين</button>
+      </mat-menu>
+      <input #picker type="file" hidden accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        (change)="importFile(picker)" aria-label="Excel file to import" />
       @if (approvals.canApprove()) {
         <button mat-stroked-button (click)="sync()" [disabled]="syncing()">
           <mat-icon>sync</mat-icon> {{ syncing() ? 'Syncing…' : 'Sync device' }} <span class="inline-ar">مزامنة الجهاز</span>
@@ -112,7 +128,7 @@ export class LinkDeviceUserDialog {
         <button mat-flat-button (click)="add()"><mat-icon>person_add</mat-icon> Add employee <span class="inline-ar">إضافة موظف</span></button>
       }
     </div>
-    @if (loading()) {
+    @if (loading() || excelBusy()) {
       <mat-progress-bar mode="indeterminate" />
     }
     @if (error()) {
@@ -310,6 +326,7 @@ export class EmployeesPage {
   private destroyed = false;
   protected readonly approvals = inject(Approvals);
   protected readonly syncing = signal(false);
+  protected readonly excelBusy = signal(false);
   protected readonly pendingLabel = pendingLabel;
 
   protected readonly employees = signal<Employee[]>([]);
@@ -409,6 +426,47 @@ export class EmployeesPage {
       this.notify.error(error, 'The device could not be synced.');
     } finally {
       this.syncing.set(false);
+    }
+  }
+
+  // Excel (a manager's or an accountant's, as entering employees is): the template to fill in, and
+  // a filled-in one imported, what it did shown and the list read again; the picker cleared, so
+  // the same file can be chosen again once it is put right. Anyone who sees HR exports the list.
+  protected async downloadTemplate(): Promise<void> {
+    await this.excel(async () => saveBlob(await firstValueFrom(this.api.employeesTemplate()), 'employees-template.xlsx'), 'The template could not be downloaded.');
+  }
+
+  protected async importFile(picker: HTMLInputElement): Promise<void> {
+    const file = picker.files?.[0];
+    picker.value = '';
+    if (!file) {
+      return;
+    }
+    await this.excel(async () => {
+      const result = await firstValueFrom(this.api.importEmployees(file));
+      this.dialog.open<EmployeeImportDialog, EmployeeImportResult>(EmployeeImportDialog, { data: result, width: '640px', maxWidth: '95vw' });
+      if (result.imported.length) {
+        void this.approvals.refresh();
+        await this.load();
+      }
+    }, 'The file could not be imported.');
+  }
+
+  protected async exportEmployees(): Promise<void> {
+    await this.excel(
+      async () => saveBlob(await firstValueFrom(this.api.exportEmployees()), `employees-${await this.businessDay.today()}.xlsx`),
+      'The employees could not be exported.',
+    );
+  }
+
+  private async excel(work: () => Promise<void>, failed: string): Promise<void> {
+    this.excelBusy.set(true);
+    try {
+      await work();
+    } catch (error) {
+      this.notify.error(error, failed);
+    } finally {
+      this.excelBusy.set(false);
     }
   }
 

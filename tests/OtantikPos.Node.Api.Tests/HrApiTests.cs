@@ -3,7 +3,9 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using ClosedXML.Excel;
 using OtantikPos.Hr.Domain.Employees;
+using OtantikPos.Node.Infrastructure.Excel;
 
 namespace OtantikPos.Node.Api.Tests;
 
@@ -99,6 +101,174 @@ public class HrApiTests
         Assert.Equal((4_500m, false, "2026-10-15"), (mona.GetProperty("monthlySalary").GetDecimal(), mona.GetProperty("isActive").GetBoolean(), mona.GetProperty("leftOn").GetString()));
         var back = await Json(await manager.PostAsJsonAsync($"/api/hr/employees/{monaId}/return", new { requestId = Guid.NewGuid(), returnsOn = "2026-11-01" }, Cancel));
         Assert.Equal((true, "2026-11-01"), (back.GetProperty("isActive").GetBoolean(), back.GetProperty("hiredOn").GetString()));
+    }
+
+    [Fact]
+    public async Task Employees_come_in_from_an_Excel_sheet_and_go_out_to_one_with_the_payroll()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var cashier = await api.CashierAsync(manager);
+        var today = await TodayAsync(manager);
+        await HireAsync(manager, "Karim", today.AddMonths(-2), "21");
+        static byte[] Saved(XLWorkbook workbook)
+        {
+            using var stream = new MemoryStream();
+            workbook.SaveAs(stream);
+            return stream.ToArray();
+        }
+        static MultipartFormDataContent Upload(byte[] bytes)
+        {
+            var file = new ByteArrayContent(bytes);
+            file.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(EmployeeWorkbook.ContentType);
+            return new MultipartFormDataContent { { file, "file", "employees.xlsx" } };
+        }
+        static void Fill(IXLWorksheet sheet, object[][] rows)
+        {
+            for (var r = 0; r < rows.Length; r++)
+                for (var c = 0; c < rows[r].Length; c++)
+                    sheet.Cell(r + 2, c + 1).Value = XLCellValue.FromObject(rows[r][c]);
+        }
+        static IEnumerable<(int, string?)> Skipped(JsonElement result) =>
+            result.GetProperty("skipped").EnumerateArray().Select(s => (s.GetProperty("row").GetInt32(), s.GetProperty("reason").GetString()));
+        async Task<Dictionary<string, JsonElement>> Employees() =>
+            (await Json(await manager.GetAsync("/api/hr/employees", Cancel))).EnumerateArray().ToDictionary(e => e.GetProperty("name").GetString()!);
+
+        // The template: its headings, nothing on it to import by mistake, and the departments.
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync("/api/hr/employees/template", Cancel)).StatusCode);
+        var download = await accountant.GetAsync("/api/hr/employees/template", Cancel);
+        Assert.True(download.IsSuccessStatusCode);
+        Assert.Equal((EmployeeWorkbook.ContentType, EmployeeWorkbook.TemplateFileName),
+            (download.Content.Headers.ContentType!.MediaType, download.Content.Headers.ContentDisposition!.FileNameStar));
+        using var template = new XLWorkbook(await download.Content.ReadAsStreamAsync(Cancel));
+        var sheet = template.Worksheet(EmployeeWorkbook.DataSheetName);
+        Assert.Equal(
+            [EmployeeWorkbook.NameHeader, EmployeeWorkbook.TypeHeader, EmployeeWorkbook.PayHeader, EmployeeWorkbook.DepartmentHeader, EmployeeWorkbook.RoleHeader,
+                EmployeeWorkbook.ShiftHeader, EmployeeWorkbook.DaysOffHeader, EmployeeWorkbook.HiredOnHeader, EmployeeWorkbook.DeviceHeader],
+            sheet.Row(1).CellsUsed().Select(c => c.GetString()));
+        Assert.True(sheet.Cell(2, 1).IsEmpty());
+        Assert.Contains("General", template.Worksheet("Lists").Column(2).CellsUsed().Select(c => c.GetString()));
+
+        // Filled in as people do: times and dates as cells or typed, Arabic words and digits, and mistakes.
+        Fill(sheet, [
+            ["Hassan Ali", "Monthly", 5400, "Kitchen", "Chef", new TimeSpan(10, 0, 0), "Friday", new DateTime(2026, 9, 1), "7"],
+            ["منى سعيد", "يومي", "٢٥٠", "kitchen", "Helper", "مرن", "الجمعة والسبت", "1/10/2026", ""],
+            ["hassan  ali", "Monthly", 5000, "", "Chef", "10:00", "", "2026-09-01", ""],
+            ["Omar", "Monthly", 4000, "", "Waiter", "25:00", "", "2026-09-01", ""],
+            ["Sara", "Monthly", 4000, "", "Waiter", "4 PM", "", "2026-09-01", "7"],
+            ["Karim", "Monthly", 4000, "", "Waiter", "12:00", "", "2026-09-01", ""],
+            ["Ali", "Monthly", 4000, "", "Waiter", "12:00", "Fri, Funday", "2026-09-01", ""],
+            ["Nour", "Weekly", 4000, "", "Waiter", "12:00", "", "2026-09-01", ""],
+            ["Youssef", "Monthly", 4000, "Service", "Waiter", "12:00", "", "", "33"],
+        ]);
+        var filled = Saved(template);
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PostAsync("/api/hr/employees/import", Upload(filled), Cancel)).StatusCode);
+        var result = await Json(await manager.PostAsync("/api/hr/employees/import", Upload(filled), Cancel));
+        Assert.Equal(
+            [("Hassan Ali", "Kitchen", "Chef", false), ("منى سعيد", "Kitchen", "Helper", false)],
+            result.GetProperty("imported").EnumerateArray().Select(e => (e.GetProperty("name").GetString(), e.GetProperty("department").GetString(),
+                e.GetProperty("jobTitle").GetString(), e.GetProperty("requested").GetBoolean())));
+        Assert.Equal(["Kitchen"], result.GetProperty("departmentsAdded").EnumerateArray().Select(d => d.GetString()));
+        Assert.Equal(
+            [
+                (4, "Hassan Ali is on the sheet twice: row 2 has them already."),
+                (5, "Shift start: \"25:00\" is not a time of day. Write it as 10:00 or 16:30, or Flexible (مرن)."),
+                (6, "Number 7 is on the sheet twice: row 2 has it already."),
+                (7, "Karim is on the till already."),
+                (8, "Days off: \"Funday\" is not a day of the week. Write them as Friday, Saturday or الجمعة، السبت."),
+                (9, "Employment type: \"Weekly\" is neither Monthly nor Daily (شهري أو يومي)."),
+                (10, "No start date: the day they started, which their first month's pay counts from."),
+            ],
+            Skipped(result));
+
+        // On the list as the form would have made them.
+        var employees = await Employees();
+        var kitchen = (await Json(await manager.GetAsync("/api/hr/departments", Cancel))).EnumerateArray().Single(d => d.GetProperty("name").GetString() == "Kitchen");
+        Assert.Equal(["Chef", "Helper"], kitchen.GetProperty("roles").EnumerateArray().Select(r => r.GetProperty("name").GetString()));
+        var hassan = employees["Hassan Ali"];
+        Assert.Equal((kitchen.GetProperty("id").GetGuid(), "Chef", 5_400m, "10:00:00", "2026-09-01", "7"), (hassan.GetProperty("departmentId").GetGuid(),
+            hassan.GetProperty("jobTitle").GetString(), hassan.GetProperty("monthlySalary").GetDecimal(), hassan.GetProperty("shiftStartsAt").GetString(),
+            hassan.GetProperty("hiredOn").GetString(), hassan.GetProperty("deviceUserId").GetString()));
+        Assert.Equal(["Friday"], hassan.GetProperty("daysOff").EnumerateArray().Select(d => d.GetString()));
+        var mona = employees["منى سعيد"];
+        Assert.Equal(("Daily", 250m, JsonValueKind.Null, "2026-10-01", JsonValueKind.Null), (mona.GetProperty("employmentType").GetString(),
+            mona.GetProperty("dailyWage").GetDecimal(), mona.GetProperty("shiftStartsAt").ValueKind, mona.GetProperty("hiredOn").GetString(),
+            mona.GetProperty("deviceUserId").ValueKind));
+        Assert.Equal(["Friday", "Saturday"], mona.GetProperty("daysOff").EnumerateArray().Select(d => d.GetString()));
+
+        // The same sheet again adds no one twice.
+        var again = await Json(await manager.PostAsync("/api/hr/employees/import", Upload(filled), Cancel));
+        Assert.Empty(again.GetProperty("imported").EnumerateArray());
+        Assert.Contains((2, "Hassan Ali is on the till already."), Skipped(again));
+
+        // An accountant's, headed in Arabic in an order of its own: each asked of a manager, and a
+        // department not on the till left for a manager to add.
+        using var arabic = new XLWorkbook();
+        var theirs = arabic.Worksheets.Add("موظفين");
+        string[] headings = ["الاسم", "القسم", "الوظيفة", "الراتب", "بداية الوردية", "تاريخ التعيين"];
+        for (var i = 0; i < headings.Length; i++)
+            theirs.Cell(1, i + 1).Value = headings[i];
+        Fill(theirs, [["Samir", "Kitchen", "chef", 6000, "09:30", "2026-10-05"], ["Laila", "Bar", "Barista", 4500, "09:30", "2026-10-05"]]);
+        var arabicFile = Saved(arabic);
+        var asked = await Json(await accountant.PostAsync("/api/hr/employees/import", Upload(arabicFile), Cancel));
+        Assert.Equal([("Samir", "Chef", true)], asked.GetProperty("imported").EnumerateArray()
+            .Select(e => (e.GetProperty("name").GetString(), e.GetProperty("jobTitle").GetString(), e.GetProperty("requested").GetBoolean())));
+        Assert.Equal([(3, "Bar is not a department on the till: a manager adds it on the Departments tab first.")], Skipped(asked));
+        Assert.Empty(asked.GetProperty("departmentsAdded").EnumerateArray());
+        Assert.False((await Employees()).ContainsKey("Samir"));
+        Assert.Equal([(2, "Samir is asked for already, waiting for a manager's approval.")],
+            Skipped(await Json(await accountant.PostAsync("/api/hr/employees/import", Upload(arabicFile), Cancel))).Take(1));
+        var request = (await Json(await manager.GetAsync("/api/inventory/approval-requests", Cancel))).GetProperty("pending").EnumerateArray()
+            .Single(r => r.GetProperty("module").GetString() == "Employee");
+        Assert.Equal("New employee · Samir · Chef · L.E 6,000.00 a month, from 09:30", request.GetProperty("summary").GetString());
+        await Json(await manager.PostAsJsonAsync($"/api/inventory/approval-requests/{request.GetProperty("id").GetGuid()}/approve", new { }, Cancel));
+        Assert.Equal(kitchen.GetProperty("roles")[0].GetProperty("id").GetGuid(), (await Employees())["Samir"].GetProperty("jobRoleId").GetGuid());
+
+        // Everyone employed, exported in the template's columns: read back, it makes them again.
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync("/api/hr/employees/export", Cancel)).StatusCode);
+        var export = await accountant.GetAsync("/api/hr/employees/export", Cancel);
+        Assert.True(export.IsSuccessStatusCode);
+        Assert.Equal($"employees-{Iso(today)}.xlsx", export.Content.Headers.ContentDisposition!.FileNameStar);
+        using var exported = new XLWorkbook(new MemoryStream(await export.Content.ReadAsByteArrayAsync(Cancel)));
+        var list = exported.Worksheet(EmployeeWorkbook.DataSheetName);
+        Assert.Single(list.Tables);
+        var rows = list.RowsUsed().Skip(1).ToList();
+        // By department, then name.
+        Assert.Equal(["Karim", "Hassan Ali", "Samir", "منى سعيد"], rows.Select(r => r.Cell(1).GetString()));
+        Assert.Equal(["Hassan Ali", "Monthly", "5,400.00", "Kitchen", "Chef", "10:00", "Friday", "2026-09-01", "7", "180.00", "20.00"],
+            rows[1].Cells(1, 11).Select(c => c.GetFormattedString()));
+        foreach (var row in rows)
+        {
+            row.Cell(1).Value = row.Cell(1).GetString() + " Jr";
+            row.Cell(9).Value = string.Empty;
+        }
+
+        var copies = await Json(await manager.PostAsync("/api/hr/employees/import", Upload(Saved(exported)), Cancel));
+        Assert.Empty(copies.GetProperty("skipped").EnumerateArray());
+        Assert.Equal(4, copies.GetProperty("imported").GetArrayLength());
+        var monaJr = (await Employees())["منى سعيد Jr"];
+        Assert.Equal(("Daily", 250m, JsonValueKind.Null, "2026-10-01"), (monaJr.GetProperty("employmentType").GetString(), monaJr.GetProperty("dailyWage").GetDecimal(),
+            monaJr.GetProperty("shiftStartsAt").ValueKind, monaJr.GetProperty("hiredOn").GetString()));
+        Assert.Equal(["Friday", "Saturday"], monaJr.GetProperty("daysOff").EnumerateArray().Select(d => d.GetString()));
+
+        // The month's payroll for the accounts: each slip's columns, and their totals.
+        var month = new DateOnly(today.Year, today.Month, 1);
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync($"/api/hr/payroll/export?month={Iso(month)}", Cancel)).StatusCode);
+        var payroll = await accountant.GetAsync($"/api/hr/payroll/export?month={Iso(month)}", Cancel);
+        Assert.True(payroll.IsSuccessStatusCode);
+        Assert.Equal($"payroll-{month:yyyy-MM}.xlsx", payroll.Content.Headers.ContentDisposition!.FileNameStar);
+        using var report = new XLWorkbook(await payroll.Content.ReadAsStreamAsync(Cancel));
+        var slips = report.Worksheet("Payroll");
+        Assert.StartsWith("Payroll · مسير الرواتب — ", slips.Cell(1, 1).GetString());
+        Assert.Equal("Employee · الموظف", slips.Cell(4, 1).GetString());
+        var shown = await Json(await accountant.GetAsync($"/api/hr/payroll?month={Iso(month)}", Cancel));
+        var count = shown.GetProperty("slips").GetArrayLength();
+        var net = Enumerable.Range(1, 21).Single(c => slips.Cell(4, c).GetString() == "Net payable · صافي المستحق");
+        Assert.Equal(shown.GetProperty("totals").GetProperty("netPayable").GetDecimal(),
+            Enumerable.Range(5, count).Sum(r => (decimal)slips.Cell(r, net).GetDouble()));
+        Assert.Equal("Total · الإجمالي", slips.Cell(5 + count, 1).GetString());
+        Assert.Contains("SUBTOTAL(109", slips.Cell(5 + count, net).FormulaA1);
     }
 
     [Fact]

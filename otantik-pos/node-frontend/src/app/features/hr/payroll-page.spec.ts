@@ -68,13 +68,14 @@ function month(slips: PayrollSlip[]): PayrollMonth {
 describe('the monthly payroll', () => {
   const payroll = vi.fn();
   const calculatePayroll = vi.fn();
+  const exportPayroll = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
 
   async function render(manage = true) {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: HrApi, useValue: { payroll, calculatePayroll } },
+        { provide: HrApi, useValue: { payroll, calculatePayroll, exportPayroll } },
         { provide: AuthService, useValue: { can: (p: string) => manage || p !== Permissions.HrManage } },
         { provide: NotifyService, useValue: notify },
       ],
@@ -118,6 +119,25 @@ describe('the monthly payroll', () => {
     const leave = el.querySelectorAll('tbody tr')[0].querySelectorAll('td')[3];
     expect(cell(leave)).toBe('L.E 640.00 2 days off worked 1 holiday worked');
     expect(cell(el.querySelectorAll('tfoot td')[3])).toBe('L.E 640.00');
+  });
+
+  it('exports the month to Excel under its own name, for anyone who sees it', async () => {
+    exportPayroll.mockReturnValue(of(new Blob(['xlsx'])));
+    const { el, page } = await render(false);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    let saved: HTMLAnchorElement | undefined;
+    click.mockImplementation(function (this: HTMLAnchorElement) {
+      saved = this;
+    });
+    URL.createObjectURL = vi.fn(() => 'blob:payroll');
+    URL.revokeObjectURL = vi.fn();
+
+    expect([...el.querySelectorAll('.toolbar button')].map(text)).toContain('file_download Export Excel تصدير إكسيل');
+    await page['exportExcel']();
+    expect(exportPayroll).toHaveBeenCalledWith('2026-09-01');
+    expect(saved!.download).toBe('payroll-2026-09.xlsx');
+    expect(page['exporting']()).toBe(false);
+    click.mockRestore();
   });
 
   it('saves the drafts for whoever manages HR, and offers no calculating to anyone else', async () => {

@@ -1,3 +1,4 @@
+using System.Globalization;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -8,6 +9,8 @@ using OtantikPos.Hr.Domain.Payroll;
 using OtantikPos.Inventory.Application.Approvals;
 using OtantikPos.Inventory.Application.Hr;
 using OtantikPos.Node.Api.Auth;
+using OtantikPos.Node.Infrastructure.Excel;
+using OtantikPos.Ordering.Application.Ports;
 
 namespace OtantikPos.Node.Api.Controllers;
 
@@ -83,6 +86,52 @@ public sealed class HrController(ISender sender) : ControllerBase
     [Authorize(Policy = Permissions.HrManage)]
     public Task<IActionResult> Return(Guid employeeId, ReturnRequest request, CancellationToken cancellationToken) =>
         ChangeAsync(employeeId, request.RequestId, new EmployeeRequest(ReturnsOn: request.ReturnsOn), request.Reason, cancellationToken);
+
+    // ---- Excel ----
+
+    // The spreadsheet to bring employees in from: the columns, with the departments and roles.
+    [HttpGet("employees/template")]
+    [Authorize(Policy = Permissions.HrManage)]
+    public async Task<IActionResult> GetEmployeesTemplate(CancellationToken cancellationToken)
+    {
+        var departments = await sender.Send(new GetDepartmentsQuery(), cancellationToken);
+        return File(EmployeeWorkbook.Template(departments), EmployeeWorkbook.ContentType, EmployeeWorkbook.TemplateFileName);
+    }
+
+    // A filled-in template: each good row an employee, added for a manager and asked of one for
+    // anyone else; the rest said why not.
+    [HttpPost("employees/import")]
+    [Authorize(Policy = Permissions.HrManage)]
+    [RequestSizeLimit(MaxImportBytes + 64 * 1024)]
+    public async Task<EmployeeImportResult> ImportEmployees(IFormFile file, CancellationToken cancellationToken)
+    {
+        if (file.Length > MaxImportBytes)
+            throw new Otantik.BuildingBlocks.DomainException("The file is larger than 5 MB: a sheet of employees is far smaller. Is it the right file?");
+        await using var stream = file.OpenReadStream();
+        return await sender.Send(
+            new ImportEmployeesCommand(EmployeeWorkbook.Read(stream), StaffClaims.IdOf(User) ?? string.Empty, StaffName, CanApprove), cancellationToken);
+    }
+
+    // Everyone employed now, in the template's columns: to file, or to add to and import again.
+    [HttpGet("employees/export")]
+    public async Task<IActionResult> ExportEmployees([FromServices] IBusinessCalendar calendar, CancellationToken cancellationToken)
+    {
+        var employees = (await sender.Send(new GetEmployeesQuery(), cancellationToken)).Where(e => e.IsActive).ToList();
+        var departments = await sender.Send(new GetDepartmentsQuery(), cancellationToken);
+        var today = calendar.BusinessDateOf(DateTime.UtcNow).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        return File(EmployeeWorkbook.Export(employees, departments), EmployeeWorkbook.ContentType, $"employees-{today}.xlsx");
+    }
+
+    // The month's payroll as the Payroll tab shows it, with its totals.
+    [HttpGet("payroll/export")]
+    public async Task<IActionResult> ExportPayroll([FromQuery] DateOnly month, [FromServices] IBusinessCalendar calendar, CancellationToken cancellationToken)
+    {
+        var payroll = await sender.Send(new GetPayrollQuery(month), cancellationToken);
+        var departments = (await sender.Send(new GetDepartmentsQuery(), cancellationToken)).ToDictionary(d => d.Id, d => d.Name);
+        return File(PayrollWorkbook.Export(payroll, departments, calendar.BusinessDateOf(DateTime.UtcNow)), PayrollWorkbook.ContentType, PayrollWorkbook.FileName(month));
+    }
+
+    private const int MaxImportBytes = 5 * 1024 * 1024;
 
     // ---- Attendance ----
 

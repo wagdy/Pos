@@ -15,7 +15,7 @@ import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals, pendingLabel } from './approvals';
-import { saveBlob } from './invoice-paper';
+import { saveBlob } from '../../core/ui/save-blob';
 import { MaterialDialog, MaterialDialogResult } from './material-dialog';
 import { MaterialHistoryDialog } from './material-history-dialog';
 import { MaterialImportDialog } from './material-import-dialog';
