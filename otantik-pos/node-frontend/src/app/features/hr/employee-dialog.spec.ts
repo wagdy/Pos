@@ -2,7 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { MAT_DIALOG_DATA, MatDialogRef } from '@angular/material/dialog';
 import { of, throwError } from 'rxjs';
-import { Employee, EmployeeInput, HrApi } from '../../core/hr/hr.api';
+import { Department, Employee, EmployeeInput, HrApi } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { EmployeeDialog, EmployeeDialogData } from './employee-dialog';
 import { EmploymentDialog, EmploymentDialogData } from './employment-dialog';
@@ -11,21 +11,26 @@ const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
 const hassan: Employee = {
   id: 'hassan', name: 'Hassan', jobTitle: 'Chef', monthlySalary: 5_400, shiftStartsAt: '16:00:00', shiftEndsAt: '01:00:00', daysOff: ['Friday'],
-  deviceUserId: '7', hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20,
+  deviceUserId: '7', hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general',
 };
+
+const departments: Department[] = [
+  { id: 'general', name: 'General', isGeneral: true, employed: 1, everyone: 1 },
+  { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 0, everyone: 0 },
+];
 
 describe('the employee form', () => {
   const saveEmployee = vi.fn();
   const close = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
 
-  async function render(data: EmployeeDialogData) {
+  async function render(data: Omit<EmployeeDialogData, 'departments'> & { departments?: Department[] }) {
     TestBed.configureTestingModule({
       providers: [
         { provide: HrApi, useValue: { saveEmployee } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialogRef, useValue: { close } },
-        { provide: MAT_DIALOG_DATA, useValue: data },
+        { provide: MAT_DIALOG_DATA, useValue: { departments, ...data } },
       ],
     });
     const fixture = TestBed.createComponent(EmployeeDialog);
@@ -75,10 +80,32 @@ describe('the employee form', () => {
 
     const [id, input] = saveEmployee.mock.lastCall! as [string, EmployeeInput];
     expect(input).toMatchObject({
-      name: 'Mona', jobTitle: 'Waiter', monthlySalary: 4_050, shiftStartsAt: '16:30:00', daysOff: ['Friday'], hiredOn: '2026-10-20', deviceUserId: '12', reason: null,
+      name: 'Mona', jobTitle: 'Waiter', employmentType: 'Monthly', monthlySalary: 4_050, dailyWage: 0, departmentId: 'general', shiftStartsAt: '16:30:00',
+      daysOff: ['Friday'], hiredOn: '2026-10-20', deviceUserId: '12', reason: null,
     });
     expect(id).not.toBe(input.requestId);
     expect(close).toHaveBeenCalledWith(expect.objectContaining({ id, name: 'Mona' }));
+  });
+
+  it('takes a daily wage instead of a salary, and the department chosen', async () => {
+    const { el, page, refresh } = await render({ canApprove: true, today: '2026-10-20' });
+    Object.assign(page, { name: 'Samir', jobTitle: 'Kitchen helper', employmentType: 'Daily', salary: 270, departmentId: 'kitchen' });
+    await refresh();
+
+    expect([...el.querySelectorAll('mat-label')].map(text)).toContain('Daily wage · الأجر اليومي');
+    expect([...el.querySelectorAll('mat-label')].map(text)).not.toContain('Base salary · الراتب الأساسي');
+    expect([...el.querySelectorAll('mat-hint')].map(text)).toContain('A day worked: 30.00 an hour; nothing for a day not worked');
+    await page['save']();
+    expect(saveEmployee.mock.lastCall![1]).toMatchObject({ employmentType: 'Daily', monthlySalary: 0, dailyWage: 270, departmentId: 'kitchen' });
+  });
+
+  it('needs a department that is there', async () => {
+    const { page } = await render({ canApprove: true, today: '2026-10-20', departments: [] });
+    Object.assign(page, { name: 'Samir', jobTitle: 'Helper', salary: 4_000 });
+
+    await page['save']();
+    expect(saveEmployee).not.toHaveBeenCalled();
+    expect(notify.error.mock.lastCall![1]).toContain('Department: choose their department');
   });
 
   it('takes flexible hours, with no start time, and opens on one from the attendance device', async () => {

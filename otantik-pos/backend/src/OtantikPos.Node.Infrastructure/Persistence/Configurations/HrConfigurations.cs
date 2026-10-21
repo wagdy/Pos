@@ -15,6 +15,9 @@ internal sealed class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
     {
         builder.ToTable("Employees", NodeDbContext.HrSchema);
         builder.Property(e => e.Name).HasMaxLength(Employee.MaxNameLength);
+        builder.Property(e => e.EmploymentType).IsEnumName();
+        builder.Ignore(e => e.IsDaily);
+        builder.HasOne<Department>().WithMany().HasForeignKey(e => e.DepartmentId).OnDelete(DeleteBehavior.Restrict);
         builder.Property(e => e.JobTitle).HasMaxLength(Employee.MaxJobTitleLength);
         // By name, "Friday, Saturday", as the other enums are stored.
         builder.Property(e => e.DaysOff).HasConversion<string>().HasMaxLength(100);
@@ -26,6 +29,18 @@ internal sealed class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
         // One employee to a user number on the device, and to a till account.
         builder.HasIndex(e => e.DeviceUserId).IsUnique().HasFilter("\"DeviceUserId\" IS NOT NULL");
         builder.HasIndex(e => e.StaffMemberId).IsUnique().HasFilter("\"StaffMemberId\" IS NOT NULL");
+    }
+}
+
+internal sealed class DepartmentConfiguration : IEntityTypeConfiguration<Department>
+{
+    public void Configure(EntityTypeBuilder<Department> builder)
+    {
+        builder.ToTable("Departments", NodeDbContext.HrSchema);
+        builder.Property(d => d.Name).HasMaxLength(Department.MaxNameLength);
+        builder.Ignore(d => d.IsGeneral);
+        // There from the start, for the employees already entered.
+        builder.HasData(new { Id = Department.GeneralId, Name = "General", CreatedAtUtc = new DateTime(2026, 10, 21, 0, 0, 0, DateTimeKind.Utc) });
     }
 }
 
@@ -177,7 +192,7 @@ internal sealed class PayrollSlipConfiguration : IEntityTypeConfiguration<Payrol
         builder.Property(s => s.FinalizedBy).HasMaxLength(200);
         builder.Ignore(s => s.IsFinalized);
         // The figures in the slip's own row, a column each.
-        builder.ComplexProperty(s => s.Figures);
+        builder.ComplexProperty(s => s.Figures, figures => figures.Property(f => f.EmploymentType).HasConversion<string>().HasMaxLength(32));
         builder.HasOne<Employee>().WithMany().HasForeignKey(s => s.EmployeeId).OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(s => new { s.EmployeeId, s.Month }).IsUnique();
         builder.HasIndex(s => s.Month);

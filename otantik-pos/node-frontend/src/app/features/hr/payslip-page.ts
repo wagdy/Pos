@@ -148,9 +148,15 @@ export class FinalizeDialog {
         <table class="breakdown" aria-label="How the net payable is made">
           <tbody>
             <tr>
-              <th>Base salary <span class="ar">الراتب الأساسي</span>
-                <div class="how">{{ f.monthlySalary | money }} a month{{ f.daysEmployed < f.daysInMonth ? ', ' + f.daysEmployed + ' of ' + f.daysInMonth + ' days employed' : '' }}</div>
-              </th>
+              @if (f.employmentType === 'Daily') {
+                <th>Days' wages <span class="ar">أجر الأيام</span>
+                  <div class="how">{{ f.daysWorked }} {{ f.daysWorked === 1 ? 'day' : 'days' }} worked at {{ f.dailyWage | money }} a day</div>
+                </th>
+              } @else {
+                <th>Base salary <span class="ar">الراتب الأساسي</span>
+                  <div class="how">{{ f.monthlySalary | money }} a month{{ f.daysEmployed < f.daysInMonth ? ', ' + f.daysEmployed + ' of ' + f.daysInMonth + ' days employed' : '' }}</div>
+                </th>
+              }
               <td>{{ f.baseSalary | money }}</td>
             </tr>
             <tr class="plus">
@@ -159,7 +165,11 @@ export class FinalizeDialog {
             </tr>
             <tr class="plus">
               <th>+ Days off worked <span class="ar">بدل أيام الراحة</span>
-                <div class="how">{{ f.daysOffWorked }} {{ f.daysOffWorked === 1 ? 'day' : 'days' }}: a day's pay for half a shift or more, the hours for less</div>
+                @if (f.employmentType === 'Daily') {
+                  <div class="how">{{ f.daysOffWorked }} {{ f.daysOffWorked === 1 ? 'day' : 'days' }}: in the days' wages above, with no allowance besides</div>
+                } @else {
+                  <div class="how">{{ f.daysOffWorked }} {{ f.daysOffWorked === 1 ? 'day' : 'days' }}: a day's pay for half a shift or more, the hours for less</div>
+                }
               </th>
               <td>{{ f.daysOffWorkedPay | money }}</td>
             </tr>
@@ -198,7 +208,13 @@ export class FinalizeDialog {
               <td>{{ f.latenessPenalty | money }}</td>
             </tr>
             <tr class="minus">
-              <th>− Absence <span class="ar">خصم الغياب</span><div class="how">{{ f.absentDays }} {{ f.absentDays === 1 ? 'day' : 'days' }} at {{ s.employee.dailyRate | money }}</div></th>
+              <th>− Absence <span class="ar">خصم الغياب</span>
+                @if (f.employmentType === 'Daily') {
+                  <div class="how">Daily pay: a day not worked is not paid, nor deducted</div>
+                } @else {
+                  <div class="how">{{ f.absentDays }} {{ f.absentDays === 1 ? 'day' : 'days' }} at {{ s.employee.dailyRate | money }}</div>
+                }
+              </th>
               <td>{{ f.absencePenalty | money }}</td>
             </tr>
             @if (f.administrativePenalty) {

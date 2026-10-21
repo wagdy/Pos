@@ -276,6 +276,59 @@ public class HrTests
     }
 
     [Fact]
+    public void A_daily_worker_is_paid_their_wage_for_each_day_worked_and_never_absent()
+    {
+        // 250 a day: 27.78 an hour.
+        var helper = Chef();
+        helper.SetPay(EmploymentType.Daily, 250);
+        Assert.Equal((EmploymentType.Daily, 0m, 250m, 250m), (helper.EmploymentType, helper.MonthlySalary, helper.DailyWage, helper.DailyRate));
+        var october = new DateOnly(2026, 10, 1);
+        DayEvaluation Worked(DateOnly d, DayStatus status, int minutes, int late = 0) => new(d, status, null, null, 2, minutes, late, 0, 0, 0);
+        var days = PayrollMonth.Days(october).Select(d => d.Day switch
+        {
+            // Worked the 5th to the 9th (an hour late on the 7th), a Friday off (the 9th), and a
+            // holiday (the 6th); absent the 12th; on leave the 13th; a holiday off the 14th.
+            5 or 8 => Worked(d, DayStatus.Worked, 540),
+            6 => Worked(d, DayStatus.WorkedOnHoliday, 540),
+            7 => Worked(d, DayStatus.Worked, 480, late: 60),
+            9 => Worked(d, DayStatus.WorkedOnDayOff, 300),
+            12 => Nothing(d, DayStatus.Absent),
+            13 => Nothing(d, DayStatus.Leave),
+            14 => Nothing(d, DayStatus.Holiday),
+            _ when helper.IsDayOff(d) => Nothing(d, DayStatus.DayOff),
+            _ => Nothing(d, DayStatus.Absent),
+        }).ToList();
+
+        var figures = PayrollCalculator.Calculate(helper, october, days, [], advances: 100, broughtForward: 0);
+
+        // Five days' wages; the holiday's allowance on top; the Friday a day's wage, no more.
+        Assert.Equal((EmploymentType.Daily, 250m, 5, 1_250m), (figures.EmploymentType, figures.DailyWage, figures.DaysWorked, figures.BaseSalary));
+        Assert.Equal((250m, 0m), (figures.HolidaysWorkedPay, figures.DaysOffWorkedPay));
+        // Nothing absent, the hour late at 27.78.
+        Assert.Equal((0, 0m, 27.78m), (figures.AbsentDays, figures.AbsencePenalty, figures.LatenessPenalty));
+        Assert.Equal(1_250m + 250m - 100m - 27.78m, figures.Net);
+
+        // Monthly again: the wage gone, the salary back.
+        helper.SetPay(EmploymentType.Monthly, 5_400);
+        Assert.Equal((0m, 180m), (helper.DailyWage, helper.DailyRate));
+        Assert.Throws<DomainException>(() => helper.SetPay(EmploymentType.Daily, -1));
+        Assert.Throws<DomainException>(() => helper.SetPay((EmploymentType)9, 100));
+    }
+
+    [Fact]
+    public void An_employee_is_in_a_department_General_unless_moved()
+    {
+        var chef = Chef();
+        Assert.Equal(Department.GeneralId, chef.DepartmentId);
+        var kitchen = new Department(Guid.NewGuid(), " Kitchen ");
+        chef.MoveTo(kitchen.Id);
+        Assert.Equal((kitchen.Id, "Kitchen", false), (chef.DepartmentId, kitchen.Name, kitchen.IsGeneral));
+        Assert.True(new Department(Department.GeneralId, "General").IsGeneral);
+        Assert.Throws<DomainException>(() => chef.MoveTo(Guid.Empty));
+        Assert.Throws<DomainException>(() => kitchen.Rename(" "));
+    }
+
+    [Fact]
     public void A_command_for_the_device_is_numbered_and_its_first_answer_kept()
     {
         var users = DeviceCommand.ReadUsers("CQZ", 3, "Omar");

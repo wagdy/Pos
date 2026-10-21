@@ -94,6 +94,9 @@ public class HrPersistenceTests
     {
         await using var node = await TestNode.StartAsync();
         var waiter = new Employee(Guid.NewGuid(), "Mona", "Waiter", 4_050, null, WeekDays.Friday, new DateOnly(2026, 1, 1), "12");
+        var service = new Department(Guid.NewGuid(), "Service");
+        waiter.SetPay(EmploymentType.Daily, 250);
+        waiter.MoveTo(service.Id);
         var punch = AttendanceLog.FromDevice(Serial, "12", PunchIn, 0, 1, waiter.Id);
         punch.SettleLate("Omar");
         var command = DeviceCommand.ReadUsers(Serial, 1, "Omar");
@@ -101,6 +104,7 @@ public class HrPersistenceTests
         command.Answered(0, DateTime.UtcNow);
         await node.Db(async db =>
         {
+            db.Departments.Add(service);
             db.Employees.Add(waiter);
             db.AttendanceLogs.Add(punch);
             db.DeviceCommands.Add(command);
@@ -110,10 +114,13 @@ public class HrPersistenceTests
 
         await node.Db(async db =>
         {
-            Assert.Null((await db.Employees.SingleAsync()).ShiftStartsAt);
+            var kept = (await db.Employees.SingleAsync());
+            Assert.Equal(((TimeOnly?)null, EmploymentType.Daily, 250m, 0m, service.Id), (kept.ShiftStartsAt, kept.EmploymentType, kept.DailyWage, kept.MonthlySalary, kept.DepartmentId));
+            // General is made with the table.
+            Assert.Equal(["General", "Service"], await db.Departments.OrderBy(d => d.Name).Select(d => d.Name).ToListAsync());
             Assert.Equal("Omar", (await db.AttendanceLogs.SingleAsync()).LateSettledBy);
-            var kept = await db.DeviceCommands.SingleAsync();
-            Assert.Equal((DeviceCommandKind.ReadUsers, "C:1:DATA QUERY USERINFO", (int?)0), (kept.Kind, kept.Line, kept.ReturnCode));
+            var command = await db.DeviceCommands.SingleAsync();
+            Assert.Equal((DeviceCommandKind.ReadUsers, "C:1:DATA QUERY USERINFO", (int?)0), (command.Kind, command.Line, command.ReturnCode));
             Assert.Equal(("12", "منى"), ((await db.DeviceUsers.SingleAsync()).DeviceUserId, (await db.DeviceUsers.SingleAsync()).Name));
             return 0;
         });

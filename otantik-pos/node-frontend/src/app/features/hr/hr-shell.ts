@@ -3,9 +3,9 @@ import { MatTabsModule } from '@angular/material/tabs';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { CorrectionsCount } from './corrections-count';
 
-// HR & Payroll (الموارد البشرية والرواتب): the employees, their attendance and its corrections, the
-// monthly payroll, the public holidays, and the attendance devices that send their punches. The
-// Corrections tab counts what waits there for a manager. Managers and accountants (HrView); an
+// HR & Payroll (الموارد البشرية والرواتب): the employees and their departments, their attendance
+// and its corrections, the monthly payroll, the public holidays, and the attendance devices that
+// send their punches. The Corrections tab counts what waits there for a manager. Managers and accountants (HrView); an
 // accountant's changes go to a manager. Advances are paid in Financials and in the daily batch,
 // from the safe or a day's takings.
 @Component({
@@ -60,6 +60,7 @@ export class HrShell {
   protected readonly waiting = inject(CorrectionsCount);
   protected readonly tabs = [
     { path: 'employees', en: 'Employees', ar: 'الموظفين' },
+    { path: 'departments', en: 'Departments', ar: 'الأقسام' },
     { path: 'attendance', en: 'Attendance', ar: 'الحضور والانصراف' },
     { path: 'corrections', en: 'Corrections', ar: 'مراجعة وجزاءات' },
     { path: 'payroll', en: 'Payroll', ar: 'مسير الرواتب' },

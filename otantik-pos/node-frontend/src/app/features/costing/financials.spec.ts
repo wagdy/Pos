@@ -12,7 +12,7 @@ const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
 const employee = (id: string, name: string, isActive = true): Employee => ({
   id, name, jobTitle: 'Chef', monthlySalary: 5_400, shiftStartsAt: '10:00:00', shiftEndsAt: '19:00:00', daysOff: [], deviceUserId: null,
-  hiredOn: '2026-01-01', leftOn: isActive ? null : '2026-09-30', isActive, dailyRate: 180, hourlyRate: 20,
+  hiredOn: '2026-01-01', leftOn: isActive ? null : '2026-09-30', isActive, dailyRate: 180, hourlyRate: 20, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general',
 });
 
 describe('entering a safe entry', () => {

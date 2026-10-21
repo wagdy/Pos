@@ -94,7 +94,12 @@ import { isoDay } from '../costing/financials';
                   <a [routerLink]="[s.employee.id]" [queryParams]="{ month: p.month }"><strong>{{ s.employee.name }}</strong></a>
                   <div class="muted small">{{ s.employee.jobTitle }}@if (f.daysEmployed < f.daysInMonth) { · {{ f.daysEmployed }} of {{ f.daysInMonth }} days}</div>
                 </td>
-                <td class="num">{{ f.baseSalary | money }}</td>
+                <td class="num">
+                  {{ f.baseSalary | money }}
+                  @if (f.employmentType === 'Daily') {
+                    <div class="muted small">{{ f.daysWorked }} {{ f.daysWorked === 1 ? 'day' : 'days' }} at {{ f.dailyWage | money }}</div>
+                  }
+                </td>
                 <td class="num">{{ f.incentives | money }}</td>
                 <td class="num">
                   {{ f.leaveAllowances + f.daysOffWorkedPay + f.holidaysWorkedPay | money }}

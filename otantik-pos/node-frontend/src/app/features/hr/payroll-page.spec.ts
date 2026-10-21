@@ -22,7 +22,7 @@ const cell = (el: Element): string =>
 
 const hassan: Employee = {
   id: 'hassan', name: 'Hassan', jobTitle: 'Chef', monthlySalary: 5_400, shiftStartsAt: '16:00:00', shiftEndsAt: '01:00:00', daysOff: ['Friday'],
-  deviceUserId: '7', hiredOn: '2026-09-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20,
+  deviceUserId: '7', hiredOn: '2026-09-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general',
 };
 const mona: Employee = { ...hassan, id: 'mona', name: 'Mona', jobTitle: 'Waiter', monthlySalary: 4_050, dailyRate: 135, hourlyRate: 15 };
 
@@ -30,7 +30,7 @@ function figures(extra: Partial<PayrollFigures> = {}): PayrollFigures {
   const f = {
     monthlySalary: 5_400, daysInMonth: 30, daysEmployed: 30, baseSalary: 5_400, incentives: 500, leaveAllowances: 0, overtimeMinutes: 120, overtimePay: 40,
     shortMinutes: 101, latenessPenalty: 33.67, absentDays: 1, absencePenalty: 180, advances: 200, broughtForward: 0, daysWorked: 25, daysOffWorked: 0,
-    missingPunchDays: 0, openDays: 0, daysOffWorkedPay: 0, administrativePenaltyHours: 0, administrativePenalty: 0, holidaysWorked: 0, holidaysWorkedPay: 0,
+    missingPunchDays: 0, openDays: 0, daysOffWorkedPay: 0, administrativePenaltyHours: 0, administrativePenalty: 0, holidaysWorked: 0, holidaysWorkedPay: 0, employmentType: 'Monthly' as const, dailyWage: 0,
     ...extra,
   };
   const gross = f.baseSalary + f.incentives + f.leaveAllowances + f.daysOffWorkedPay + f.holidaysWorkedPay + f.overtimePay;
@@ -197,6 +197,21 @@ describe('a payslip', () => {
     expect(text(el.querySelectorAll('.breakdown tr')[4].querySelector('.how')!)).toBe('2h 00m at L.E 20.00 an hour');
     expect(text(el.querySelectorAll('.breakdown tr')[8].querySelector('.how')!)).toBe('1 day at L.E 180.00');
     expect([...el.querySelectorAll('.lists .line')].map(cell)).toEqual(['Incentive حوافز · Best month L.E 500.00 delete', '10 Sep · from the safe L.E 200.00']);
+  });
+
+  it('makes a daily worker’s base pay the days worked at their wage, and deducts no absence', async () => {
+    payroll.mockReturnValue(of(month([slip(hassan, { status: 'Draft' }, {
+      employmentType: 'Daily', dailyWage: 250, monthlySalary: 0, daysWorked: 20, daysOffWorked: 1, baseSalary: 5_000, absentDays: 0, absencePenalty: 0,
+    })])));
+    const { el } = await render();
+
+    const base = el.querySelectorAll('.breakdown tr')[0];
+    expect(text(base.querySelector('th')!)).toContain("Days' wages");
+    expect(text(base.querySelector('.how')!)).toBe('20 days worked at L.E 250.00 a day');
+    const dayOff = [...el.querySelectorAll('.breakdown tr')].find((r) => text(r.querySelector('th')!).startsWith('+ Days off worked'))!;
+    expect(text(dayOff.querySelector('.how')!)).toBe("1 day: in the days' wages above, with no allowance besides");
+    const absence = [...el.querySelectorAll('.breakdown tr')].find((r) => text(r.querySelector('th')!).startsWith('− Absence'))!;
+    expect(text(absence.querySelector('.how')!)).toBe('Daily pay: a day not worked is not paid, nor deducted');
   });
 
   it('shows the holidays worked as their own line, when there are any', async () => {

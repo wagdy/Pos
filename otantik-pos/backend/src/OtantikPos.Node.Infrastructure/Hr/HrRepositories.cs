@@ -20,6 +20,22 @@ internal sealed class EmployeeRepository(NodeDbContext db) : IEmployeeRepository
 
     public Task<Employee?> GetByDeviceUserIdAsync(string deviceUserId, CancellationToken cancellationToken = default) =>
         db.Employees.AsNoTracking().SingleOrDefaultAsync(e => e.DeviceUserId == deviceUserId, cancellationToken);
+
+    public async Task<IReadOnlyList<Employee>> GetInDepartmentAsync(Guid departmentId, CancellationToken cancellationToken = default) =>
+        await db.Employees.Where(e => e.DepartmentId == departmentId).ToListAsync(cancellationToken);
+}
+
+internal sealed class DepartmentRepository(NodeDbContext db) : IDepartmentRepository
+{
+    public Task<Department?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.Departments.SingleOrDefaultAsync(d => d.Id == id, cancellationToken);
+
+    public void Add(Department aggregate) => db.Departments.Add(aggregate);
+
+    public void Remove(Department department) => db.Departments.Remove(department);
+
+    public async Task<IReadOnlyList<Department>> GetAllAsync(CancellationToken cancellationToken = default) =>
+        await db.Departments.AsNoTracking().OrderBy(d => d.Name).ToListAsync(cancellationToken);
 }
 
 internal sealed class AttendanceDeviceRepository(NodeDbContext db) : IAttendanceDeviceRepository

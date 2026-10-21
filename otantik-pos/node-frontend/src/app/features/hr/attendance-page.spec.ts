@@ -16,7 +16,7 @@ const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 function employee(id: string, name: string, shift = '16:00:00'): Employee {
   return {
     id, name, jobTitle: 'Chef', monthlySalary: 5_400, shiftStartsAt: shift, shiftEndsAt: '01:00:00', daysOff: ['Friday'], deviceUserId: '7',
-    hiredOn: '2026-09-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20,
+    hiredOn: '2026-09-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general',
   };
 }
 

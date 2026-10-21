@@ -7,10 +7,11 @@ import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
+import { MatSelectModule } from '@angular/material/select';
 import { firstValueFrom } from 'rxjs';
 import { ApprovalResult } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
-import { Employee, EmployeeInput, HrApi, WeekDay, weekDays } from '../../core/hr/hr.api';
+import { Department, Employee, EmployeeInput, EmploymentType, HrApi, WeekDay, weekDays } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { FormChecks, FormProblem } from '../costing/form-checks';
 
@@ -19,17 +20,30 @@ export interface EmployeeDialogData {
   employee?: Employee;
   // A new one's name and number as the attendance device has them.
   fromDevice?: { name: string; deviceUserId: string };
+  // The departments to put them in, General among them.
+  departments: Department[];
   canApprove: boolean;
   today: string;
 }
 
-// An employee added or changed: who they are, their base monthly salary, when their nine-hour
-// shift starts (or flexible hours, with none), their weekly days off, the day they started, and
-// their number on the attendance device. Saved here: a manager's at once, anyone else's sent for
+// An employee added or changed: who they are and their department, how they are paid (a monthly
+// salary, or a daily wage for each day worked), when their nine-hour shift starts (or flexible
+// hours, with none), their weekly days off, the day they started, and their number on the
+// attendance device. Saved here: a manager's at once, anyone else's sent for
 // approval. Closes with what was saved or asked, or nothing when cancelled.
 @Component({
   selector: 'app-employee-dialog',
-  imports: [DecimalPipe, FormsModule, MatButtonModule, MatButtonToggleModule, MatCheckboxModule, MatDialogModule, MatFormFieldModule, MatInputModule],
+  imports: [
+    DecimalPipe,
+    FormsModule,
+    MatButtonModule,
+    MatButtonToggleModule,
+    MatCheckboxModule,
+    MatDialogModule,
+    MatFormFieldModule,
+    MatInputModule,
+    MatSelectModule,
+  ],
   template: `
     <h2 mat-dialog-title>
       @if (data.employee) {
@@ -51,10 +65,36 @@ export interface EmployeeDialogData {
           <mat-error>{{ checks.message('Role') }}</mat-error>
         </mat-form-field>
         <mat-form-field>
-          <mat-label>Base salary · الراتب الأساسي</mat-label>
+          <mat-label>Department · القسم</mat-label>
+          <mat-select [(ngModel)]="departmentId" aria-label="Department" [errorStateMatcher]="checks.field('Department')">
+            @for (d of data.departments; track d.id) {
+              <mat-option [value]="d.id">{{ d.name }}</mat-option>
+            }
+          </mat-select>
+          <mat-error>{{ checks.message('Department') }}</mat-error>
+        </mat-form-field>
+        <div class="pay-type">
+          <span class="label">Paid · نوع العمالة</span>
+          <mat-button-toggle-group [(ngModel)]="employmentType" aria-label="Paid" hideSingleSelectionIndicator>
+            <mat-button-toggle value="Monthly">Monthly<span class="ar">شهرية</span></mat-button-toggle>
+            <mat-button-toggle value="Daily">Daily<span class="ar">يومية</span></mat-button-toggle>
+          </mat-button-toggle-group>
+        </div>
+        <mat-form-field>
+          @if (employmentType === 'Daily') {
+            <mat-label>Daily wage · الأجر اليومي</mat-label>
+          } @else {
+            <mat-label>Base salary · الراتب الأساسي</mat-label>
+          }
           <input matInput type="number" min="0" step="any" [(ngModel)]="salary" aria-label="Base salary" [errorStateMatcher]="checks.field('Base salary')" />
           <span matTextSuffix>&nbsp;L.E</span>
-          @if (salary !== null && salary > 0) {
+          @if (employmentType === 'Daily') {
+            @if (salary !== null && salary > 0) {
+              <mat-hint>A day worked: {{ salary / 9 | number: '1.2-2' }} an hour; nothing for a day not worked</mat-hint>
+            } @else {
+              <mat-hint>A day worked</mat-hint>
+            }
+          } @else if (salary !== null && salary > 0) {
             <mat-hint>A month: {{ salary / 30 | number: '1.2-2' }} a day · {{ salary / 270 | number: '1.2-2' }} an hour</mat-hint>
           } @else {
             <mat-hint>A month</mat-hint>
@@ -127,6 +167,16 @@ export interface EmployeeDialogData {
     }
     .wide {
       grid-column: span 2;
+    }
+    .pay-type {
+      display: grid;
+      gap: 4px;
+      align-content: start;
+
+      .label {
+        font: var(--mat-sys-body-small);
+        color: var(--mat-sys-on-surface-variant);
+      }
     }
     .shift {
       display: grid;
@@ -205,7 +255,14 @@ export class EmployeeDialog {
 
   protected name = this.data.employee?.name ?? this.data.fromDevice?.name ?? '';
   protected jobTitle = this.data.employee?.jobTitle ?? '';
-  protected salary: number | null = this.data.employee?.monthlySalary ?? null;
+  protected employmentType: EmploymentType = this.data.employee?.employmentType ?? 'Monthly';
+  // The salary, or the daily wage, as they are paid.
+  protected salary: number | null = this.data.employee
+    ? this.data.employee.employmentType === 'Daily'
+      ? this.data.employee.dailyWage
+      : this.data.employee.monthlySalary
+    : null;
+  protected departmentId = this.data.employee?.departmentId ?? this.data.departments.find((d) => d.isGeneral)?.id ?? '';
   protected flexible = !!this.data.employee && this.data.employee.shiftStartsAt === null;
   protected shiftStart = (this.data.employee?.shiftStartsAt ?? '10:00:00').slice(0, 5);
   protected daysOff: WeekDay[] = [...(this.data.employee?.daysOff ?? [])];
@@ -235,8 +292,11 @@ export class EmployeeDialog {
     if (!this.jobTitle.trim()) {
       add('Role', 'enter what they do');
     }
+    if (!this.data.departments.some((d) => d.id === this.departmentId)) {
+      add('Department', 'choose their department');
+    }
     if (this.salary === null || !(this.salary >= 0)) {
-      add('Base salary', 'enter the salary');
+      add('Base salary', this.employmentType === 'Daily' ? 'enter the daily wage' : 'enter the salary');
     }
     if (!this.flexible && !/^\d{2}:\d{2}$/.test(this.shiftStart ?? '')) {
       add('Shift starts', 'enter when the shift starts');
@@ -261,7 +321,10 @@ export class EmployeeDialog {
       requestId: this.requestId,
       name: this.name.trim(),
       jobTitle: this.jobTitle.trim(),
-      monthlySalary: this.salary!,
+      employmentType: this.employmentType,
+      monthlySalary: this.employmentType === 'Monthly' ? this.salary! : 0,
+      dailyWage: this.employmentType === 'Daily' ? this.salary! : 0,
+      departmentId: this.departmentId,
       shiftStartsAt: this.flexible ? null : `${this.shiftStart}:00`,
       daysOff: this.daysOff,
       hiredOn: this.hiredOn,

@@ -27,6 +27,11 @@ public enum PayrollSlipStatus
 // than its allowance gives: a holiday worked never pays less than one stayed home.
 // When the deductions are more than the pay, nothing is paid and the rest is carried to the next
 // month's slip (BroughtForward there).
+//
+// A daily employee (EmploymentType.Daily) has no salary: their base pay is their daily wage for
+// each day worked, a day off and a holiday included. A day not worked earns nothing and costs
+// nothing, so nothing is absent; a day off worked is a day's wage, with no allowance besides. A
+// holiday worked earns its allowance on top, and lateness and overtime count as anyone's.
 public sealed record PayrollFigures(
     decimal MonthlySalary,
     int DaysInMonth,
@@ -54,7 +59,10 @@ public sealed record PayrollFigures(
     decimal AdministrativePenalty = 0,
     // Public holidays worked (عطلات رسمية), and their holiday allowance.
     int HolidaysWorked = 0,
-    decimal HolidaysWorkedPay = 0)
+    decimal HolidaysWorkedPay = 0,
+    // How the base pay was made: a monthly salary's share, or a daily wage for each day worked.
+    EmploymentType EmploymentType = EmploymentType.Monthly,
+    decimal DailyWage = 0)
 {
     public decimal Gross => BaseSalary + Incentives + LeaveAllowances + DaysOffWorkedPay + HolidaysWorkedPay + OvertimePay;
     public decimal Deductions => Advances + BroughtForward + LatenessPenalty + AbsencePenalty + AdministrativePenalty;
@@ -120,12 +128,16 @@ public static class PayrollCalculator
             throw new DomainException("A slip counts its own employee's adjustments for its month.");
 
         var daysInMonth = DateTime.DaysInMonth(month.Year, month.Month);
-        var baseSalary = employed.Count == daysInMonth ? employee.MonthlySalary : employee.MonthlySalary * employed.Count / daysInMonth;
+        var daily = employee.IsDaily;
+        var daysWorked = Count(DayStatus.Worked) + Count(DayStatus.WorkedOnDayOff) + Count(DayStatus.WorkedOnHoliday);
+        var baseSalary = daily ? employee.DailyWage * daysWorked
+            : employed.Count == daysInMonth ? employee.MonthlySalary
+            : employee.MonthlySalary * employed.Count / daysInMonth;
         var overtime = counted.Sum(d => d?.OvertimeMinutes ?? 0);
         var shortMinutes = counted.Sum(d => d is null ? 0 : CountedShortMinutes(d));
-        var absent = Count(DayStatus.Absent);
+        var absent = daily ? 0 : Count(DayStatus.Absent);
         var penaltyHours = counted.Sum(d => d?.PenaltyHours ?? 0);
-        var daysOffWorkedPay = counted
+        var daysOffWorkedPay = daily ? 0 : counted
             .Where(d => d?.Status == DayStatus.WorkedOnDayOff)
             .Sum(d => DayOffWorkedPay(employee, d!.WorkedMinutes));
         var holidaysWorked = counted.Where(d => d?.Status == DayStatus.WorkedOnHoliday).ToList();
@@ -146,7 +158,7 @@ public static class PayrollCalculator
             Money(absent * employee.DailyRate),
             Money(advances),
             Money(broughtForward),
-            Count(DayStatus.Worked) + Count(DayStatus.WorkedOnDayOff) + Count(DayStatus.WorkedOnHoliday),
+            daysWorked,
             Count(DayStatus.WorkedOnDayOff),
             Count(DayStatus.Suspended),
             counted.Count(d => d is null || d.Status == DayStatus.Open),
@@ -154,7 +166,9 @@ public static class PayrollCalculator
             penaltyHours,
             Money(penaltyHours * employee.HourlyRate),
             holidaysWorked.Count,
-            Money(holidaysWorkedPay));
+            Money(holidaysWorkedPay),
+            employee.EmploymentType,
+            employee.DailyWage);
     }
 
     private static decimal Money(decimal amount) => Math.Round(amount, 2, MidpointRounding.AwayFromZero);

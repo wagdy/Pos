@@ -11,6 +11,7 @@ namespace OtantikPos.Application.Tests;
 public sealed class HrStore
 {
     public EmployeeStore Employees { get; } = new();
+    public DepartmentStore Departments { get; } = new();
     public DeviceStore Devices { get; } = new();
     public PunchStore Punches { get; } = new();
     public DayMarkStore Marks { get; } = new();
@@ -42,6 +43,20 @@ public sealed class EmployeeStore : ListStore<Employee>, IEmployeeRepository
 
     public Task<Employee?> GetByDeviceUserIdAsync(string deviceUserId, CancellationToken cancellationToken = default) =>
         Task.FromResult(Items.SingleOrDefault(e => e.DeviceUserId == deviceUserId));
+
+    public Task<IReadOnlyList<Employee>> GetInDepartmentAsync(Guid departmentId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<Employee>>(Items.Where(e => e.DepartmentId == departmentId).ToList());
+}
+
+// General there from the start, as the migration makes it.
+public sealed class DepartmentStore : ListStore<Department>, IDepartmentRepository
+{
+    public DepartmentStore() => Items.Add(new Department(Department.GeneralId, "General"));
+
+    public Task<IReadOnlyList<Department>> GetAllAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<Department>>(Items.OrderBy(d => d.Name).ToList());
+
+    public void Remove(Department department) => Items.Remove(department);
 }
 
 public sealed class DeviceStore : ListStore<AttendanceDevice>, IAttendanceDeviceRepository

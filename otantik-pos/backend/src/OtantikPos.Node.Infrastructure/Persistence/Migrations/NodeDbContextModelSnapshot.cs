@@ -934,6 +934,38 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.ToTable("PublicHolidays", "hr");
                 });
 
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Employees.Department", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Departments", "hr");
+
+                    b.HasData(
+                        new
+                        {
+                            Id = new Guid("7a1e3c4d-0000-4000-8000-000000000001"),
+                            CreatedAtUtc = new DateTime(2026, 10, 21, 0, 0, 0, 0, DateTimeKind.Utc),
+                            Name = "General"
+                        });
+                });
+
             modelBuilder.Entity("OtantikPos.Hr.Domain.Employees.Employee", b =>
                 {
                     b.Property<Guid>("Id")
@@ -942,14 +974,26 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<decimal>("DailyWage")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
                     b.Property<string>("DaysOff")
                         .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
+                    b.Property<Guid>("DepartmentId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("DeviceUserId")
                         .HasMaxLength(24)
                         .HasColumnType("character varying(24)");
+
+                    b.Property<string>("EmploymentType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
 
                     b.Property<DateOnly>("HiredOn")
                         .HasColumnType("date");
@@ -988,6 +1032,8 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasColumnName("xmin");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("DepartmentId");
 
                     b.HasIndex("DeviceUserId")
                         .IsUnique()
@@ -1139,6 +1185,10 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                                 .HasPrecision(10, 2)
                                 .HasColumnType("numeric(10,2)");
 
+                            b1.Property<decimal>("DailyWage")
+                                .HasPrecision(10, 2)
+                                .HasColumnType("numeric(10,2)");
+
                             b1.Property<int>("DaysEmployed")
                                 .HasColumnType("integer");
 
@@ -1154,6 +1204,11 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
 
                             b1.Property<int>("DaysWorked")
                                 .HasColumnType("integer");
+
+                            b1.Property<string>("EmploymentType")
+                                .IsRequired()
+                                .HasMaxLength(32)
+                                .HasColumnType("character varying(32)");
 
                             b1.Property<int>("HolidaysWorked")
                                 .HasColumnType("integer");
@@ -2818,6 +2873,15 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.HasOne("OtantikPos.Hr.Domain.Employees.Employee", null)
                         .WithMany()
                         .HasForeignKey("EmployeeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Employees.Employee", b =>
+                {
+                    b.HasOne("OtantikPos.Hr.Domain.Employees.Department", null)
+                        .WithMany()
+                        .HasForeignKey("DepartmentId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

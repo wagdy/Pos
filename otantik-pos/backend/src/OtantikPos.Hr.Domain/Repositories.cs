@@ -13,6 +13,17 @@ public interface IEmployeeRepository : IRepository<Employee>
     Task<IReadOnlyList<Employee>> GetAllAsync(CancellationToken cancellationToken = default);
 
     Task<Employee?> GetByDeviceUserIdAsync(string deviceUserId, CancellationToken cancellationToken = default);
+
+    // Tracked: everyone in a department, left or not.
+    Task<IReadOnlyList<Employee>> GetInDepartmentAsync(Guid departmentId, CancellationToken cancellationToken = default);
+}
+
+public interface IDepartmentRepository : IRepository<Department>
+{
+    // By name.
+    Task<IReadOnlyList<Department>> GetAllAsync(CancellationToken cancellationToken = default);
+
+    void Remove(Department department);
 }
 
 public interface IAttendanceDeviceRepository : IRepository<AttendanceDevice>

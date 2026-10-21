@@ -18,6 +18,17 @@ public enum WeekDays
     Saturday = 64,
 }
 
+// How an employee is paid (نوع العمالة).
+public enum EmploymentType
+{
+    // A fixed monthly salary (عمالة شهرية): a day costs it over 30, and a day absent is deducted.
+    Monthly = 1,
+
+    // A daily wage (عمالة يومية): paid for the days worked, nothing for a day not worked, never
+    // an absence.
+    Daily = 2,
+}
+
 public static class WeekDaysExtensions
 {
     public const WeekDays All = (WeekDays)127;
@@ -31,9 +42,10 @@ public static class WeekDaysExtensions
 // it (DeviceUserId).
 //
 // A shift is nine hours, from the time it starts (ShiftStartsAt). Someone on flexible hours has
-// no start time: nothing is late for them, and their day is the hours they punch. A month's pay
-// is thirty days' whatever the month's length: a day costs the salary over 30, an hour a day's
-// over 9, which is what lateness and absence are deducted at and overtime paid at.
+// no start time: nothing is late for them, and their day is the hours they punch. They are paid
+// monthly or daily (EmploymentType): a monthly salary is thirty days' whatever the month's
+// length, a day costing it over 30; a daily wage is a day's. An hour is a day's over 9, which is
+// what lateness is deducted at and overtime paid at. Each is in a department (DepartmentId).
 public sealed partial class Employee : AggregateRoot
 {
     public const int ShiftHours = 9;
@@ -42,6 +54,7 @@ public sealed partial class Employee : AggregateRoot
     public const int MaxJobTitleLength = 100;
     public const int MaxDeviceUserIdLength = 24;
     public const decimal MaxMonthlySalary = 1_000_000;
+    public const decimal MaxDailyWage = 50_000;
 
     public static readonly TimeSpan ShiftLength = TimeSpan.FromHours(ShiftHours);
 
@@ -76,8 +89,18 @@ public sealed partial class Employee : AggregateRoot
     // What they do (الوظيفة): chef, waiter, cashier.
     public string JobTitle { get; private set; } = string.Empty;
 
-    // The base monthly salary (الراتب الأساسي), before incentives, allowances and deductions.
+    public EmploymentType EmploymentType { get; private set; } = EmploymentType.Monthly;
+
+    // A monthly employee's base salary (الراتب الأساسي), before incentives, allowances and
+    // deductions; nothing for a daily one.
     public decimal MonthlySalary { get; private set; }
+
+    // A daily employee's wage for a day worked (الأجر اليومي); nothing for a monthly one.
+    public decimal DailyWage { get; private set; }
+
+    public bool IsDaily => EmploymentType == EmploymentType.Daily;
+
+    public Guid DepartmentId { get; private set; } = Department.GeneralId;
 
     // When the shift starts, local time. It ends nine hours later, past midnight if need be. None
     // for flexible hours.
@@ -100,7 +123,7 @@ public sealed partial class Employee : AggregateRoot
 
     public DateTime CreatedAtUtc { get; private set; }
 
-    public decimal DailyRate => MonthlySalary / PayDaysInMonth;
+    public decimal DailyRate => IsDaily ? DailyWage : MonthlySalary / PayDaysInMonth;
     public decimal HourlyRate => DailyRate / ShiftHours;
     public decimal MinuteRate => HourlyRate / 60;
 
@@ -124,13 +147,28 @@ public sealed partial class Employee : AggregateRoot
         JobTitle = trimmed;
     }
 
-    public void SetSalary(decimal monthlySalary)
+    public void SetSalary(decimal monthlySalary) => SetPay(EmploymentType.Monthly, monthlySalary);
+
+    // Paid monthly, at a salary; or daily, at a wage. The other is nothing.
+    public void SetPay(EmploymentType type, decimal amount)
     {
-        if (monthlySalary < 0)
-            throw new DomainException("A salary is zero or more.");
-        if (monthlySalary > MaxMonthlySalary)
-            throw new DomainException("That salary is more than a till can pay; check the amount.");
-        MonthlySalary = Math.Round(monthlySalary, 2, MidpointRounding.AwayFromZero);
+        if (!Enum.IsDefined(type))
+            throw new DomainException("Choose monthly or daily pay.");
+        if (amount < 0)
+            throw new DomainException(type == EmploymentType.Daily ? "A daily wage is zero or more." : "A salary is zero or more.");
+        if (amount > (type == EmploymentType.Daily ? MaxDailyWage : MaxMonthlySalary))
+            throw new DomainException($"That {(type == EmploymentType.Daily ? "wage" : "salary")} is more than a till can pay; check the amount.");
+        var money = Math.Round(amount, 2, MidpointRounding.AwayFromZero);
+        EmploymentType = type;
+        MonthlySalary = type == EmploymentType.Monthly ? money : 0;
+        DailyWage = type == EmploymentType.Daily ? money : 0;
+    }
+
+    public void MoveTo(Guid departmentId)
+    {
+        if (departmentId == Guid.Empty)
+            throw new DomainException("Choose the employee's department.");
+        DepartmentId = departmentId;
     }
 
     // To the minute: the device's punches are, and lateness is counted in minutes. None: flexible

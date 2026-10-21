@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Otantik.SharedKernel.Authorization;
 using OtantikPos.Hr.Domain.Attendance;
+using OtantikPos.Hr.Domain.Employees;
 using OtantikPos.Hr.Domain.Payroll;
 using OtantikPos.Inventory.Application.Approvals;
 using OtantikPos.Inventory.Application.Hr;
@@ -28,12 +29,32 @@ public sealed class HrController(ISender sender) : ControllerBase
     [HttpGet("employees")]
     public Task<IReadOnlyList<EmployeeDto>> GetEmployees(CancellationToken cancellationToken) => sender.Send(new GetEmployeesQuery(), cancellationToken);
 
+    // The departments, by name, with how many are in each.
+    [HttpGet("departments")]
+    public Task<IReadOnlyList<DepartmentDto>> GetDepartments(CancellationToken cancellationToken) => sender.Send(new GetDepartmentsQuery(), cancellationToken);
+
+    // Added under this id, or renamed: a manager's.
+    [HttpPut("departments/{departmentId:guid}")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<DepartmentDto> SaveDepartment(Guid departmentId, DepartmentRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new SaveDepartmentCommand(departmentId, request.Name), cancellationToken);
+
+    // Deleted, its employees moved first to ?moveTo= when it has any: a manager's.
+    [HttpDelete("departments/{departmentId:guid}")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public async Task<IActionResult> DeleteDepartment(Guid departmentId, [FromQuery] Guid? moveTo, CancellationToken cancellationToken)
+    {
+        await sender.Send(new DeleteDepartmentCommand(departmentId, moveTo), cancellationToken);
+        return NoContent();
+    }
+
     // Added under the id the till made, or changed.
     [HttpPut("employees/{employeeId:guid}")]
     [Authorize(Policy = Permissions.HrManage)]
     public Task<IActionResult> SaveEmployee(Guid employeeId, SaveEmployeeRequest request, CancellationToken cancellationToken) =>
         ChangeAsync(employeeId, request.RequestId, new EmployeeRequest(new EmployeeDetails(
-            request.Name, request.JobTitle, request.MonthlySalary, request.ShiftStartsAt, request.DaysOff ?? [], request.HiredOn, request.DeviceUserId)),
+            request.Name, request.JobTitle, request.MonthlySalary, request.ShiftStartsAt, request.DaysOff ?? [], request.HiredOn, request.DeviceUserId,
+            request.EmploymentType ?? EmploymentType.Monthly, request.DailyWage ?? 0, request.DepartmentId)),
             request.Reason, cancellationToken);
 
     // Left: employed and paid to their last day.
@@ -234,7 +255,13 @@ public sealed record SaveEmployeeRequest(
     IReadOnlyList<DayOfWeek>? DaysOff,
     DateOnly HiredOn,
     string? DeviceUserId = null,
-    string? Reason = null);
+    string? Reason = null,
+    // Monthly unless said; a daily one's wage; General unless given.
+    EmploymentType? EmploymentType = null,
+    decimal? DailyWage = null,
+    Guid? DepartmentId = null);
+
+public sealed record DepartmentRequest(string Name);
 
 public sealed record LeaveRequest(Guid RequestId, DateOnly LastDay, string? Reason = null);
 

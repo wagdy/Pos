@@ -14,7 +14,7 @@ import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
 import { ApprovalResult, isRequested } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
-import { DeviceUser, Employee, EmployeeInput, HrApi, weekDays } from '../../core/hr/hr.api';
+import { Department, DeviceUser, Employee, EmployeeInput, HrApi, weekDays } from '../../core/hr/hr.api';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals, pendingLabel } from '../costing/approvals';
@@ -65,20 +65,43 @@ export class LinkDeviceUserDialog {
   protected employeeId = '';
 }
 
-// The employees (الموظفين): who is on the payroll, their base salary, their nine-hour shift (or
-// flexible hours) and days off, and their number on the attendance device. Added, changed, leaving
+// The employees (الموظفين): who is on the payroll and in which department, their pay (a monthly
+// salary or a daily wage), their nine-hour shift (or flexible hours) and days off, and their
+// number on the attendance device. Added, changed, leaving
 // and coming back by whoever manages HR: a manager's at once, anyone else's waiting for a manager,
 // listed above the table until then (a new one) or locking its row (a change). Below, the users
 // the device has listed that nobody on the till has the number of yet, to add as employees or
 // link to one.
 @Component({
   selector: 'app-employees-page',
-  imports: [DatePipe, FormsModule, MatButtonModule, MatIconModule, MatProgressBarModule, MatSlideToggleModule, MatTooltipModule, MoneyPipe],
+  imports: [
+    DatePipe,
+    FormsModule,
+    MatButtonModule,
+    MatFormFieldModule,
+    MatIconModule,
+    MatProgressBarModule,
+    MatSelectModule,
+    MatSlideToggleModule,
+    MatTooltipModule,
+    MoneyPipe,
+  ],
   template: `
     <div class="toolbar">
       <mat-slide-toggle [ngModel]="showLeft()" (ngModelChange)="showLeft.set($event)">Show who has left · عرض من ترك العمل</mat-slide-toggle>
+      @if (departments().length > 1) {
+        <mat-form-field subscriptSizing="dynamic" class="department">
+          <mat-label>Department · القسم</mat-label>
+          <mat-select [ngModel]="department()" (ngModelChange)="department.set($event)" aria-label="Department">
+            <mat-option value="">All departments</mat-option>
+            @for (d of departments(); track d.id) {
+              <mat-option [value]="d.id">{{ d.name }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+      }
       <span class="spacer"></span>
-      <span class="muted">{{ active().length }} employed · {{ payroll() | money }} a month</span>
+      <span class="muted">{{ active().length }} employed · {{ payroll() | money }} a month@if (daily()) { · {{ daily() }} on daily wages}</span>
       @if (canManage()) {
         <button mat-flat-button (click)="add()"><mat-icon>person_add</mat-icon> Add employee <span class="inline-ar">إضافة موظف</span></button>
       }
@@ -104,7 +127,7 @@ export class LinkDeviceUserDialog {
           <thead>
             <tr>
               <th>Employee<span class="ar">الموظف</span></th>
-              <th class="num">Base salary<span class="ar">الراتب الأساسي</span></th>
+              <th class="num">Pay<span class="ar">الأجر</span></th>
               <th>Shift<span class="ar">الوردية</span></th>
               <th>Days off<span class="ar">أيام الراحة</span></th>
               <th>Device no.<span class="ar">رقم البصمة</span></th>
@@ -118,14 +141,19 @@ export class LinkDeviceUserDialog {
               <tr [class.left]="!e.isActive" [class.pending-deletion]="!!asked">
                 <td>
                   <strong>{{ e.name }}</strong>
-                  <div class="muted small">{{ e.jobTitle }}</div>
+                  <div class="muted small">{{ e.jobTitle }} · {{ departmentName(e) }}</div>
                   @if (asked) {
                     <div><span class="pending-badge">{{ pendingLabel(asked).en }}<span class="ar">{{ pendingLabel(asked).ar }}</span></span></div>
                   }
                 </td>
                 <td class="num">
-                  {{ e.monthlySalary | money }}
-                  <div class="muted small">{{ e.dailyRate | money }} a day · {{ e.hourlyRate | money }} an hour</div>
+                  @if (e.employmentType === 'Daily') {
+                    {{ e.dailyWage | money }} a day
+                    <div class="muted small">Daily wage · {{ e.hourlyRate | money }} an hour</div>
+                  } @else {
+                    {{ e.monthlySalary | money }}
+                    <div class="muted small">{{ e.dailyRate | money }} a day · {{ e.hourlyRate | money }} an hour</div>
+                  }
                 </td>
                 <td class="nowrap">
                   @if (e.shiftStartsAt && e.shiftEndsAt) {
@@ -250,6 +278,9 @@ export class LinkDeviceUserDialog {
     .danger {
       color: var(--mat-sys-error);
     }
+    .department {
+      min-width: 200px;
+    }
     .on-device {
       margin-top: 24px;
 
@@ -274,14 +305,20 @@ export class EmployeesPage {
 
   protected readonly employees = signal<Employee[]>([]);
   protected readonly deviceUsers = signal<DeviceUser[]>([]);
+  protected readonly departments = signal<Department[]>([]);
+  // The department shown; all of them when empty.
+  protected readonly department = signal('');
   protected readonly loading = signal(true);
   protected readonly error = signal<string | null>(null);
   protected readonly canManage = computed(() => this.auth.can(Permissions.HrManage));
   protected readonly showLeft = signal(false);
 
   protected readonly active = computed(() => this.employees().filter((e) => e.isActive));
-  protected readonly shown = computed(() => (this.showLeft() ? this.employees() : this.active()));
+  protected readonly shown = computed(() =>
+    (this.showLeft() ? this.employees() : this.active()).filter((e) => !this.department() || e.departmentId === this.department()),
+  );
   protected readonly payroll = computed(() => this.active().reduce((sum, e) => sum + e.monthlySalary, 0));
+  protected readonly daily = computed(() => this.active().filter((e) => e.employmentType === 'Daily').length);
   protected readonly waiting = computed(() => this.approvals.waitingToBeMade('Employee'));
   // The device's users whose number no employee has.
   protected readonly unknown = computed(() => this.deviceUsers().filter((u) => !u.employeeId));
@@ -293,6 +330,10 @@ export class EmployeesPage {
     void this.approvals.refresh();
   }
 
+  protected departmentName(e: Employee): string {
+    return this.departments().find((d) => d.id === e.departmentId)?.name ?? '—';
+  }
+
   // "Fri" or "Fri, Sat", in the restaurant's week order; "None".
   protected daysOff(e: Employee): string {
     const off = weekDays.filter((d) => e.daysOff.includes(d.day)).map((d) => d.en);
@@ -300,16 +341,17 @@ export class EmployeesPage {
   }
 
   protected async add(): Promise<void> {
-    await this.open({ canApprove: this.approvals.canApprove(), today: await this.businessDay.today() });
+    await this.open({ departments: this.departments(), canApprove: this.approvals.canApprove(), today: await this.businessDay.today() });
   }
 
   protected async edit(employee: Employee): Promise<void> {
-    await this.open({ employee, canApprove: this.approvals.canApprove(), today: await this.businessDay.today() });
+    await this.open({ employee, departments: this.departments(), canApprove: this.approvals.canApprove(), today: await this.businessDay.today() });
   }
 
   protected async addFromDevice(user: DeviceUser): Promise<void> {
     await this.open({
       fromDevice: { name: user.name, deviceUserId: user.deviceUserId },
+      departments: this.departments(),
       canApprove: this.approvals.canApprove(),
       today: await this.businessDay.today(),
     });
@@ -333,7 +375,10 @@ export class EmployeesPage {
       requestId: crypto.randomUUID(),
       name: employee.name,
       jobTitle: employee.jobTitle,
+      employmentType: employee.employmentType,
       monthlySalary: employee.monthlySalary,
+      dailyWage: employee.dailyWage,
+      departmentId: employee.departmentId,
       shiftStartsAt: employee.shiftStartsAt,
       daysOff: employee.daysOff,
       hiredOn: employee.hiredOn,
@@ -385,7 +430,9 @@ export class EmployeesPage {
     this.loading.set(true);
     this.error.set(null);
     try {
-      this.employees.set(await firstValueFrom(this.api.employees()));
+      const [employees, departments] = await Promise.all([firstValueFrom(this.api.employees()), firstValueFrom(this.api.departments())]);
+      this.employees.set(employees);
+      this.departments.set(departments);
     } catch (error) {
       this.error.set(errorMessage(error, 'The employees could not be loaded.'));
     } finally {

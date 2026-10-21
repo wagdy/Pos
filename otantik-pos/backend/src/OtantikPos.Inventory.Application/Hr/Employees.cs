@@ -16,7 +16,11 @@ public sealed record EmployeeDto(
     Guid Id,
     string Name,
     string JobTitle,
+    // A monthly employee's salary, or a daily one's wage; the other is nothing.
+    EmploymentType EmploymentType,
     decimal MonthlySalary,
+    decimal DailyWage,
+    Guid DepartmentId,
     // None for flexible hours.
     TimeOnly? ShiftStartsAt,
     TimeOnly? ShiftEndsAt,
@@ -29,12 +33,13 @@ public sealed record EmployeeDto(
     decimal HourlyRate)
 {
     public static EmployeeDto From(Employee e) => new(
-        e.Id, e.Name, e.JobTitle, e.MonthlySalary, e.ShiftStartsAt, e.ShiftStartsAt?.Add(Employee.ShiftLength), Employees.DaysOf(e.DaysOff),
+        e.Id, e.Name, e.JobTitle, e.EmploymentType, e.MonthlySalary, e.DailyWage, e.DepartmentId, e.ShiftStartsAt, e.ShiftStartsAt?.Add(Employee.ShiftLength), Employees.DaysOf(e.DaysOff),
         e.DeviceUserId, e.HiredOn, e.LeftOn, e.IsActive, Math.Round(e.DailyRate, 2, MidpointRounding.AwayFromZero),
         Math.Round(e.HourlyRate, 2, MidpointRounding.AwayFromZero));
 }
 
-// An employee's details as entered.
+// An employee's details as entered. Paid monthly at MonthlySalary or daily at DailyWage; in
+// General when no department is given (a request asked before departments were).
 public sealed record EmployeeDetails(
     string Name,
     string JobTitle,
@@ -42,7 +47,15 @@ public sealed record EmployeeDetails(
     TimeOnly? ShiftStartsAt,
     IReadOnlyList<DayOfWeek> DaysOff,
     DateOnly HiredOn,
-    string? DeviceUserId);
+    string? DeviceUserId,
+    EmploymentType EmploymentType = EmploymentType.Monthly,
+    decimal DailyWage = 0,
+    Guid? DepartmentId = null)
+{
+    public decimal Pay => EmploymentType == EmploymentType.Daily ? DailyWage : MonthlySalary;
+
+    public Guid Department => DepartmentId ?? OtantikPos.Hr.Domain.Employees.Department.GeneralId;
+}
 
 // What a request holds: the details (a new employee, or a change), or that they leave or return.
 public sealed record EmployeeRequest(EmployeeDetails? Details = null, DateOnly? LeavesOn = null, DateOnly? ReturnsOn = null);
@@ -60,7 +73,7 @@ public static class Employees
 
 // Checks, describes and makes an employee's change: for a manager's own and for an approval
 // alike. What it makes is added for the caller to save.
-internal sealed class EmployeeWriter(IEmployeeRepository employees, IAttendanceLogRepository punches)
+internal sealed class EmployeeWriter(IEmployeeRepository employees, IAttendanceLogRepository punches, IDepartmentRepository departments)
 {
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
@@ -72,8 +85,11 @@ internal sealed class EmployeeWriter(IEmployeeRepository employees, IAttendanceL
         {
             // The domain's own checks: a draft that is never saved.
             var draft = new Employee(
-                employeeId, details.Name, details.JobTitle, details.MonthlySalary, details.ShiftStartsAt, Employees.Flags(details.DaysOff), details.HiredOn,
+                employeeId, details.Name, details.JobTitle, 0, details.ShiftStartsAt, Employees.Flags(details.DaysOff), details.HiredOn,
                 details.DeviceUserId);
+            draft.SetPay(details.EmploymentType, details.Pay);
+            if (await departments.GetByIdAsync(details.Department, cancellationToken) is null)
+                throw new DomainException("Choose the employee's department: that one is not there any more.");
             if (draft.DeviceUserId is { } number && await employees.GetByDeviceUserIdAsync(number, cancellationToken) is { } holder && holder.Id != employeeId)
                 throw new DomainException($"{holder.Name} has number {number} on the attendance device already.");
             if (existing is { LeftOn: { } left } && details.HiredOn > left)
@@ -111,14 +127,17 @@ internal sealed class EmployeeWriter(IEmployeeRepository employees, IAttendanceL
         {
             if (employee is null)
             {
-                employee = new Employee(employeeId, d.Name, d.JobTitle, d.MonthlySalary, d.ShiftStartsAt, Employees.Flags(d.DaysOff), d.HiredOn, d.DeviceUserId);
+                employee = new Employee(employeeId, d.Name, d.JobTitle, 0, d.ShiftStartsAt, Employees.Flags(d.DaysOff), d.HiredOn, d.DeviceUserId);
+                employee.SetPay(d.EmploymentType, d.Pay);
+                employee.MoveTo(d.Department);
                 employees.Add(employee);
             }
             else
             {
                 employee.Rename(d.Name);
                 employee.SetJobTitle(d.JobTitle);
-                employee.SetSalary(d.MonthlySalary);
+                employee.SetPay(d.EmploymentType, d.Pay);
+                employee.MoveTo(d.Department);
                 employee.SetShift(d.ShiftStartsAt);
                 employee.SetDaysOff(Employees.Flags(d.DaysOff));
                 employee.ChangeStart(d.HiredOn);
@@ -161,15 +180,18 @@ internal sealed class EmployeeWriter(IEmployeeRepository employees, IAttendanceL
         }
 
         var shift = d.ShiftStartsAt is { } start ? $"from {start.ToString("HH:mm", Invariant)}" : "flexible hours";
+        var names = (await departments.GetAllAsync(cancellationToken)).ToDictionary(x => x.Id, x => x.Name);
+        string Department(Guid id) => names.GetValueOrDefault(id) ?? "—";
         Line("Name", existing?.Name, d.Name.Trim());
         Line("Job title", existing?.JobTitle, d.JobTitle.Trim());
-        Line("Monthly salary", existing is null ? null : Money(existing.MonthlySalary), Money(d.MonthlySalary));
+        Line("Department", existing is null ? null : Department(existing.DepartmentId), Department(d.Department));
+        Line("Pay", existing is null ? null : Pay(existing.EmploymentType, existing.IsDaily ? existing.DailyWage : existing.MonthlySalary), Pay(d.EmploymentType, d.Pay));
         Line("Shift", existing is null ? null : Shift(existing.ShiftStartsAt), Shift(d.ShiftStartsAt));
         Line("Days off", existing is null ? null : DaysOff(existing.DaysOff), DaysOff(Employees.Flags(d.DaysOff)));
         Line("Started on", existing is null ? null : Day(existing.HiredOn), Day(d.HiredOn));
         Line("Attendance device number", existing?.DeviceUserId ?? "—", string.IsNullOrWhiteSpace(d.DeviceUserId) ? "—" : d.DeviceUserId.Trim());
         return existing is null
-            ? ($"New employee · {d.Name.Trim()} · {d.JobTitle.Trim()} · {Money(d.MonthlySalary)} a month, {shift}", ApprovalAction.Create, lines)
+            ? ($"New employee · {d.Name.Trim()} · {d.JobTitle.Trim()} · {Pay(d.EmploymentType, d.Pay)}, {shift}", ApprovalAction.Create, lines)
             : ($"Employee changed · {existing.Name}", ApprovalAction.Update, lines);
     }
 
@@ -180,6 +202,9 @@ internal sealed class EmployeeWriter(IEmployeeRepository employees, IAttendanceL
         days == WeekDays.None ? "None" : string.Join(", ", Employees.DaysOf(days).Select(d => Invariant.DateTimeFormat.GetAbbreviatedDayName(d)));
 
     private static string Money(decimal value) => $"L.E {value.ToString("N2", Invariant)}";
+
+    // "L.E 5,400.00 a month", or "L.E 250.00 a day" for daily pay.
+    private static string Pay(EmploymentType type, decimal amount) => $"{Money(amount)} {(type == EmploymentType.Daily ? "a day" : "a month")}";
 
     private static string Day(DateOnly day) => day.ToString("d MMM yyyy", Invariant);
 }

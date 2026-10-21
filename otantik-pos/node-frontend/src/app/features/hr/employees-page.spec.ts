@@ -5,7 +5,7 @@ import { of } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
 import { ApprovalRequest } from '../../core/costing/costing.api';
-import { DeviceUser, Employee, HrApi } from '../../core/hr/hr.api';
+import { Department, DeviceUser, Employee, HrApi } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { BusinessDay } from '../costing/financials';
@@ -24,13 +24,17 @@ const cell = (el: Element): string =>
 function employee(id: string, name: string, extra: Partial<Employee> = {}): Employee {
   return {
     id, name, jobTitle: 'Chef', monthlySalary: 5_400, shiftStartsAt: '10:00:00', shiftEndsAt: '19:00:00', daysOff: ['Friday'], deviceUserId: null,
-    hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, ...extra,
+    hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general', ...extra,
   };
 }
 
 const hassan = employee('hassan', 'Hassan', { deviceUserId: '7', daysOff: ['Friday', 'Saturday'] });
 const mona = employee('mona', 'Mona', { jobTitle: 'Waiter', monthlySalary: 4_000, dailyRate: 133.33, hourlyRate: 14.81, shiftStartsAt: '16:00:00', shiftEndsAt: '01:00:00', daysOff: [] });
 const gone = employee('gone', 'Gone Already', { isActive: false, leftOn: '2026-09-30' });
+const departments: Department[] = [
+  { id: 'general', name: 'General', isGeneral: true, employed: 2, everyone: 3 },
+  { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 0, everyone: 0 },
+];
 
 function deviceUser(number: string, name: string, extra: Partial<DeviceUser> = {}): DeviceUser {
   return {
@@ -57,7 +61,7 @@ describe('the employees', () => {
   async function render(manage = true) {
     TestBed.configureTestingModule({
       providers: [
-        { provide: HrApi, useValue: { employees, deviceUsers, saveEmployee } },
+        { provide: HrApi, useValue: { employees, deviceUsers, saveEmployee, departments: () => of(departments) } },
         { provide: AuthService, useValue: { can: (p: string) => manage || p !== Permissions.HrManage } },
         { provide: Approvals, useValue: approvals },
         { provide: NotifyService, useValue: notify },
@@ -94,13 +98,13 @@ describe('the employees', () => {
     expect(text(el.querySelector('.toolbar .muted')!)).toBe('2 employed · L.E 9,400.00 a month');
     expect(rows()).toEqual([
       // The restaurant's week starts on Saturday.
-      ['Hassan Chef', 'L.E 5,400.00 L.E 180.00 a day · L.E 20.00 an hour', '10:00–19:00', 'Sat, Fri', '7', 'Employed على رأس العمل since 1 Jan 2026'],
-      ['Mona Waiter', 'L.E 4,000.00 L.E 133.33 a day · L.E 14.81 an hour', '16:00–01:00', 'None', '—', 'Employed على رأس العمل since 1 Jan 2026'],
+      ['Hassan Chef · General', 'L.E 5,400.00 L.E 180.00 a day · L.E 20.00 an hour', '10:00–19:00', 'Sat, Fri', '7', 'Employed على رأس العمل since 1 Jan 2026'],
+      ['Mona Waiter · General', 'L.E 4,000.00 L.E 133.33 a day · L.E 14.81 an hour', '16:00–01:00', 'None', '—', 'Employed على رأس العمل since 1 Jan 2026'],
     ]);
 
     page['showLeft'].set(true);
     await refresh();
-    expect(rows()[0]).toEqual(['Gone Already Chef', 'L.E 5,400.00 L.E 180.00 a day · L.E 20.00 an hour', '10:00–19:00', 'Fri', '—', 'Left ترك العمل last day 30 Sep 2026']);
+    expect(rows()[0]).toEqual(['Gone Already Chef · General', 'L.E 5,400.00 L.E 180.00 a day · L.E 20.00 an hour', '10:00–19:00', 'Fri', '—', 'Left ترك العمل last day 30 Sep 2026']);
   });
 
   it('lists a new one an accountant asked for, and locks one whose change waits', async () => {
@@ -125,7 +129,7 @@ describe('the employees', () => {
 
     await page['edit'](hassan);
     expect(open.mock.lastCall![0]).toBe(EmployeeDialog);
-    expect(open.mock.lastCall![1].data).toEqual({ employee: hassan, canApprove: true, today: '2026-10-20' });
+    expect(open.mock.lastCall![1].data).toEqual({ employee: hassan, departments, canApprove: true, today: '2026-10-20' });
     expect(notify.info).toHaveBeenCalledWith('Hassan saved.');
 
     open.mockReturnValue({ afterClosed: () => of({ outcome: 'Requested', request: { id: 'r', action: 'Update' } }) });
@@ -135,6 +139,19 @@ describe('the employees', () => {
     expect(approvals.requested).toHaveBeenCalled();
 
     expect([...el.querySelectorAll('button')].map(text)).toContain('person_add Add employee إضافة موظف');
+  });
+
+  it('shows a daily worker’s wage, and one department’s employees when chosen', async () => {
+    const samir = employee('samir', 'Samir', { employmentType: 'Daily', monthlySalary: 0, dailyWage: 270, dailyRate: 270, hourlyRate: 30, departmentId: 'kitchen' });
+    employees.mockReturnValue(of([hassan, samir]));
+    const { el, page, rows, refresh } = await render();
+
+    expect(rows()[1].slice(0, 2)).toEqual(['Samir Chef · Kitchen', 'L.E 270.00 a day Daily wage · L.E 30.00 an hour']);
+    expect(text(el.querySelector('.toolbar > .muted')!)).toBe('2 employed · L.E 5,400.00 a month · 1 on daily wages');
+
+    page['department'].set('kitchen');
+    await refresh();
+    expect(rows().map((r) => r[0])).toEqual(['Samir Chef · Kitchen']);
   });
 
   it('shows flexible hours for one without a start time', async () => {
@@ -157,7 +174,7 @@ describe('the employees', () => {
     open.mockReturnValue({ afterClosed: () => of(undefined) });
     await page['addFromDevice'](deviceUser('12', 'منى'));
     expect(open.mock.lastCall![0]).toBe(EmployeeDialog);
-    expect(open.mock.lastCall![1].data).toEqual({ fromDevice: { name: 'منى', deviceUserId: '12' }, canApprove: true, today: '2026-10-20' });
+    expect(open.mock.lastCall![1].data).toEqual({ fromDevice: { name: 'منى', deviceUserId: '12' }, departments, canApprove: true, today: '2026-10-20' });
 
     // Linked to Mona, employed without a number: saved as she is, with it.
     open.mockReturnValue({ afterClosed: () => of('mona') });
@@ -165,7 +182,9 @@ describe('the employees', () => {
     expect(open.mock.lastCall![0]).toBe(LinkDeviceUserDialog);
     expect(open.mock.lastCall![1].data.employees).toEqual([mona]);
     expect(saveEmployee.mock.lastCall![0]).toBe('mona');
-    expect(saveEmployee.mock.lastCall![1]).toMatchObject({ name: 'Mona', shiftStartsAt: '16:00:00', monthlySalary: 4_000, deviceUserId: '12' });
+    expect(saveEmployee.mock.lastCall![1]).toMatchObject({
+      name: 'Mona', shiftStartsAt: '16:00:00', employmentType: 'Monthly', monthlySalary: 4_000, departmentId: 'general', deviceUserId: '12',
+    });
     expect(notify.info).toHaveBeenCalledWith('Mona has number 12: their punches count.');
   });
 

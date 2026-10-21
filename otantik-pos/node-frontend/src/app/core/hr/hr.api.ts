@@ -19,13 +19,30 @@ export const weekDays: { day: WeekDay; en: string; ar: string }[] = [
   { day: 'Friday', en: 'Fri', ar: 'الجمعة' },
 ];
 
-// Someone on the payroll. A nine-hour shift from shiftStartsAt, or flexible hours with none; a
-// day's pay is the salary over 30, an hour's a day's over 9.
+// How an employee is paid (نوع العمالة): a monthly salary, or a daily wage for each day worked.
+export type EmploymentType = 'Monthly' | 'Daily';
+
+// A department of the restaurant (الأقسام), and how many are in it: employed, and everyone
+// including those who left. General is always there.
+export interface Department {
+  id: string;
+  name: string;
+  isGeneral: boolean;
+  employed: number;
+  everyone: number;
+}
+
+// Someone on the payroll. A nine-hour shift from shiftStartsAt, or flexible hours with none. Paid
+// monthly (a day's pay the salary over 30) or daily (their wage a day worked); an hour's a day's
+// over 9.
 export interface Employee {
   id: string;
   name: string;
   jobTitle: string;
+  employmentType: EmploymentType;
   monthlySalary: number;
+  dailyWage: number;
+  departmentId: string;
   shiftStartsAt: string | null;
   shiftEndsAt: string | null;
   daysOff: WeekDay[];
@@ -42,7 +59,10 @@ export interface EmployeeInput {
   requestId: string;
   name: string;
   jobTitle: string;
+  employmentType: EmploymentType;
   monthlySalary: number;
+  dailyWage: number;
+  departmentId: string;
   shiftStartsAt: string | null;
   daysOff: WeekDay[];
   hiredOn: string;
@@ -262,6 +282,9 @@ export interface PayrollFigures {
   // Public holidays worked, and their holiday allowance.
   holidaysWorked: number;
   holidaysWorkedPay: number;
+  // How the base pay was made: a monthly salary's share, or a daily wage for each day worked.
+  employmentType: EmploymentType;
+  dailyWage: number;
   gross: number;
   deductions: number;
   net: number;
@@ -384,6 +407,20 @@ export class HrApi {
 
   employees(): Observable<Employee[]> {
     return this.http.get<Employee[]>('/api/hr/employees');
+  }
+
+  departments(): Observable<Department[]> {
+    return this.http.get<Department[]>('/api/hr/departments');
+  }
+
+  // Added under this id, or renamed: a manager's.
+  saveDepartment(id: string, name: string): Observable<Department> {
+    return this.http.put<Department>(`/api/hr/departments/${id}`, { name });
+  }
+
+  // Deleted, its employees moved first to `moveTo` when it has any: a manager's.
+  deleteDepartment(id: string, moveTo: string | null): Observable<void> {
+    return this.http.delete<void>(`/api/hr/departments/${id}`, { params: moveTo ? { moveTo } : {} });
   }
 
   // Added under this id, or changed: made at once for a manager (the employee); asked of one for

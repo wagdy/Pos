@@ -18,7 +18,7 @@ const parts = (el: Element) => [...el.children].map(text);
 function employee(id: string, name: string, extra: Partial<Employee> = {}): Employee {
   return {
     id, name, jobTitle: 'Chef', monthlySalary: 5_400, shiftStartsAt: '16:00:00', shiftEndsAt: '01:00:00', daysOff: ['Friday'], deviceUserId: '7',
-    hiredOn: '2026-09-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, ...extra,
+    hiredOn: '2026-09-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general', ...extra,
   };
 }
 

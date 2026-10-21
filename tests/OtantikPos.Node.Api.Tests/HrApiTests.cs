@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using OtantikPos.Hr.Domain.Employees;
 
 namespace OtantikPos.Node.Api.Tests;
 
@@ -83,7 +84,7 @@ public class HrApiTests
         // A change asked for says what it changes, and locks the employee until it is decided.
         var raise = await Json(await accountant.PutAsJsonAsync($"/api/hr/employees/{monaId}", Employee("Mona", "Waiter", 4_500, start, shift: "12:00:00"), Cancel));
         Assert.Equal(
-            [("Monthly salary", "L.E 4,000.00", "L.E 4,500.00")],
+            [("Pay", "L.E 4,000.00 a month", "L.E 4,500.00 a month")],
             raise.GetProperty("request").GetProperty("changes").EnumerateArray()
                 .Select(c => (c.GetProperty("label").GetString(), c.GetProperty("before").GetString(), c.GetProperty("after").GetString())));
         Assert.Contains("can be changed once a manager has decided", await Problem(await manager.PostAsJsonAsync(
@@ -319,6 +320,59 @@ public class HrApiTests
         Assert.Equal(HttpStatusCode.NoContent, (await manager.PutAsJsonAsync($"/api/hr/employees/{ali}/days/{Iso(lastDay)}", new { kind = "Leave" }, Cancel)).StatusCode);
         await Json(await manager.PostAsync($"/api/hr/payroll/{ali}/finalize?month={Iso(lastMonth)}", null, Cancel));
         Assert.Contains("is finalized", await Problem(await manager.PutAsJsonAsync($"/api/hr/holidays/{Guid.NewGuid()}", Holiday("Late one", lastDay, lastDay), Cancel)));
+    }
+
+    [Fact]
+    public async Task Departments_are_a_managers_and_a_daily_worker_is_paid_for_the_days_worked()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var today = await TodayAsync(manager);
+        async Task<Dictionary<string, JsonElement>> Departments() =>
+            (await Json(await accountant.GetAsync("/api/hr/departments", Cancel))).EnumerateArray().ToDictionary(d => d.GetProperty("name").GetString()!);
+
+        // General is there from the start; the others are a manager's to add, named once.
+        var general = (await Departments())["General"];
+        Assert.True(general.GetProperty("isGeneral").GetBoolean());
+        var kitchen = Guid.NewGuid();
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.PutAsJsonAsync($"/api/hr/departments/{kitchen}", new { name = "Kitchen" }, Cancel)).StatusCode);
+        await Json(await manager.PutAsJsonAsync($"/api/hr/departments/{kitchen}", new { name = "Kitchen" }, Cancel));
+        Assert.Contains("already", await Problem(await manager.PutAsJsonAsync($"/api/hr/departments/{Guid.NewGuid()}", new { name = " kitchen " }, Cancel)));
+
+        // A daily worker in the kitchen: 300 a day, no salary.
+        var day = today.AddDays(-3);
+        var month = new DateOnly(day.Year, day.Month, 1);
+        var helper = Guid.NewGuid();
+        await Json(await manager.PutAsJsonAsync($"/api/hr/employees/{helper}", new
+        {
+            requestId = Guid.NewGuid(), name = "Samir", jobTitle = "Kitchen helper", monthlySalary = 0, employmentType = "Daily", dailyWage = 300,
+            departmentId = kitchen, shiftStartsAt = "10:00:00", daysOff = Array.Empty<string>(), hiredOn = Iso(today.AddMonths(-2)),
+        }, Cancel));
+        var samir = (await Json(await manager.GetAsync("/api/hr/employees", Cancel))).EnumerateArray().Single();
+        Assert.Equal(("Daily", 300m, 0m, kitchen, 300m), (samir.GetProperty("employmentType").GetString(), samir.GetProperty("dailyWage").GetDecimal(),
+            samir.GetProperty("monthlySalary").GetDecimal(), samir.GetProperty("departmentId").GetGuid(), samir.GetProperty("dailyRate").GetDecimal()));
+        Assert.Equal((1, 1), ((await Departments())["Kitchen"].GetProperty("employed").GetInt32(), (await Departments())["Kitchen"].GetProperty("everyone").GetInt32()));
+
+        // One day worked: a day's wage, and every day not worked costs nothing.
+        foreach (var time in new[] { "10:00:00", "19:00:00" })
+        {
+            await Json(await manager.PostAsJsonAsync("/api/hr/punches", new
+            {
+                punchId = Guid.NewGuid(), employeeId = helper, punchedAt = $"{Iso(day)}T{time}", reason = "Device down",
+            }, Cancel));
+        }
+
+        var figures = (await Json(await accountant.GetAsync($"/api/hr/payroll?month={Iso(month)}", Cancel))).GetProperty("slips")[0].GetProperty("figures");
+        Assert.Equal(("Daily", 1, 300m, 0, 0m), (figures.GetProperty("employmentType").GetString(), figures.GetProperty("daysWorked").GetInt32(),
+            figures.GetProperty("baseSalary").GetDecimal(), figures.GetProperty("absentDays").GetInt32(), figures.GetProperty("absencePenalty").GetDecimal()));
+
+        // The kitchen deleted: its people moved first, to a department that stays; General stays.
+        Assert.Contains("say which department", await Problem(await manager.DeleteAsync($"/api/hr/departments/{kitchen}", Cancel)));
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.DeleteAsync($"/api/hr/departments/{kitchen}?moveTo={Department.GeneralId}", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await manager.DeleteAsync($"/api/hr/departments/{kitchen}?moveTo={Department.GeneralId}", Cancel)).StatusCode);
+        Assert.Equal(Department.GeneralId, (await Json(await manager.GetAsync("/api/hr/employees", Cancel))).EnumerateArray().Single().GetProperty("departmentId").GetGuid());
+        Assert.Contains("General stays", await Problem(await manager.DeleteAsync($"/api/hr/departments/{Department.GeneralId}", Cancel)));
     }
 
     [Fact]

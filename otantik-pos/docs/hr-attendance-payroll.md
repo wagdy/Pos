@@ -14,6 +14,17 @@ and their monthly pay. This page is the design.
 - **Employees** (`hr.Employees`): name, job title, base monthly salary, shift start, weekly
   days off, their user number on the device, an optional link to a till account, hired/left
   dates. They are not the till's staff accounts: most never sign in to a till.
+- **Departments** (الأقسام, `hr.Departments`, migration `EmploymentTypesAndDepartments`): every
+  employee is in one. General is made with the table, the employees already entered go to it,
+  and it is renamed but never deleted. Another is deleted once its employees, those who left
+  too, are moved to one that stays. A manager's to add, rename and delete.
+- **How they are paid** (نوع العمالة): monthly (عمالة شهرية), at a salary, or daily (عمالة يومية), at
+  a wage for each day worked.
+  - A daily worker's base pay is their wage for each day worked, a day off or a holiday worked
+    included. A day not worked, whatever it is, earns nothing and costs nothing: nothing is
+    absent for them, and a day off worked has no allowance besides its wage. A holiday worked
+    earns its allowance on top, and lateness and overtime count against their shift at their
+    hourly rate (the wage ÷ 9), as anyone's.
 - **The shift is nine hours**, from the employee's shift start, past midnight if need be.
 - **Flexible hours** (an employee with no shift start, migration `FlexibleShiftsAndDeviceSync`):
   nothing is late, early or away for them, and the hours past nine worked in a day are overtime.
@@ -21,7 +32,7 @@ and their monthly pay. This page is the design.
   is one day. A working day with no punches is still an absence, and their salary is paid as
   anyone's.
 - **Rates come from a 30-day month**, whatever the month's length:
-  - a day = salary ÷ 30;
+  - a day = salary ÷ 30 (a daily worker's: their wage);
   - an hour = a day ÷ 9;
   - a minute = an hour ÷ 60.
 - **A day's punches** are taken from six hours before the shift starts to the same time the
@@ -212,6 +223,7 @@ it changes).
 | `POST /api/hr/attendance/resolve` | A suspended day's punch-out, from a manager: the day worked out again |
 | `PUT /api/hr/employees/{id}/days/{date}/penalty` | An administrative penalty in hours, with the reason; with no hours, taken off |
 | `GET /api/hr/penalties?month=` | The month's administrative penalties, everyone's, each with what it takes off the pay |
+| `GET /api/hr/departments`, `PUT …/{id}`, `DELETE …/{id}?moveTo=` | The departments with how many are in each; added or renamed, or deleted with its employees moved first: a manager's |
 | `GET /api/hr/holidays?year=` | A year's public holidays |
 | `POST /api/hr/devices/{id}/read-users`, `…/read-attendance` | A command left for the device: list its users, or send its attendance from a day to another again: a manager's |
 | `GET /api/hr/device-users` | The users the devices listed, who on the till has each number, and the punches waiting under it |
@@ -248,7 +260,10 @@ migration `PublicHolidays`); leave allowances entered by a manager are for anyth
 - HR & Payroll in the top bar (`hr.view`):
   - Employees: add, change, leave and come back; an accountant's go to a manager;
   - Employees also lists the device's users nobody has the number of yet, to add or link;
-    the form takes flexible hours (no start time);
+    the form takes the department, monthly or daily pay, and flexible hours (no start time);
+    the list shows each one's department, filters by one, and a daily worker's wage a day;
+  - Departments: each with how many are in it, added, renamed, and deleted with its employees
+    moved first; General kept;
   - Attendance devices: where to point the K40, approve or refuse it, have it list its users or
     send its attendance again (the command's progress shown as it goes), and the grace and
     double-scan settings.
