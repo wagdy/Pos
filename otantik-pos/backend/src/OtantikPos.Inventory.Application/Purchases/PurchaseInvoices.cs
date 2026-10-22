@@ -393,28 +393,12 @@ internal sealed class AttachPurchaseInvoiceFileCommandHandler(
         if (invoice is null)
             invoices.Add(invoice = new PurchaseInvoice(request.InvoiceId, request.StaffName));
 
-        if (!LooksLike(request.ContentType, request.Content))
+        if (!UploadedFile.LooksLike(request.ContentType, request.Content))
             throw new DomainException("That file is not the photo or PDF it says it is.");
         invoice.Attach(request.FileName, request.ContentType, request.Content.Length, request.StaffName);
         attachments.Put(invoice.Id, request.Content);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return await new InvoiceReading(materials, expenses, categories, suppliers, safe, requests).DtoAsync(invoice, cancellationToken);
-    }
-
-    // Checked, not taken on trust: the file is shown in the browser later, so it must be the
-    // picture or PDF its type says, by its first bytes.
-    private static bool LooksLike(string contentType, byte[] content)
-    {
-        bool StartsWith(params byte[] prefix) => content.Length >= prefix.Length && content.AsSpan(0, prefix.Length).SequenceEqual(prefix);
-        return contentType.ToLowerInvariant() switch
-        {
-            "image/jpeg" => StartsWith(0xFF, 0xD8, 0xFF),
-            "image/png" => StartsWith(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A),
-            "image/webp" => content.Length >= 12 && StartsWith((byte)'R', (byte)'I', (byte)'F', (byte)'F')
-                && content.AsSpan(8, 4).SequenceEqual("WEBP"u8),
-            "application/pdf" => StartsWith((byte)'%', (byte)'P', (byte)'D', (byte)'F'),
-            _ => false,
-        };
     }
 }
 

@@ -2,6 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { MatDialog } from '@angular/material/dialog';
+import { Router, provideRouter } from '@angular/router';
 import { of, throwError } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
@@ -27,7 +28,7 @@ const cell = (el: Element): string =>
 function employee(id: string, name: string, extra: Partial<Employee> = {}): Employee {
   return {
     id, name, jobTitle: 'Chef', monthlySalary: 5_400, shiftStartsAt: '10:00:00', shiftEndsAt: '19:00:00', daysOff: ['Friday'], deviceUserId: null,
-    hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general', jobRoleId: null, ...extra,
+    hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, nationalId: null, mobileNumber: null, idPhoto: null, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general', jobRoleId: null, ...extra,
   };
 }
 
@@ -80,6 +81,7 @@ describe('the employees', () => {
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
         { provide: BusinessDay, useValue: { today: () => Promise.resolve('2026-10-20') } },
+        provideRouter([]),
       ],
     });
     const fixture = TestBed.createComponent(EmployeesPage);
@@ -127,6 +129,24 @@ describe('the employees', () => {
     page['showLeft'].set(true);
     await refresh();
     expect(rows()[0]).toEqual(['Gone Already Chef · General', 'L.E 5,400.00 L.E 180.00 a day · L.E 20.00 an hour', '10:00–19:00', 'Fri', '—', 'Left ترك العمل last day 30 Sep 2026']);
+  });
+
+  it('opens an employee’s profile from their row or their name, and not from the row’s buttons', async () => {
+    const { el } = await render();
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const navigateByUrl = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+    const [hassanRow, monaRow] = [...el.querySelectorAll<HTMLElement>('tbody tr')];
+
+    expect(hassanRow.querySelector('a.name')!.getAttribute('href')).toBe('/hassan');
+    (monaRow.querySelector('td') as HTMLElement).click();
+    expect(navigate).toHaveBeenCalledWith(['/hr/employees', 'mona']);
+
+    navigate.mockClear();
+    open.mockReturnValue({ afterClosed: () => of(undefined) });
+    (hassanRow.querySelector('button[aria-label="Edit Hassan"]') as HTMLElement).click();
+    await vi.waitFor(() => expect(open.mock.lastCall?.[0]).toBe(EmployeeDialog));
+    expect(navigate).not.toHaveBeenCalled();
+    navigateByUrl.mockRestore();
   });
 
   it('lists a new one an accountant asked for, and locks one whose change waits', async () => {
@@ -343,14 +363,18 @@ describe('the employees', () => {
     expect(open.mock.lastCall![0]).toBe(EmployeeDialog);
     expect(open.mock.lastCall![1].data).toEqual({ fromDevice: { name: 'منى', deviceUserId: '12' }, departments, canApprove: true, today: '2026-10-20' });
 
-    // Linked to Mona, employed without a number: saved as she is, with it.
+    // Linked to Mona, employed without a number: saved as she is, with it, her ID card's number and
+    // her mobile kept.
+    const carded = { ...mona, nationalId: '29001010123456', mobileNumber: '01012345678' };
+    page['employees'].set([gone, hassan, carded]);
     open.mockReturnValue({ afterClosed: () => of('mona') });
     await page['link'](deviceUser('12', 'منى'));
     expect(open.mock.lastCall![0]).toBe(LinkDeviceUserDialog);
-    expect(open.mock.lastCall![1].data.employees).toEqual([mona]);
+    expect(open.mock.lastCall![1].data.employees).toEqual([carded]);
     expect(saveEmployee.mock.lastCall![0]).toBe('mona');
     expect(saveEmployee.mock.lastCall![1]).toMatchObject({
       name: 'Mona', shiftStartsAt: '16:00:00', employmentType: 'Monthly', monthlySalary: 4_000, departmentId: 'general', deviceUserId: '12',
+      nationalId: '29001010123456', mobileNumber: '01012345678',
     });
     expect(notify.info).toHaveBeenCalledWith('Mona has number 12: their punches count.');
   });

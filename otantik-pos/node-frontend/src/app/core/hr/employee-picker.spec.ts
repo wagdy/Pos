@@ -5,7 +5,7 @@ import { EmployeePicker, searchKey } from './employee-picker';
 function employee(id: string, name: string, jobTitle: string): Employee {
   return {
     id, name, jobTitle, jobRoleId: null, employmentType: 'Monthly', monthlySalary: 5_000, dailyWage: 0, departmentId: 'general', shiftStartsAt: '10:00:00',
-    shiftEndsAt: '19:00:00', daysOff: [], deviceUserId: null, hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 166.67, hourlyRate: 18.52,
+    shiftEndsAt: '19:00:00', daysOff: [], deviceUserId: null, hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 166.67, hourlyRate: 18.52, nationalId: null, mobileNumber: null, idPhoto: null,
   };
 }
 

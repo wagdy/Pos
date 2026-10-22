@@ -351,6 +351,51 @@ public class HrTests
     }
 
     [Fact]
+    public void An_employees_national_id_and_mobile_are_kept_as_digits_however_they_are_typed()
+    {
+        var chef = Chef();
+        Assert.Equal(((string?)null, (string?)null), (chef.NationalId, chef.MobileNumber));
+
+        // Arabic digits, spaces and dashes: the card's 14 digits.
+        chef.SetNationalId(" ٢٩٠٠١٠١ ٠١٢٣٤-٥٦ ");
+        chef.SetMobileNumber("٠١٠ ١٢٣٤-٥٦٧٨");
+        Assert.Equal(("29001010123456", "01012345678"), (chef.NationalId, chef.MobileNumber));
+
+        // A passport's number, in capitals; a number from abroad, with its +.
+        chef.SetNationalId("a1234567");
+        chef.SetMobileNumber("+20 (101) 234 5678");
+        Assert.Equal(("A1234567", "+201012345678"), (chef.NationalId, chef.MobileNumber));
+
+        Assert.Throws<DomainException>(() => chef.SetNationalId("2900101012345"));
+        Assert.Throws<DomainException>(() => chef.SetNationalId("A12/45"));
+        Assert.Throws<DomainException>(() => chef.SetMobileNumber("010-CALL-ME"));
+        Assert.Throws<DomainException>(() => chef.SetMobileNumber("12345"));
+
+        chef.SetNationalId(" ");
+        chef.SetMobileNumber(null);
+        Assert.Equal(((string?)null, (string?)null), (chef.NationalId, chef.MobileNumber));
+    }
+
+    [Fact]
+    public void An_employees_id_card_is_a_photo_or_pdf_under_5_MB_replaced_or_taken_off()
+    {
+        var chef = Chef();
+        Assert.False(chef.HasIdPhoto);
+        Assert.Throws<DomainException>(() => chef.RemoveIdPhoto());
+        Assert.Throws<DomainException>(() => chef.AttachIdPhoto("card.gif", "image/gif", 100, "Omar"));
+        Assert.Throws<DomainException>(() => chef.AttachIdPhoto("card.jpg", "image/jpeg", Employee.MaxIdPhotoBytes + 1, "Omar"));
+        Assert.Throws<DomainException>(() => chef.AttachIdPhoto("card.jpg", "image/jpeg", 0, "Omar"));
+
+        chef.AttachIdPhoto("../front.JPG", "IMAGE/JPEG", 2_000, "Omar");
+        Assert.Equal((true, "front.JPG", "image/jpeg", (int?)2_000, "Omar"), (chef.HasIdPhoto, chef.IdPhotoFileName, chef.IdPhotoContentType, chef.IdPhotoBytes, chef.IdPhotoUploadedBy));
+        chef.AttachIdPhoto("scan.pdf", "application/pdf", 3_000, "Sara");
+        Assert.Equal(("scan.pdf", "application/pdf", "Sara"), (chef.IdPhotoFileName, chef.IdPhotoContentType, chef.IdPhotoUploadedBy));
+
+        chef.RemoveIdPhoto();
+        Assert.Equal((false, (string?)null, (int?)null), (chef.HasIdPhoto, chef.IdPhotoFileName, chef.IdPhotoBytes));
+    }
+
+    [Fact]
     public void A_command_for_the_device_is_numbered_and_its_first_answer_kept()
     {
         var users = DeviceCommand.ReadUsers("CQZ", 3, "Omar");

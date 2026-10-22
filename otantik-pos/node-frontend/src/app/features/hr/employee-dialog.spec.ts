@@ -11,7 +11,7 @@ const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
 const hassan: Employee = {
   id: 'hassan', name: 'Hassan', jobTitle: 'Chef', monthlySalary: 5_400, shiftStartsAt: '16:00:00', shiftEndsAt: '01:00:00', daysOff: ['Friday'],
-  deviceUserId: '7', hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general', jobRoleId: null,
+  deviceUserId: '7', hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, nationalId: null, mobileNumber: null, idPhoto: null, employmentType: 'Monthly', dailyWage: 0, departmentId: 'general', jobRoleId: null,
 };
 
 const departments: Department[] = [
@@ -66,9 +66,9 @@ describe('the employee form', () => {
 
     expect(saveEmployee).not.toHaveBeenCalled();
     expect(notify.error.mock.lastCall![1]).toBe(
-      'Cannot submit. Name: enter their name. Role: enter what they do. Base salary: enter the salary. And 1 more, marked in red.',
+      'Cannot submit. Full name: enter their full name. Role: enter what they do. Base salary: enter the salary. And 1 more, marked in red.',
     );
-    expect([...el.querySelectorAll('mat-error')].map(text)).toEqual(['Enter their name', 'Enter what they do', 'Enter the salary']);
+    expect([...el.querySelectorAll('mat-error')].map(text)).toEqual(['Enter their full name', 'Enter what they do', 'Enter the salary']);
     expect(text(el.querySelector('.days .error')!)).toBe('Leave at least one working day');
   });
 
@@ -88,6 +88,35 @@ describe('the employee form', () => {
     });
     expect(id).not.toBe(input.requestId);
     expect(close).toHaveBeenCalledWith(expect.objectContaining({ id, name: 'Mona' }));
+  });
+
+  it('takes their full name, national ID and mobile, in Arabic digits too, and says when one is not right', async () => {
+    const { el, page, refresh } = await render({ canApprove: true, today: '2026-10-20' });
+    expect([...el.querySelectorAll('mat-label')].map(text)).toEqual(expect.arrayContaining(['Full name · الاسم بالكامل', 'National ID · رقم البطاقة', 'Mobile · رقم الموبايل']));
+    Object.assign(page, { name: 'Mona Adel Hassan', jobTitle: 'Waiter', salary: 4_000, nationalId: '2900101', mobileNumber: 'call me' });
+
+    await page['save']();
+    await refresh();
+    expect(saveEmployee).not.toHaveBeenCalled();
+    expect([...el.querySelectorAll('mat-error')].map(text)).toEqual([
+      'The card has 14 digits, not 7',
+      'Digits only, such as 01012345678',
+    ]);
+
+    Object.assign(page, { nationalId: ' ٢٩٠٠١٠١ ٠١٢٣٤٥٦ ', mobileNumber: '٠١٠ ١٢٣٤-٥٦٧٨' });
+    await page['save']();
+    expect(saveEmployee.mock.lastCall![1]).toMatchObject({ name: 'Mona Adel Hassan', nationalId: '٢٩٠٠١٠١ ٠١٢٣٤٥٦', mobileNumber: '٠١٠ ١٢٣٤-٥٦٧٨' });
+  });
+
+  it('keeps the national ID and mobile they have when something else is changed, and a passport’s number is fine', async () => {
+    const { page } = await render({ employee: { ...hassan, nationalId: 'A1234567', mobileNumber: '+201012345678' }, canApprove: true, today: '2026-10-20' });
+    page['salary'] = 5_600;
+    await page['save']();
+    expect(saveEmployee.mock.lastCall![1]).toMatchObject({ monthlySalary: 5_600, nationalId: 'A1234567', mobileNumber: '+201012345678' });
+
+    page['nationalId'] = ' ';
+    await page['save']();
+    expect(saveEmployee.mock.lastCall![1]).toMatchObject({ nationalId: null });
   });
 
   it('takes a daily wage instead of a salary, and the department chosen', async () => {

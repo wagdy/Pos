@@ -109,6 +109,93 @@ public class HrApiTests
     }
 
     [Fact]
+    public async Task An_employees_profile_keeps_their_id_card_and_mobile_and_the_cards_photo()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var cashier = await api.CashierAsync(manager);
+        var start = new DateOnly(2026, 9, 1);
+        object Profile(string name, string? nationalId, string? mobile, decimal salary = 5_400) => new
+        {
+            requestId = Guid.NewGuid(), name, jobTitle = "Chef", monthlySalary = salary, shiftStartsAt = "10:00:00", daysOff = Array.Empty<string>(),
+            hiredOn = Iso(start), nationalId, mobileNumber = mobile,
+        };
+
+        // Typed in Arabic digits, with spaces and dashes: kept as the card's digits.
+        var hassanId = Guid.NewGuid();
+        var hassan = await Json(await manager.PutAsJsonAsync(
+            $"/api/hr/employees/{hassanId}", Profile("Hassan Mahmoud Ali", "٢٩٠٠١٠١٠١٢٣٤٥٦", "٠١٠ ١٢٣٤-٥٦٧٨"), Cancel));
+        Assert.Equal(("29001010123456", "01012345678", JsonValueKind.Null),
+            (hassan.GetProperty("nationalId").GetString(), hassan.GetProperty("mobileNumber").GetString(), hassan.GetProperty("idPhoto").ValueKind));
+
+        // One employee, for their profile; whoever sees HR.
+        var profile = await Json(await accountant.GetAsync($"/api/hr/employees/{hassanId}", Cancel));
+        Assert.Equal(("Hassan Mahmoud Ali", "29001010123456"), (profile.GetProperty("name").GetString(), profile.GetProperty("nationalId").GetString()));
+        Assert.Equal(HttpStatusCode.NotFound, (await manager.GetAsync($"/api/hr/employees/{Guid.NewGuid()}", Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync($"/api/hr/employees/{hassanId}", Cancel)).StatusCode);
+
+        Assert.Contains("Hassan Mahmoud Ali has national ID 29001010123456",
+            await Problem(await manager.PutAsJsonAsync($"/api/hr/employees/{Guid.NewGuid()}", Profile("Karim", "29001010123456", null), Cancel)));
+        Assert.Contains("14 digits", await Problem(await manager.PutAsJsonAsync($"/api/hr/employees/{Guid.NewGuid()}", Profile("Karim", "2900101", null), Cancel)));
+        Assert.Contains("A mobile number is its digits",
+            await Problem(await manager.PutAsJsonAsync($"/api/hr/employees/{Guid.NewGuid()}", Profile("Karim", null, "call me"), Cancel)));
+
+        // An accountant's new number is asked of a manager, and says what it changes.
+        var asked = await Json(await accountant.PutAsJsonAsync(
+            $"/api/hr/employees/{hassanId}", Profile("Hassan Mahmoud Ali", "29001010123456", "01198765432"), Cancel));
+        Assert.Equal(
+            [("Mobile", "01012345678", "01198765432")],
+            asked.GetProperty("request").GetProperty("changes").EnumerateArray()
+                .Select(c => (c.GetProperty("label").GetString(), c.GetProperty("before").GetString(), c.GetProperty("after").GetString())));
+        await ApproveAsync(manager, asked);
+        profile = await Json(await manager.GetAsync($"/api/hr/employees/{hassanId}", Cancel));
+        Assert.Equal(("29001010123456", "01198765432"), (profile.GetProperty("nationalId").GetString(), profile.GetProperty("mobileNumber").GetString()));
+
+        // The card's photo: whoever manages HR, at once; the picture its type says, under 5 MB.
+        byte[] jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4];
+        byte[] pdf = [(byte)'%', (byte)'P', (byte)'D', (byte)'F', (byte)'-', 1, 2];
+        MultipartFormDataContent Upload(byte[] bytes, string type, string name)
+        {
+            var file = new ByteArrayContent(bytes);
+            file.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(type);
+            return new MultipartFormDataContent { { file, "file", name } };
+        }
+        var photo = $"/api/hr/employees/{hassanId}/id-photo";
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.PutAsync(photo, Upload(jpeg, "image/jpeg", "card.jpg"), Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await manager.GetAsync(photo, Cancel)).StatusCode);
+        Assert.Contains("not the photo or PDF it says it is", await Problem(await manager.PutAsync(photo, Upload([1, 2, 3], "image/jpeg", "card.jpg"), Cancel)));
+        Assert.Contains("Upload a photo", await Problem(await manager.PutAsync(photo, Upload([0x47, 0x49, 0x46], "image/gif", "card.gif"), Cancel)));
+        var big = new byte[OtantikPos.Hr.Domain.Employees.Employee.MaxIdPhotoBytes + 1];
+        jpeg.CopyTo(big, 0);
+        Assert.Contains("under 5 MB", await Problem(await manager.PutAsync(photo, Upload(big, "image/jpeg", "card.jpg"), Cancel)));
+
+        var uploaded = await Json(await accountant.PutAsync(photo, Upload(jpeg, "image/jpeg", "card.jpg"), Cancel));
+        var idPhoto = uploaded.GetProperty("idPhoto");
+        Assert.Equal(("card.jpg", "image/jpeg", 8), (idPhoto.GetProperty("fileName").GetString(), idPhoto.GetProperty("contentType").GetString(), idPhoto.GetProperty("bytes").GetInt32()));
+        Assert.False(string.IsNullOrEmpty(idPhoto.GetProperty("uploadedBy").GetString()));
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync(photo, Cancel)).StatusCode);
+        var shown = await accountant.GetAsync(photo, Cancel);
+        Assert.Equal(("image/jpeg", "nosniff"), (shown.Content.Headers.ContentType!.MediaType, shown.Headers.GetValues("X-Content-Type-Options").Single()));
+        Assert.Equal(jpeg, await shown.Content.ReadAsByteArrayAsync(Cancel));
+        // The list of employees says there is one, without its bytes.
+        var listed = (await Json(await manager.GetAsync("/api/hr/employees", Cancel))).EnumerateArray().Single();
+        Assert.Equal("card.jpg", listed.GetProperty("idPhoto").GetProperty("fileName").GetString());
+
+        // Replaced by a scan; taken off by whoever manages HR.
+        await Json(await manager.PutAsync(photo, Upload(pdf, "application/pdf", "scan.pdf"), Cancel));
+        var downloaded = await manager.GetAsync($"{photo}?download=true", Cancel);
+        Assert.Equal(("application/pdf", "scan.pdf"), (downloaded.Content.Headers.ContentType!.MediaType, downloaded.Content.Headers.ContentDisposition!.FileName));
+        Assert.Equal(pdf, await downloaded.Content.ReadAsByteArrayAsync(Cancel));
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.DeleteAsync(photo, Cancel)).StatusCode);
+        var removed = await Json(await manager.DeleteAsync(photo, Cancel));
+        Assert.Equal(JsonValueKind.Null, removed.GetProperty("idPhoto").ValueKind);
+        Assert.Equal(HttpStatusCode.NotFound, (await manager.GetAsync(photo, Cancel)).StatusCode);
+        Assert.Contains("no photo of their ID card", await Problem(await manager.DeleteAsync(photo, Cancel)));
+        Assert.Equal(HttpStatusCode.NotFound, (await manager.PutAsync($"/api/hr/employees/{Guid.NewGuid()}/id-photo", Upload(jpeg, "image/jpeg", "card.jpg"), Cancel)).StatusCode);
+    }
+
+    [Fact]
     public async Task Employees_come_in_from_an_Excel_sheet_and_go_out_to_one_with_the_payroll()
     {
         await using var api = await TestApi.StartAsync();

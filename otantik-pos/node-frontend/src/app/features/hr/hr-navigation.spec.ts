@@ -32,6 +32,7 @@ describe('the HR navigation', () => {
       ['', 'now'],
       ['now', 'page'],
       ['employees', 'page'],
+      ['employees/:employeeId', 'page'],
       ['departments', 'page'],
       ['attendance', 'page'],
       ['payroll', 'page'],

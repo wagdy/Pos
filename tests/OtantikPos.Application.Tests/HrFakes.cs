@@ -41,8 +41,24 @@ public abstract class ListStore<T> : IRepository<T> where T : AggregateRoot
     public void Add(T aggregate) => Items.Add(aggregate);
 }
 
-public sealed class EmployeeStore : ListStore<Employee>, IEmployeeRepository
+public sealed class EmployeeStore : ListStore<Employee>, IEmployeeRepository, IEmployeeIdPhotoStore
 {
+    public Dictionary<Guid, byte[]> IdPhotos { get; } = new();
+
+    public void Put(Guid employeeId, byte[] content) => IdPhotos[employeeId] = content;
+
+    public Task RemoveAsync(Guid employeeId, CancellationToken cancellationToken = default)
+    {
+        IdPhotos.Remove(employeeId);
+        return Task.CompletedTask;
+    }
+
+    public Task<byte[]?> GetAsync(Guid employeeId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(IdPhotos.GetValueOrDefault(employeeId));
+
+    public Task<Employee?> GetByNationalIdAsync(string nationalId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Items.FirstOrDefault(e => e.NationalId == nationalId));
+
     public Task<IReadOnlyList<Employee>> GetAllAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<Employee>>(Items.OrderBy(e => e.Name).ToList());
 

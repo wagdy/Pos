@@ -27,7 +27,39 @@ export interface EmployeeDialogData {
   today: string;
 }
 
-// An employee added or changed: who they are and their department, how they are paid (a monthly
+// "٠١٠ ١٢٣٤-٥٦٧٨" as "01012345678": Arabic-Indic digits as ASCII ones, without the spaces, dashes
+// and dots written between them; as the till keeps a national ID or a mobile.
+export function idDigits(text: string, also = ''): string {
+  return [...text.trim()]
+    .map((c) => {
+      const arabic = '٠١٢٣٤٥٦٧٨٩'.indexOf(c);
+      const persian = '۰۱۲۳۴۵۶۷۸۹'.indexOf(c);
+      return arabic >= 0 ? String(arabic) : persian >= 0 ? String(persian) : c;
+    })
+    .filter((c) => !/\s/.test(c) && c !== '-' && c !== '.' && !also.includes(c))
+    .join('');
+}
+
+// What is wrong with a national ID as typed: an Egyptian card's 14 digits, or a passport's letters
+// and digits. Null when it is right, or left empty.
+export function nationalIdProblem(text: string): string | null {
+  const number = idDigits(text).toUpperCase();
+  if (!number) {
+    return null;
+  }
+  if (/^\d+$/.test(number)) {
+    return number.length === 14 ? null : `the card has 14 digits, not ${number.length}`;
+  }
+  return /^[A-Z0-9]{5,20}$/.test(number) ? null : "only a passport's letters and digits";
+}
+
+export function mobileProblem(text: string): string | null {
+  const number = idDigits(text, '()');
+  return !number || /^\+?\d{7,15}$/.test(number) ? null : 'digits only, such as 01012345678';
+}
+
+// An employee added or changed: who they are (their full name as on their ID card, its number,
+// and their mobile) and their department, how they are paid (a monthly
 // salary, or a daily wage for each day worked), when their nine-hour shift starts (or flexible
 // hours, with none), their weekly days off, the day they started, and their number on the
 // attendance device. Saved here: a manager's at once, anyone else's sent for
@@ -57,9 +89,22 @@ export interface EmployeeDialogData {
     <mat-dialog-content>
       <div class="form">
         <mat-form-field class="wide">
-          <mat-label>Name · الاسم</mat-label>
-          <input matInput [(ngModel)]="name" maxlength="200" aria-label="Name" [errorStateMatcher]="checks.field('Name')" />
-          <mat-error>{{ checks.message('Name') }}</mat-error>
+          <mat-label>Full name · الاسم بالكامل</mat-label>
+          <input matInput [(ngModel)]="name" maxlength="200" aria-label="Full name" [errorStateMatcher]="checks.field('Full name')" />
+          <mat-hint>As on their ID card</mat-hint>
+          <mat-error>{{ checks.message('Full name') }}</mat-error>
+        </mat-form-field>
+        <mat-form-field>
+          <mat-label>National ID · رقم البطاقة</mat-label>
+          <input matInput [(ngModel)]="nationalId" maxlength="40" inputmode="numeric" aria-label="National ID" [errorStateMatcher]="checks.field('National ID')" />
+          <mat-hint>14 digits, or a passport no.</mat-hint>
+          <mat-error>{{ checks.message('National ID') }}</mat-error>
+        </mat-form-field>
+        <mat-form-field>
+          <mat-label>Mobile · رقم الموبايل</mat-label>
+          <input matInput type="tel" [(ngModel)]="mobileNumber" maxlength="30" aria-label="Mobile" [errorStateMatcher]="checks.field('Mobile')" />
+          <mat-hint>Such as 01012345678</mat-hint>
+          <mat-error>{{ checks.message('Mobile') }}</mat-error>
         </mat-form-field>
         <mat-form-field>
           <mat-label>Department · القسم</mat-label>
@@ -288,6 +333,8 @@ export class EmployeeDialog {
   protected daysOff: WeekDay[] = [...(this.data.employee?.daysOff ?? [])];
   protected hiredOn = this.data.employee?.hiredOn ?? this.data.today;
   protected deviceUserId = this.data.employee?.deviceUserId ?? this.data.fromDevice?.deviceUserId ?? '';
+  protected nationalId = this.data.employee?.nationalId ?? '';
+  protected mobileNumber = this.data.employee?.mobileNumber ?? '';
   protected reason = '';
 
   protected readonly checks = new FormChecks(() => this.problems());
@@ -323,7 +370,15 @@ export class EmployeeDialog {
     const problems: FormProblem[] = [];
     const add = (field: string, what: string) => problems.push({ where: field, what, field });
     if (!this.name.trim()) {
-      add('Name', 'enter their name');
+      add('Full name', 'enter their full name');
+    }
+    const card = nationalIdProblem(this.nationalId);
+    if (card) {
+      add('National ID', card);
+    }
+    const mobile = mobileProblem(this.mobileNumber);
+    if (mobile) {
+      add('Mobile', mobile);
     }
     if (!this.jobTitle.trim()) {
       add('Role', 'enter what they do');
@@ -366,6 +421,8 @@ export class EmployeeDialog {
       daysOff: this.daysOff,
       hiredOn: this.hiredOn,
       deviceUserId: this.deviceUserId.trim() || null,
+      nationalId: this.nationalId.trim() || null,
+      mobileNumber: this.mobileNumber.trim() || null,
       reason: this.reason.trim() || null,
     };
     this.saving.set(true);

@@ -63,9 +63,23 @@ export interface Employee {
   isActive: boolean;
   dailyRate: number;
   hourlyRate: number;
+  // رقم البطاقة: the card's 14 digits, or a passport's number. رقم الموبايل.
+  nationalId: string | null;
+  mobileNumber: string | null;
+  // Their ID card's photo or scan, when one is uploaded: what it is, not the file.
+  idPhoto: EmployeeIdPhoto | null;
 }
 
-// An employee as entered. requestId is made here, once per save.
+export interface EmployeeIdPhoto {
+  fileName: string;
+  contentType: string;
+  bytes: number;
+  uploadedAtUtc: string;
+  uploadedBy: string;
+}
+
+// An employee as entered. requestId is made here, once per save. Leaving out the national ID or
+// the mobile clears it: a change carries the ones they have.
 export interface EmployeeInput {
   requestId: string;
   name: string;
@@ -80,6 +94,8 @@ export interface EmployeeInput {
   daysOff: WeekDay[];
   hiredOn: string;
   deviceUserId: string | null;
+  nationalId: string | null;
+  mobileNumber: string | null;
   reason: string | null;
 }
 
@@ -585,6 +601,27 @@ export class HrApi {
 
   employees(): Observable<Employee[]> {
     return this.http.get<Employee[]>('/api/hr/employees');
+  }
+
+  // One employee, left or not: their profile.
+  employee(id: string): Observable<Employee> {
+    return this.http.get<Employee>(`/api/hr/employees/${id}`);
+  }
+
+  // Their ID card, photographed or scanned: a JPEG, PNG, WebP or PDF of up to 5 MB, replacing the
+  // one there was. Whoever manages HR, at once.
+  uploadIdPhoto(id: string, file: File): Observable<Employee> {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return this.http.put<Employee>(`/api/hr/employees/${id}/id-photo`, form);
+  }
+
+  idPhoto(id: string): Observable<Blob> {
+    return this.http.get(`/api/hr/employees/${id}/id-photo`, { responseType: 'blob' });
+  }
+
+  removeIdPhoto(id: string): Observable<Employee> {
+    return this.http.delete<Employee>(`/api/hr/employees/${id}/id-photo`);
   }
 
   departments(): Observable<Department[]> {

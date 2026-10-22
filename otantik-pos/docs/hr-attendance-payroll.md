@@ -14,6 +14,19 @@ and their monthly pay. This page is the design.
 - **Employees** (`hr.Employees`): name, job title, base monthly salary, shift start, weekly
   days off, their user number on the device, an optional link to a till account, hired/left
   dates. They are not the till's staff accounts: most never sign in to a till.
+- **Their profile** (ملف الموظف, migration `EmployeeProfiles`):
+  - Their name is their full name (الاسم بالكامل), as on their ID card: no field apart.
+  - National ID (رقم البطاقة): an Egyptian card's 14 digits, or a passport's letters and digits;
+    one employee to a card (a unique index). Mobile (رقم الموبايل): 7 to 15 digits, a leading +
+    from abroad. Both kept as digits however they are typed: Arabic digits, spaces and dashes
+    are fine. Optional, and changed as the rest is: an accountant's change goes to a manager.
+  - The ID card's photo or scan (صورة البطاقة): a JPEG, PNG, WebP or PDF of up to 5 MB, checked by
+    its first bytes. Its bytes are kept in `hr.EmployeeIdPhotos` (one row an employee, so in the
+    backups), apart from the employee, whose row says what it is and who uploaded it when.
+    Whoever manages HR uploads, replaces or takes it off, at once: it is not money. Whoever sees
+    HR sees it, served with `nosniff`.
+  - Nobody is deleted: deactivating someone is their leaving, paid to their last day with every
+    record kept, and they can come back.
 - **Departments** (الأقسام, `hr.Departments`, migration `EmploymentTypesAndDepartments`): every
   employee is in one. General is made with the table, the employees already entered go to it,
   and it is renamed but never deleted. Another is deleted once its employees, those who left
@@ -288,6 +301,10 @@ ClosedXML, as the raw materials and prep items imports use, in `Node.Infrastruct
 | Endpoint | What it does |
 | --- | --- |
 | `GET /api/hr/employees` | The employees, left ones too |
+| `GET /api/hr/employees/{id}` | One employee, left or not: their profile (404 when there is none) |
+| `PUT /api/hr/employees/{id}/id-photo` | Their ID card's photo or scan (multipart `file`, JPEG, PNG, WebP or PDF, 5 MB at most), replacing the one there was: whoever manages HR |
+| `GET /api/hr/employees/{id}/id-photo` | The card's file (`?download=true` to save it under its name): whoever sees HR |
+| `DELETE /api/hr/employees/{id}/id-photo` | The card's file taken off: whoever manages HR |
 | `PUT /api/hr/employees/{id}` | Add or change an employee: 200 for a manager, 202 (a request) for anyone else |
 | `POST /api/hr/employees/{id}/leave`, `…/return` | Leave on a last day; come back from a day |
 | `GET /api/hr/employees/template` | The Excel template to bring employees in from, with the departments and roles as dropdowns: whoever manages HR |
@@ -385,7 +402,14 @@ migration `PublicHolidays`); leave allowances entered by a manager are for anyth
   minute for the clock, and after the connection was lost. Each card opens the employee's month.
   When an approved device has not called in over ADMS for three minutes, the page says so (its
   punches then come only with Sync) and where to point it; the Devices tab says it of each.
-  - Employees: add, change, leave and come back; an accountant's go to a manager;
+  - Employees: add, change, leave and come back; an accountant's go to a manager; a row (or the
+    name) opens the employee's profile;
+  - An employee's profile (`/hr/employees/{id}`): their personal details (full name, national
+    ID, mobile, start), their work and pay, and their ID card shown (a photo as it is, a PDF in
+    the browser's viewer, larger on View larger) with Upload, Replace and Take off; Edit opens
+    the Employees form, Deactivate their leaving, Bring back their return, all locked while a
+    change waits for a manager; below, their payslip for the business month, a month back at a
+    time, as Payroll has it (incentives, finalizing and paying included), printing alone;
   - Employees also lists the device's users nobody has the number of yet, to add or link;
     the form takes the department, a role of it (picked, or a new one typed), monthly or daily
     pay, and flexible hours (no start time); the list shows each one's department, filters by

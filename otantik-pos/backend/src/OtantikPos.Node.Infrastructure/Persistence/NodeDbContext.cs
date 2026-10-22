@@ -82,6 +82,7 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
     public DbSet<SyncState> SyncState => Set<SyncState>();
 
     public DbSet<Employee> Employees => Set<Employee>();
+    public DbSet<Hr.EmployeeIdPhoto> EmployeeIdPhotos => Set<Hr.EmployeeIdPhoto>();
     public DbSet<AttendanceDevice> AttendanceDevices => Set<AttendanceDevice>();
     public DbSet<AttendanceLog> AttendanceLogs => Set<AttendanceLog>();
     public DbSet<DayMark> DayMarks => Set<DayMark>();

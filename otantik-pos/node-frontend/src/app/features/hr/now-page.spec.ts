@@ -14,7 +14,7 @@ const parts = (el: Element) => [...el.children].map(text);
 function employee(id: string, name: string, departmentId: string, jobTitle = 'Chef'): Employee {
   return {
     id, name, jobTitle, jobRoleId: null, employmentType: 'Monthly', monthlySalary: 5_400, dailyWage: 0, departmentId, shiftStartsAt: '16:00:00',
-    shiftEndsAt: '01:00:00', daysOff: [], deviceUserId: null, hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20,
+    shiftEndsAt: '01:00:00', daysOff: [], deviceUserId: null, hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 180, hourlyRate: 20, nationalId: null, mobileNumber: null, idPhoto: null,
   };
 }
 

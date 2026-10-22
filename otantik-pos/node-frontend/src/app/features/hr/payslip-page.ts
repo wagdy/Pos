@@ -110,15 +110,21 @@ export class FinalizeDialog {
 // to the net payable; the days it was worked out from; the incentives, allowances and advances in
 // it; and what has been paid of it. A manager adds incentives and allowances and finalizes it once
 // the month is over and every day is settled; then it is paid from the safe or a day's takings.
-// It prints as a payslip.
+// It prints as a payslip. Embedded in an employee's profile, it has no way back to Payroll but a
+// link to open it there.
 @Component({
   selector: 'app-payslip-page',
   imports: [DatePipe, MatButtonModule, MatIconModule, MatProgressBarModule, MatTooltipModule, MoneyPipe, RouterLink],
   template: `
     <div class="toolbar no-print">
-      <a mat-button routerLink="../" [queryParams]="{ month: month() }"><mat-icon>arrow_back</mat-icon> Payroll · مسير الرواتب</a>
+      @if (!embedded()) {
+        <a mat-button routerLink="../" [queryParams]="{ month: month() }"><mat-icon>arrow_back</mat-icon> Payroll · مسير الرواتب</a>
+      }
       <span class="spacer"></span>
       @if (slip(); as s) {
+        @if (embedded()) {
+          <a mat-button [routerLink]="['/hr/payroll', s.employee.id]" [queryParams]="{ month: month() }"><mat-icon>open_in_new</mat-icon> On Payroll</a>
+        }
         <a mat-button routerLink="/hr/attendance" [queryParams]="{ employee: s.employee.id, month: month() }"><mat-icon>schedule</mat-icon> Timesheet</a>
         <button mat-button (click)="print()"><mat-icon>print</mat-icon> Print</button>
       }
@@ -478,6 +484,8 @@ export class PayslipPage {
 
   readonly employeeId = input.required<string>();
   readonly startMonth = input<string>(undefined, { alias: 'month' });
+  // In an employee's profile, not a page of its own.
+  readonly embedded = input(false);
 
   protected readonly labels = adjustmentLabels;
   protected readonly duration = duration;

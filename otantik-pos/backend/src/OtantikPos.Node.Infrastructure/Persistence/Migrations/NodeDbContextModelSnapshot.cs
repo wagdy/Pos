@@ -1001,6 +1001,24 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.Property<DateOnly>("HiredOn")
                         .HasColumnType("date");
 
+                    b.Property<int?>("IdPhotoBytes")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("IdPhotoContentType")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("IdPhotoFileName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime?>("IdPhotoUploadedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("IdPhotoUploadedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
@@ -1015,6 +1033,10 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.Property<DateOnly?>("LeftOn")
                         .HasColumnType("date");
 
+                    b.Property<string>("MobileNumber")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
                     b.Property<decimal>("MonthlySalary")
                         .HasPrecision(10, 2)
                         .HasColumnType("numeric(10,2)");
@@ -1023,6 +1045,10 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
+
+                    b.Property<string>("NationalId")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
 
                     b.Property<TimeOnly?>("ShiftStartsAt")
                         .HasColumnType("time without time zone");
@@ -1046,6 +1072,10 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasFilter("\"DeviceUserId\" IS NOT NULL");
 
                     b.HasIndex("JobRoleId");
+
+                    b.HasIndex("NationalId")
+                        .IsUnique()
+                        .HasFilter("\"NationalId\" IS NOT NULL");
 
                     b.HasIndex("StaffMemberId")
                         .IsUnique()
@@ -2716,6 +2746,20 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.ToTable("OnlineSaleLines", "pos");
                 });
 
+            modelBuilder.Entity("OtantikPos.Node.Infrastructure.Hr.EmployeeIdPhoto", b =>
+                {
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<byte[]>("Content")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.HasKey("EmployeeId");
+
+                    b.ToTable("EmployeeIdPhotos", "hr");
+                });
+
             modelBuilder.Entity("OtantikPos.Node.Infrastructure.Hr.HrSettings", b =>
                 {
                     b.Property<int>("Id")
@@ -3305,6 +3349,15 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.HasOne("OtantikPos.Node.Infrastructure.DeliverySystem.OnlineSale", null)
                         .WithMany("Lines")
                         .HasForeignKey("OnlineSalePublicId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OtantikPos.Node.Infrastructure.Hr.EmployeeIdPhoto", b =>
+                {
+                    b.HasOne("OtantikPos.Hr.Domain.Employees.Employee", null)
+                        .WithOne()
+                        .HasForeignKey("OtantikPos.Node.Infrastructure.Hr.EmployeeIdPhoto", "EmployeeId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

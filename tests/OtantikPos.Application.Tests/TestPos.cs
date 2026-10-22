@@ -93,6 +93,7 @@ public sealed class TestPos
         services.AddSingleton<OtantikPos.Inventory.Application.RawMaterials.IMaterialUnits>(Inventory.Units);
         services.AddSingleton<OtantikPos.Inventory.Application.Categories.IItemConversions>(new NoItemConversions());
         services.AddSingleton<OtantikPos.Hr.Domain.IEmployeeRepository>(Hr.Employees);
+        services.AddSingleton<OtantikPos.Hr.Domain.IEmployeeIdPhotoStore>(Hr.Employees);
         services.AddSingleton<OtantikPos.Hr.Domain.IAttendanceDeviceRepository>(Hr.Devices);
         services.AddSingleton<OtantikPos.Hr.Domain.IAttendanceLogRepository>(Hr.Punches);
         services.AddSingleton<OtantikPos.Hr.Domain.IDayMarkRepository>(Hr.Marks);

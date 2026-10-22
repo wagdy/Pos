@@ -21,11 +21,47 @@ internal sealed class EmployeeRepository(NodeDbContext db) : IEmployeeRepository
     public Task<Employee?> GetByDeviceUserIdAsync(string deviceUserId, CancellationToken cancellationToken = default) =>
         db.Employees.AsNoTracking().SingleOrDefaultAsync(e => e.DeviceUserId == deviceUserId, cancellationToken);
 
+    public Task<Employee?> GetByNationalIdAsync(string nationalId, CancellationToken cancellationToken = default) =>
+        db.Employees.AsNoTracking().FirstOrDefaultAsync(e => e.NationalId == nationalId, cancellationToken);
+
     public async Task<IReadOnlyList<Employee>> GetInDepartmentAsync(Guid departmentId, CancellationToken cancellationToken = default) =>
         await db.Employees.Where(e => e.DepartmentId == departmentId).ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyList<Employee>> GetWithRoleAsync(Guid jobRoleId, CancellationToken cancellationToken = default) =>
         await db.Employees.Where(e => e.JobRoleId == jobRoleId).ToListAsync(cancellationToken);
+}
+
+// An employee's ID card photo: one row per employee, its bytes alone.
+public sealed class EmployeeIdPhoto
+{
+    public Guid EmployeeId { get; init; }
+    public byte[] Content { get; set; } = [];
+}
+
+internal sealed class EmployeeIdPhotoStore(NodeDbContext db) : IEmployeeIdPhotoStore
+{
+    // Replaces the one there was.
+    public void Put(Guid employeeId, byte[] content)
+    {
+        var existing = db.EmployeeIdPhotos.Local.FirstOrDefault(p => p.EmployeeId == employeeId)
+            ?? db.EmployeeIdPhotos.Find(employeeId);
+        if (existing is null)
+            db.EmployeeIdPhotos.Add(new EmployeeIdPhoto { EmployeeId = employeeId, Content = content });
+        else
+            existing.Content = content;
+    }
+
+    public async Task RemoveAsync(Guid employeeId, CancellationToken cancellationToken = default)
+    {
+        if (await db.EmployeeIdPhotos.FindAsync([employeeId], cancellationToken) is { } photo)
+            db.EmployeeIdPhotos.Remove(photo);
+    }
+
+    public async Task<byte[]?> GetAsync(Guid employeeId, CancellationToken cancellationToken = default) =>
+        await db.EmployeeIdPhotos.AsNoTracking()
+            .Where(p => p.EmployeeId == employeeId)
+            .Select(p => p.Content)
+            .SingleOrDefaultAsync(cancellationToken);
 }
 
 internal sealed class JobRoleRepository(NodeDbContext db) : IJobRoleRepository

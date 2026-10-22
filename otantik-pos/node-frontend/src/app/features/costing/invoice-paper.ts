@@ -4,14 +4,15 @@ import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/d
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
-import { firstValueFrom } from 'rxjs';
+import { Observable, firstValueFrom } from 'rxjs';
 import { CostingApi } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { saveBlob } from '../../core/ui/save-blob';
 
 // An invoice's photo or scan, fetched with the manager's sign-in (a plain link would carry none)
 // and shown in the page: a photo as it is, a PDF in the browser's own viewer. A till running
-// full screen has no tabs to open it in.
+// full screen has no tabs to open it in. Another file (an employee's ID card) is shown the same
+// way, given how to fetch it.
 @Component({
   selector: 'app-paper-preview',
   imports: [MatButtonModule, MatIconModule, MatProgressBarModule],
@@ -34,17 +35,18 @@ import { saveBlob } from '../../core/ui/save-blob';
     :host {
       display: block;
     }
+    /* As tall as where it is shown lets it: --paper-height, 70vh unless said. */
     img {
       display: block;
       max-width: 100%;
-      max-height: 70vh;
+      max-height: var(--paper-height, 70vh);
       margin: 0 auto;
     }
     iframe {
       display: block;
       width: 100%;
-      min-width: min(80vw, 640px);
-      height: 70vh;
+      min-width: var(--paper-min-width, min(80vw, 640px));
+      height: var(--paper-height, 70vh);
       border: 0;
     }
     .actions {
@@ -69,7 +71,9 @@ export class PaperPreview {
   private readonly api = inject(CostingApi);
   private readonly sanitizer = inject(DomSanitizer);
 
-  readonly invoiceId = input.required<string>();
+  readonly invoiceId = input<string | null>(null);
+  // Another file than an invoice's paper: how it is fetched.
+  readonly fetch = input<(() => Observable<Blob>) | null>(null);
   readonly fileName = input.required<string>();
 
   protected readonly image = signal<string | null>(null);
@@ -80,8 +84,8 @@ export class PaperPreview {
 
   constructor() {
     effect(() => {
-      const id = this.invoiceId();
-      untracked(() => void this.load(id));
+      const [id, fetch] = [this.invoiceId(), this.fetch()];
+      untracked(() => void this.load(fetch ?? (() => this.api.purchaseInvoiceFile(id!))));
     });
     inject(DestroyRef).onDestroy(() => this.release());
   }
@@ -93,24 +97,24 @@ export class PaperPreview {
     }
   }
 
-  private async load(id: string): Promise<void> {
+  private async load(fetch: () => Observable<Blob>): Promise<void> {
     this.release();
     this.image.set(null);
     this.document.set(null);
     this.error.set(null);
     try {
-      const blob = await firstValueFrom(this.api.purchaseInvoiceFile(id));
+      const blob = await firstValueFrom(fetch());
       this.blob.set(blob);
       this.url = URL.createObjectURL(blob);
       if (blob.type.startsWith('image/')) {
         this.image.set(this.url);
       } else {
         // A PDF, in the browser's own viewer. The URL is one made here, of a file the till checked
-        // was a PDF by its first bytes when it was attached.
+        // was a PDF by its first bytes when it was uploaded.
         this.document.set(this.sanitizer.bypassSecurityTrustResourceUrl(this.url));
       }
     } catch (error) {
-      this.error.set(errorMessage(error, 'The paper could not be loaded.'));
+      this.error.set(errorMessage(error, 'The file could not be loaded.'));
     }
   }
 

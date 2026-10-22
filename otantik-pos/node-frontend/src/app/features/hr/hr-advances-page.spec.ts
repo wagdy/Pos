@@ -16,7 +16,7 @@ const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 function employee(id: string, name: string, extra: Partial<Employee> = {}): Employee {
   return {
     id, name, jobTitle: 'Chef', jobRoleId: null, employmentType: 'Monthly', monthlySalary: 5_000, dailyWage: 0, departmentId: 'general', shiftStartsAt: '10:00:00',
-    shiftEndsAt: '19:00:00', daysOff: [], deviceUserId: null, hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 166.67, hourlyRate: 18.52, ...extra,
+    shiftEndsAt: '19:00:00', daysOff: [], deviceUserId: null, hiredOn: '2026-01-01', leftOn: null, isActive: true, dailyRate: 166.67, hourlyRate: 18.52, nationalId: null, mobileNumber: null, idPhoto: null, ...extra,
   };
 }
 

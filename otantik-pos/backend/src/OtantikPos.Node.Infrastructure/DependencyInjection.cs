@@ -92,6 +92,7 @@ public static class DependencyInjection
         services.AddScoped<IPrepRecipeRepository, PrepRecipeRepository>();
         services.AddScoped<IProductionOrderRepository, ProductionOrderRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IEmployeeRepository, Hr.EmployeeRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IEmployeeIdPhotoStore, Hr.EmployeeIdPhotoStore>();
         services.AddScoped<OtantikPos.Hr.Domain.IAttendanceDeviceRepository, Hr.AttendanceDeviceRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IAttendanceLogRepository, Hr.AttendanceLogRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IDayMarkRepository, Hr.DayMarkRepository>();

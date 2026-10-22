@@ -14,11 +14,24 @@ public interface IEmployeeRepository : IRepository<Employee>
 
     Task<Employee?> GetByDeviceUserIdAsync(string deviceUserId, CancellationToken cancellationToken = default);
 
+    Task<Employee?> GetByNationalIdAsync(string nationalId, CancellationToken cancellationToken = default);
+
     // Tracked: everyone in a department, left or not.
     Task<IReadOnlyList<Employee>> GetInDepartmentAsync(Guid departmentId, CancellationToken cancellationToken = default);
 
     // Tracked: everyone holding a role, left or not.
     Task<IReadOnlyList<Employee>> GetWithRoleAsync(Guid jobRoleId, CancellationToken cancellationToken = default);
+}
+
+// The photo or scan of an employee's ID card, kept apart from them so a list of employees never
+// loads a megabyte each. Written in the same unit of work as the employee.
+public interface IEmployeeIdPhotoStore
+{
+    void Put(Guid employeeId, byte[] content);
+
+    Task RemoveAsync(Guid employeeId, CancellationToken cancellationToken = default);
+
+    Task<byte[]?> GetAsync(Guid employeeId, CancellationToken cancellationToken = default);
 }
 
 public interface IJobRoleRepository : IRepository<JobRole>

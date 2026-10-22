@@ -24,12 +24,30 @@ internal sealed class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
         builder.Property(e => e.DaysOff).HasConversion<string>().HasMaxLength(100);
         builder.Property(e => e.DeviceUserId).HasMaxLength(Employee.MaxDeviceUserIdLength);
         builder.Property(e => e.StaffMemberId).HasMaxLength(450);
+        builder.Property(e => e.NationalId).HasMaxLength(Employee.MaxNationalIdLength);
+        builder.Property(e => e.MobileNumber).HasMaxLength(Employee.MaxMobileNumberLength);
+        builder.Property(e => e.IdPhotoFileName).HasMaxLength(Employee.MaxIdPhotoFileNameLength);
+        builder.Property(e => e.IdPhotoContentType).HasMaxLength(100);
+        builder.Property(e => e.IdPhotoUploadedBy).HasMaxLength(200);
+        builder.Ignore(e => e.HasIdPhoto);
         builder.Ignore(e => e.DailyRate);
         builder.Ignore(e => e.HourlyRate);
         builder.Ignore(e => e.MinuteRate);
         // One employee to a user number on the device, and to a till account.
         builder.HasIndex(e => e.DeviceUserId).IsUnique().HasFilter("\"DeviceUserId\" IS NOT NULL");
         builder.HasIndex(e => e.StaffMemberId).IsUnique().HasFilter("\"StaffMemberId\" IS NOT NULL");
+        // One employee to an ID card.
+        builder.HasIndex(e => e.NationalId).IsUnique().HasFilter("\"NationalId\" IS NOT NULL");
+    }
+}
+
+internal sealed class EmployeeIdPhotoConfiguration : IEntityTypeConfiguration<Hr.EmployeeIdPhoto>
+{
+    public void Configure(EntityTypeBuilder<Hr.EmployeeIdPhoto> builder)
+    {
+        builder.ToTable("EmployeeIdPhotos", NodeDbContext.HrSchema);
+        builder.HasKey(p => p.EmployeeId);
+        builder.HasOne<Employee>().WithOne().HasForeignKey<Hr.EmployeeIdPhoto>(p => p.EmployeeId).OnDelete(DeleteBehavior.Cascade);
     }
 }
 

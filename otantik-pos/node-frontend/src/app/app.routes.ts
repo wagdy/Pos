@@ -255,6 +255,11 @@ export const routes: Routes = [
             loadComponent: () => import('./features/hr/employees-page').then((m) => m.EmployeesPage),
           },
           {
+            // An employee's profile: their details, ID card and the month's payslip.
+            path: 'employees/:employeeId',
+            loadComponent: () => import('./features/hr/employee-profile-page').then((m) => m.EmployeeProfilePage),
+          },
+          {
             path: 'departments',
             loadComponent: () => import('./features/hr/departments-page').then((m) => m.DepartmentsPage),
           },

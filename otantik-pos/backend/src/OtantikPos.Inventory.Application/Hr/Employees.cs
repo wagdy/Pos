@@ -4,6 +4,7 @@ using Otantik.BuildingBlocks;
 using OtantikPos.Hr.Domain;
 using OtantikPos.Hr.Domain.Employees;
 using OtantikPos.Inventory.Application.Approvals;
+using OtantikPos.Inventory.Application.Common;
 using OtantikPos.Inventory.Domain.Approvals;
 
 namespace OtantikPos.Inventory.Application.Hr;
@@ -32,15 +33,23 @@ public sealed record EmployeeDto(
     DateOnly? LeftOn,
     bool IsActive,
     decimal DailyRate,
-    decimal HourlyRate)
+    decimal HourlyRate,
+    // رقم البطاقة and رقم الموبايل, when entered.
+    string? NationalId,
+    string? MobileNumber,
+    // Their ID card's photo or scan, when one is uploaded: what it is, not its bytes.
+    EmployeeIdPhotoDto? IdPhoto)
 {
     public static EmployeeDto From(Employee e) => new(
         e.Id, e.Name, e.JobTitle, e.JobRoleId, e.EmploymentType, e.MonthlySalary, e.DailyWage, e.DepartmentId, e.ShiftStartsAt, e.ShiftStartsAt?.Add(Employee.ShiftLength), Employees.DaysOf(e.DaysOff),
         e.DeviceUserId, e.HiredOn, e.LeftOn, e.IsActive, Math.Round(e.DailyRate, 2, MidpointRounding.AwayFromZero),
-        Math.Round(e.HourlyRate, 2, MidpointRounding.AwayFromZero));
+        Math.Round(e.HourlyRate, 2, MidpointRounding.AwayFromZero), e.NationalId, e.MobileNumber,
+        e.HasIdPhoto ? new EmployeeIdPhotoDto(e.IdPhotoFileName!, e.IdPhotoContentType!, e.IdPhotoBytes ?? 0, e.IdPhotoUploadedAtUtc!.Value, e.IdPhotoUploadedBy ?? string.Empty) : null);
 }
 
-// An employee's details as entered. Paid monthly at MonthlySalary or daily at DailyWage; in
+public sealed record EmployeeIdPhotoDto(string FileName, string ContentType, int Bytes, DateTime UploadedAtUtc, string UploadedBy);
+
+// An employee's details as entered: Name is their full name. Paid monthly at MonthlySalary or daily at DailyWage; in
 // General when no department is given (a request asked before departments were). Their role is
 // JobRoleId, one of their department's; given only a JobTitle, it is the department's role of
 // that name, made when there is none.
@@ -55,7 +64,9 @@ public sealed record EmployeeDetails(
     EmploymentType EmploymentType = EmploymentType.Monthly,
     decimal DailyWage = 0,
     Guid? DepartmentId = null,
-    Guid? JobRoleId = null)
+    Guid? JobRoleId = null,
+    string? NationalId = null,
+    string? MobileNumber = null)
 {
     public decimal Pay => EmploymentType == EmploymentType.Daily ? DailyWage : MonthlySalary;
 
@@ -94,12 +105,16 @@ internal sealed class EmployeeWriter(
                 employeeId, details.Name, details.JobTitle, 0, details.ShiftStartsAt, Employees.Flags(details.DaysOff), details.HiredOn,
                 details.DeviceUserId);
             draft.SetPay(details.EmploymentType, details.Pay);
+            draft.SetNationalId(details.NationalId);
+            draft.SetMobileNumber(details.MobileNumber);
             if (await departments.GetByIdAsync(details.Department, cancellationToken) is null)
                 throw new DomainException("Choose the employee's department: that one is not there any more.");
             if (details.JobRoleId is { } roleId)
                 Check(await roles.GetByIdAsync(roleId, cancellationToken), details);
             if (draft.DeviceUserId is { } number && await employees.GetByDeviceUserIdAsync(number, cancellationToken) is { } holder && holder.Id != employeeId)
                 throw new DomainException($"{holder.Name} has number {number} on the attendance device already.");
+            if (draft.NationalId is { } card && await employees.GetByNationalIdAsync(card, cancellationToken) is { } carded && carded.Id != employeeId)
+                throw new DomainException($"{carded.Name} has national ID {card} already.");
             if (existing is { LeftOn: { } left } && details.HiredOn > left)
                 throw new DomainException("They have left: they start again by coming back, not by a later start.");
             return;
@@ -139,6 +154,8 @@ internal sealed class EmployeeWriter(
                 employee.SetPay(d.EmploymentType, d.Pay);
                 employee.MoveTo(d.Department);
                 employee.AssignRole(await RoleAsync(d, cancellationToken));
+                employee.SetNationalId(d.NationalId);
+                employee.SetMobileNumber(d.MobileNumber);
                 employees.Add(employee);
             }
             else
@@ -152,6 +169,8 @@ internal sealed class EmployeeWriter(
                 employee.SetDaysOff(Employees.Flags(d.DaysOff));
                 employee.ChangeStart(d.HiredOn);
                 employee.LinkDevice(d.DeviceUserId);
+                employee.SetNationalId(d.NationalId);
+                employee.SetMobileNumber(d.MobileNumber);
             }
 
             // Punches already sent under their number, kept waiting for someone to have it.
@@ -225,6 +244,14 @@ internal sealed class EmployeeWriter(
         Line("Days off", existing is null ? null : DaysOff(existing.DaysOff), DaysOff(Employees.Flags(d.DaysOff)));
         Line("Started on", existing is null ? null : Day(existing.HiredOn), Day(d.HiredOn));
         Line("Attendance device number", existing?.DeviceUserId ?? "—", string.IsNullOrWhiteSpace(d.DeviceUserId) ? "—" : d.DeviceUserId.Trim());
+        // As they will be kept: "٠١٠ ١٢٣" is 010123. Said for someone new only when entered.
+        var draft = new Employee(employeeId, "draft", "draft", 0, null, WeekDays.None, d.HiredOn);
+        draft.SetNationalId(d.NationalId);
+        draft.SetMobileNumber(d.MobileNumber);
+        if (existing is not null || draft.NationalId is not null)
+            Line("National ID", existing?.NationalId ?? "—", draft.NationalId ?? "—");
+        if (existing is not null || draft.MobileNumber is not null)
+            Line("Mobile", existing?.MobileNumber ?? "—", draft.MobileNumber ?? "—");
         return existing is null
             ? ($"New employee · {d.Name.Trim()} · {d.JobTitle.Trim()} · {Pay(d.EmploymentType, d.Pay)}, {shift}", ApprovalAction.Create, lines)
             : ($"Employee changed · {existing.Name}", ApprovalAction.Update, lines);
@@ -291,4 +318,69 @@ internal sealed class ChangeEmployeeHandler(
 
     private async Task<EmployeeDto?> DtoAsync(Guid id, CancellationToken cancellationToken) =>
         await employees.GetByIdAsync(id, cancellationToken) is { } e ? EmployeeDto.From(e) : null;
+}
+
+public sealed record GetEmployeeQuery(Guid EmployeeId) : IRequest<EmployeeDto?>;
+
+internal sealed class GetEmployeeHandler(IEmployeeRepository employees) : IRequestHandler<GetEmployeeQuery, EmployeeDto?>
+{
+    public async Task<EmployeeDto?> Handle(GetEmployeeQuery request, CancellationToken cancellationToken) =>
+        await employees.GetByIdAsync(request.EmployeeId, cancellationToken) is { } e ? EmployeeDto.From(e) : null;
+}
+
+// Their ID card, photographed or scanned (صورة البطاقة): a JPEG, PNG, WebP or PDF of up to 5 MB,
+// replacing the one there was. Not money, so it is not asked of a manager: whoever manages HR
+// uploads it.
+public sealed record UploadEmployeeIdPhotoCommand(Guid EmployeeId, string FileName, string ContentType, byte[] Content, string StaffName)
+    : IRequest<EmployeeDto>;
+
+internal sealed class UploadEmployeeIdPhotoHandler(IEmployeeRepository employees, IEmployeeIdPhotoStore photos, IUnitOfWork unitOfWork)
+    : IRequestHandler<UploadEmployeeIdPhotoCommand, EmployeeDto>
+{
+    public async Task<EmployeeDto> Handle(UploadEmployeeIdPhotoCommand request, CancellationToken cancellationToken)
+    {
+        var employee = await employees.GetByIdAsync(request.EmployeeId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Employee), request.EmployeeId);
+        // A type it cannot be is said as such (by AttachIdPhoto); one it can be, checked by its bytes.
+        if (Employee.IdPhotoTypes.Contains(request.ContentType) && !UploadedFile.LooksLike(request.ContentType, request.Content))
+            throw new DomainException("That file is not the photo or PDF it says it is.");
+        employee.AttachIdPhoto(request.FileName, request.ContentType, request.Content.Length, request.StaffName);
+        photos.Put(employee.Id, request.Content);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return EmployeeDto.From(employee);
+    }
+}
+
+// Taken off: the wrong card, say. A new one is uploaded over the old without this.
+public sealed record RemoveEmployeeIdPhotoCommand(Guid EmployeeId) : IRequest<EmployeeDto>;
+
+internal sealed class RemoveEmployeeIdPhotoHandler(IEmployeeRepository employees, IEmployeeIdPhotoStore photos, IUnitOfWork unitOfWork)
+    : IRequestHandler<RemoveEmployeeIdPhotoCommand, EmployeeDto>
+{
+    public async Task<EmployeeDto> Handle(RemoveEmployeeIdPhotoCommand request, CancellationToken cancellationToken)
+    {
+        var employee = await employees.GetByIdAsync(request.EmployeeId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Employee), request.EmployeeId);
+        employee.RemoveIdPhoto();
+        await photos.RemoveAsync(employee.Id, cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return EmployeeDto.From(employee);
+    }
+}
+
+public sealed record EmployeeIdPhotoFile(string FileName, string ContentType, byte[] Content);
+
+public sealed record GetEmployeeIdPhotoQuery(Guid EmployeeId) : IRequest<EmployeeIdPhotoFile?>;
+
+internal sealed class GetEmployeeIdPhotoHandler(IEmployeeRepository employees, IEmployeeIdPhotoStore photos)
+    : IRequestHandler<GetEmployeeIdPhotoQuery, EmployeeIdPhotoFile?>
+{
+    public async Task<EmployeeIdPhotoFile?> Handle(GetEmployeeIdPhotoQuery request, CancellationToken cancellationToken)
+    {
+        if (await employees.GetByIdAsync(request.EmployeeId, cancellationToken) is not { HasIdPhoto: true } employee)
+            return null;
+        return await photos.GetAsync(employee.Id, cancellationToken) is { } content
+            ? new EmployeeIdPhotoFile(employee.IdPhotoFileName!, employee.IdPhotoContentType!, content)
+            : null;
+    }
 }

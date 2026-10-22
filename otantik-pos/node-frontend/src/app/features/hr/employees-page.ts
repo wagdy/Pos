@@ -10,6 +10,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
@@ -69,7 +70,7 @@ export class LinkDeviceUserDialog {
   protected employeeId = '';
 }
 
-// The employees (الموظفين): who is on the payroll and in which department, their pay (a monthly
+// The employees (الموظفين): a row opens the employee's profile. Who is on the payroll and in which department, their pay (a monthly
 // salary or a daily wage), their nine-hour shift (or flexible hours) and days off, and their
 // number on the attendance device. Added, changed, leaving
 // and coming back by whoever manages HR: a manager's at once, anyone else's waiting for a manager,
@@ -90,6 +91,7 @@ export class LinkDeviceUserDialog {
     MatSlideToggleModule,
     MatTooltipModule,
     MoneyPipe,
+    RouterLink,
   ],
   template: `
     <div class="toolbar">
@@ -160,9 +162,9 @@ export class LinkDeviceUserDialog {
           <tbody>
             @for (e of shown(); track e.id) {
               @let asked = approvals.pendingFor(e.id);
-              <tr [class.left]="!e.isActive" [class.pending-deletion]="!!asked">
+              <tr class="opens" [class.left]="!e.isActive" [class.pending-deletion]="!!asked" (click)="profile(e)">
                 <td>
-                  <strong>{{ e.name }}</strong>
+                  <a class="name" [routerLink]="[e.id]" (click)="$event.stopPropagation()"><strong>{{ e.name }}</strong></a>
                   <div class="muted small">{{ e.jobTitle }} · {{ departmentName(e) }}</div>
                   @if (asked) {
                     <div><span class="pending-badge">{{ pendingLabel(asked).en }}<span class="ar">{{ pendingLabel(asked).ar }}</span></span></div>
@@ -195,7 +197,7 @@ export class LinkDeviceUserDialog {
                     <div class="muted small">last day {{ e.leftOn | date: 'd MMM y' }}</div>
                   }
                 </td>
-                <td class="num nowrap">
+                <td class="num nowrap" (click)="$event.stopPropagation()">
                   @if (canManage()) {
                     @if (asked) {
                       <mat-icon class="locked" matTooltip="Waiting for a manager's approval">lock_clock</mat-icon>
@@ -280,6 +282,22 @@ export class LinkDeviceUserDialog {
     tr.left td {
       color: var(--mat-sys-on-surface-variant);
     }
+    tr.opens {
+      cursor: pointer;
+
+      &:hover td {
+        background: var(--mat-sys-surface-container-low);
+      }
+    }
+    a.name {
+      color: inherit;
+      text-decoration: none;
+
+      &:hover,
+      &:focus-visible {
+        text-decoration: underline;
+      }
+    }
     .status {
       display: inline-block;
       padding: 1px 8px;
@@ -323,6 +341,7 @@ export class EmployeesPage {
   private readonly notify = inject(NotifyService);
   private readonly businessDay = inject(BusinessDay);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly router = inject(Router);
   private destroyed = false;
   protected readonly approvals = inject(Approvals);
   protected readonly syncing = signal(false);
@@ -470,6 +489,10 @@ export class EmployeesPage {
     }
   }
 
+  protected profile(e: Employee): void {
+    void this.router.navigate(['/hr/employees', e.id]);
+  }
+
   protected departmentName(e: Employee): string {
     return this.departments().find((d) => d.id === e.departmentId)?.name ?? '—';
   }
@@ -524,6 +547,8 @@ export class EmployeesPage {
       daysOff: employee.daysOff,
       hiredOn: employee.hiredOn,
       deviceUserId: user.deviceUserId,
+      nationalId: employee.nationalId,
+      mobileNumber: employee.mobileNumber,
       reason: `Their number on the attendance device: ${user.deviceUserId}`,
     };
     try {

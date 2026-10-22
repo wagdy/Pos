@@ -55,6 +55,16 @@ public sealed partial class Employee : AggregateRoot
     public const int MaxDeviceUserIdLength = 24;
     public const decimal MaxMonthlySalary = 1_000_000;
     public const decimal MaxDailyWage = 50_000;
+    public const int MaxNationalIdLength = 20;
+    public const int MaxMobileNumberLength = 16;
+    public const int MaxIdPhotoBytes = 5 * 1024 * 1024;
+    public const int MaxIdPhotoFileNameLength = 200;
+
+    // A photo (JPEG, PNG or WebP) or a PDF of their ID card.
+    public static readonly IReadOnlySet<string> IdPhotoTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "image/jpeg", "image/png", "image/webp", "application/pdf",
+    };
 
     public static readonly TimeSpan ShiftLength = TimeSpan.FromHours(ShiftHours);
 
@@ -84,7 +94,24 @@ public sealed partial class Employee : AggregateRoot
         CreatedAtUtc = DateTime.UtcNow;
     }
 
+    // Their full name (الاسم بالكامل), as on their ID card.
     public string Name { get; private set; } = string.Empty;
+
+    // The number on their ID card (رقم البطاقة): an Egyptian national ID's 14 digits, or a
+    // passport's letters and digits. None until it is entered.
+    public string? NationalId { get; private set; }
+
+    // Their mobile (رقم الموبايل), digits only, a leading + for an international one.
+    public string? MobileNumber { get; private set; }
+
+    // A photo or scan of their ID card (صورة البطاقة); its bytes are kept apart
+    // (IEmployeeIdPhotoStore), so a list of employees never loads them.
+    public string? IdPhotoFileName { get; private set; }
+    public string? IdPhotoContentType { get; private set; }
+    public int? IdPhotoBytes { get; private set; }
+    public DateTime? IdPhotoUploadedAtUtc { get; private set; }
+    public string? IdPhotoUploadedBy { get; private set; }
+    public bool HasIdPhoto => IdPhotoContentType is not null;
 
     // What they do (الوظيفة): chef, waiter, cashier; their role's name once they hold one.
     public string JobTitle { get; private set; } = string.Empty;
@@ -211,6 +238,63 @@ public sealed partial class Employee : AggregateRoot
         DeviceUserId = trimmed;
     }
 
+    // Arabic-Indic digits as their ASCII ones, spaces and dashes aside. Fourteen digits is an
+    // Egyptian national ID; letters and digits, a passport's number. Null: not entered.
+    public void SetNationalId(string? nationalId)
+    {
+        var number = Digits(nationalId)?.ToUpperInvariant();
+        if (number is null)
+        {
+            NationalId = null;
+            return;
+        }
+
+        if (number.All(char.IsAsciiDigit) ? number.Length != 14 : number.Length is < 5 or > MaxNationalIdLength || !PassportPattern().IsMatch(number))
+            throw new DomainException("A national ID is the card's 14 digits; a passport's number, its letters and digits.");
+        NationalId = number;
+    }
+
+    // Digits, a leading + for an international number: 01012345678, or +201012345678.
+    public void SetMobileNumber(string? mobileNumber)
+    {
+        var number = Digits(mobileNumber, "()");
+        if (number is null)
+        {
+            MobileNumber = null;
+            return;
+        }
+
+        if (!MobilePattern().IsMatch(number))
+            throw new DomainException("A mobile number is its digits: 01012345678, or +201012345678 from abroad.");
+        MobileNumber = number;
+    }
+
+    // Their ID card, photographed or scanned; replacing one there was.
+    public void AttachIdPhoto(string fileName, string contentType, int bytes, string uploadedBy)
+    {
+        if (!IdPhotoTypes.Contains(contentType))
+            throw new DomainException("Upload a photo (JPEG, PNG or WebP) or a PDF of the ID card.");
+        if (bytes is <= 0 or > MaxIdPhotoBytes)
+            throw new DomainException("The file must be under 5 MB.");
+        var name = Path.GetFileName(fileName?.Trim() ?? string.Empty);
+        IdPhotoFileName = name.Length == 0 ? "id-card" : name[..Math.Min(name.Length, MaxIdPhotoFileNameLength)];
+        IdPhotoContentType = contentType.ToLowerInvariant();
+        IdPhotoBytes = bytes;
+        IdPhotoUploadedAtUtc = DateTime.UtcNow;
+        IdPhotoUploadedBy = uploadedBy;
+    }
+
+    public void RemoveIdPhoto()
+    {
+        if (!HasIdPhoto)
+            throw new DomainException("There is no photo of their ID card to take off.");
+        IdPhotoFileName = null;
+        IdPhotoContentType = null;
+        IdPhotoBytes = null;
+        IdPhotoUploadedAtUtc = null;
+        IdPhotoUploadedBy = null;
+    }
+
     public void LinkStaff(string? staffMemberId) =>
         StaffMemberId = string.IsNullOrWhiteSpace(staffMemberId) ? null : staffMemberId.Trim();
 
@@ -249,6 +333,33 @@ public sealed partial class Employee : AggregateRoot
 
     public bool IsDayOff(DateOnly day) => (DaysOff & WeekDaysExtensions.Of(day.DayOfWeek)) != 0;
 
+    // "٠١٠ ١٢٣٤-٥٦٧٨" as "01012345678": Arabic-Indic and Persian digits as ASCII ones, without the
+    // spaces, dashes and dots written between them, nor the characters in `also`. Null when
+    // nothing is left.
+    private static string? Digits(string? value, string also = "")
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        var kept = new System.Text.StringBuilder(value.Length);
+        foreach (var c in value.Trim())
+        {
+            if (c is >= '٠' and <= '٩')
+                kept.Append((char)('0' + (c - '٠')));
+            else if (c is >= '۰' and <= '۹')
+                kept.Append((char)('0' + (c - '۰')));
+            else if (!char.IsWhiteSpace(c) && c is not ('-' or '.') && !also.Contains(c))
+                kept.Append(c);
+        }
+
+        return kept.Length == 0 ? null : kept.ToString();
+    }
+
     [GeneratedRegex("^[A-Za-z0-9]+$")]
     private static partial Regex DeviceUserIdPattern();
+
+    [GeneratedRegex("^[A-Z0-9]+$")]
+    private static partial Regex PassportPattern();
+
+    [GeneratedRegex("^\\+?[0-9]{7,15}$")]
+    private static partial Regex MobilePattern();
 }

@@ -139,6 +139,48 @@ public class HrPersistenceTests
     }
 
     [Fact]
+    public async Task An_employees_id_card_and_how_to_reach_them_are_kept_and_a_card_is_one_employees()
+    {
+        await using var node = await TestNode.StartAsync();
+        var chef = new Employee(Guid.NewGuid(), "حسن محمود علي", "Chef", 5_400, new TimeOnly(10, 0), WeekDays.Friday, new DateOnly(2026, 1, 1));
+        chef.SetNationalId("29001010123456");
+        chef.SetMobileNumber("01012345678");
+        chef.AttachIdPhoto("card.png", "image/png", 4, "Omar");
+        byte[] png = [0x89, 0x50, 0x4E, 0x47];
+        await node.Db(async db =>
+        {
+            db.Employees.Add(chef);
+            db.EmployeeIdPhotos.Add(new EmployeeIdPhoto { EmployeeId = chef.Id, Content = png });
+            return await db.SaveChangesAsync();
+        });
+
+        await node.Db(async db =>
+        {
+            var kept = await db.Employees.SingleAsync();
+            Assert.Equal(("29001010123456", "01012345678", "card.png", "image/png", (int?)4, "Omar"),
+                (kept.NationalId, kept.MobileNumber, kept.IdPhotoFileName, kept.IdPhotoContentType, kept.IdPhotoBytes, kept.IdPhotoUploadedBy));
+            Assert.True(kept.HasIdPhoto);
+            Assert.Equal(png, (await db.EmployeeIdPhotos.SingleAsync()).Content);
+            return 0;
+        });
+
+        // Two employees with one card is a mistake the database refuses too.
+        await Assert.ThrowsAsync<ConflictException>(() => node.Db(async db =>
+        {
+            var copy = new Employee(Guid.NewGuid(), "Karim", "Waiter", 4_000, new TimeOnly(12, 0), WeekDays.Sunday, new DateOnly(2026, 1, 1));
+            copy.SetNationalId("29001010123456");
+            db.Employees.Add(copy);
+            return await db.SaveChangesAsync();
+        }));
+        // Nor a photo for no one.
+        await Assert.ThrowsAsync<ConflictException>(() => node.Db(async db =>
+        {
+            db.EmployeeIdPhotos.Add(new EmployeeIdPhoto { EmployeeId = Guid.NewGuid(), Content = png });
+            return await db.SaveChangesAsync();
+        }));
+    }
+
+    [Fact]
     public async Task A_punch_sent_twice_is_kept_once_and_a_device_number_is_one_employees()
     {
         await using var node = await TestNode.StartAsync();

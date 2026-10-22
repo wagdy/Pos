@@ -32,6 +32,42 @@ public sealed class HrController(ISender sender) : ControllerBase
     [HttpGet("employees")]
     public Task<IReadOnlyList<EmployeeDto>> GetEmployees(CancellationToken cancellationToken) => sender.Send(new GetEmployeesQuery(), cancellationToken);
 
+    // One employee, left or not: their profile.
+    [HttpGet("employees/{employeeId:guid}")]
+    public async Task<ActionResult<EmployeeDto>> GetEmployee(Guid employeeId, CancellationToken cancellationToken) =>
+        await sender.Send(new GetEmployeeQuery(employeeId), cancellationToken) is { } employee ? employee : NotFound();
+
+    // Their ID card, photographed or scanned (صورة البطاقة): a JPEG, PNG, WebP or PDF of up to
+    // 5 MB, replacing the one there was. Whoever manages HR, at once: it is not money.
+    [HttpPut("employees/{employeeId:guid}/id-photo")]
+    [Authorize(Policy = Permissions.HrManage)]
+    [RequestSizeLimit(Employee.MaxIdPhotoBytes + 64 * 1024)]
+    [RequestFormLimits(MultipartBodyLengthLimit = Employee.MaxIdPhotoBytes + 64 * 1024)]
+    public async Task<ActionResult<EmployeeDto>> UploadIdPhoto(Guid employeeId, IFormFile file, CancellationToken cancellationToken)
+    {
+        if (file.Length > Employee.MaxIdPhotoBytes)
+            return UnprocessableEntity(new { errors = new[] { "The file must be under 5 MB." } });
+        using var content = new MemoryStream();
+        await file.CopyToAsync(content, cancellationToken);
+        return await sender.Send(new UploadEmployeeIdPhotoCommand(employeeId, file.FileName, file.ContentType, content.ToArray(), StaffName), cancellationToken);
+    }
+
+    // Seen by whoever sees HR; ?download=true to save it under its own name.
+    [HttpGet("employees/{employeeId:guid}/id-photo")]
+    public async Task<IActionResult> GetIdPhoto(Guid employeeId, [FromQuery] bool download, CancellationToken cancellationToken)
+    {
+        if (await sender.Send(new GetEmployeeIdPhotoQuery(employeeId), cancellationToken) is not { } photo)
+            return NotFound();
+        Response.Headers.XContentTypeOptions = "nosniff";
+        Response.Headers.CacheControl = "private, no-store";
+        return download ? File(photo.Content, photo.ContentType, photo.FileName) : File(photo.Content, photo.ContentType);
+    }
+
+    [HttpDelete("employees/{employeeId:guid}/id-photo")]
+    [Authorize(Policy = Permissions.HrManage)]
+    public Task<EmployeeDto> RemoveIdPhoto(Guid employeeId, CancellationToken cancellationToken) =>
+        sender.Send(new RemoveEmployeeIdPhotoCommand(employeeId), cancellationToken);
+
     // The departments, by name, with how many are in each.
     [HttpGet("departments")]
     public Task<IReadOnlyList<DepartmentDto>> GetDepartments(CancellationToken cancellationToken) => sender.Send(new GetDepartmentsQuery(), cancellationToken);
@@ -72,7 +108,8 @@ public sealed class HrController(ISender sender) : ControllerBase
     public Task<IActionResult> SaveEmployee(Guid employeeId, SaveEmployeeRequest request, CancellationToken cancellationToken) =>
         ChangeAsync(employeeId, request.RequestId, new EmployeeRequest(new EmployeeDetails(
             request.Name, request.JobTitle, request.MonthlySalary, request.ShiftStartsAt, request.DaysOff ?? [], request.HiredOn, request.DeviceUserId,
-            request.EmploymentType ?? EmploymentType.Monthly, request.DailyWage ?? 0, request.DepartmentId, request.JobRoleId)),
+            request.EmploymentType ?? EmploymentType.Monthly, request.DailyWage ?? 0, request.DepartmentId, request.JobRoleId, request.NationalId,
+            request.MobileNumber)),
             request.Reason, cancellationToken);
 
     // Left: employed and paid to their last day.
@@ -386,7 +423,10 @@ public sealed record SaveEmployeeRequest(
     decimal? DailyWage = null,
     Guid? DepartmentId = null,
     // One of their department's roles; the job title alone makes one when the department has none of that name.
-    Guid? JobRoleId = null);
+    Guid? JobRoleId = null,
+    // رقم البطاقة and رقم الموبايل; none when left out.
+    string? NationalId = null,
+    string? MobileNumber = null);
 
 public sealed record DepartmentRequest(string Name);
 
