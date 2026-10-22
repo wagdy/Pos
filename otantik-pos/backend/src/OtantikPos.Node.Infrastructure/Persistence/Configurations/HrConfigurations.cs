@@ -200,8 +200,12 @@ internal sealed class AdvanceAllocationConfiguration : IEntityTypeConfiguration<
 {
     public void Configure(EntityTypeBuilder<AdvanceAllocation> builder)
     {
-        builder.ToTable("AdvanceAllocations", NodeDbContext.HrSchema);
+        // A share of one or the other: a safe entry, or an HR advance paid outside the till.
+        builder.ToTable("AdvanceAllocations", NodeDbContext.HrSchema, t =>
+            t.HasCheckConstraint("CK_AdvanceAllocations_OneSource", "(\"SourceTransactionId\" IS NULL) <> (\"SourceAdvanceId\" IS NULL)"));
         builder.Property(a => a.Amount).HasPrecision(18, 2);
+        builder.Ignore(a => a.SourceId);
+        builder.Ignore(a => a.OutsideTill);
         builder.Property(a => a.Notes).HasMaxLength(AdvanceAllocation.MaxNotesLength);
         builder.Property(a => a.AllocatedBy).HasMaxLength(200);
         builder.Property(a => a.VoidedBy).HasMaxLength(200);
@@ -209,8 +213,27 @@ internal sealed class AdvanceAllocationConfiguration : IEntityTypeConfiguration<
         builder.HasOne<Employee>().WithMany().HasForeignKey(a => a.EmployeeId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne<OtantikPos.Inventory.Domain.Treasury.SafeTransaction>().WithMany().HasForeignKey(a => a.SourceTransactionId)
             .OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<HrAdvance>().WithMany().HasForeignKey(a => a.SourceAdvanceId).OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(a => a.SourceTransactionId);
+        builder.HasIndex(a => a.SourceAdvanceId);
         builder.HasIndex(a => new { a.EmployeeId, a.PayrollMonth });
+    }
+}
+
+internal sealed class HrAdvanceConfiguration : IEntityTypeConfiguration<HrAdvance>
+{
+    public void Configure(EntityTypeBuilder<HrAdvance> builder)
+    {
+        builder.ToTable("HrAdvances", NodeDbContext.HrSchema);
+        builder.Property(a => a.Amount).HasPrecision(18, 2);
+        builder.Property(a => a.Notes).HasMaxLength(HrAdvance.MaxNotesLength);
+        builder.Property(a => a.RecordedBy).HasMaxLength(200);
+        builder.Property(a => a.ApprovedBy).HasMaxLength(200);
+        builder.Property(a => a.VoidedBy).HasMaxLength(200);
+        builder.Ignore(a => a.IsVoided);
+        builder.Ignore(a => a.IsPending);
+        builder.HasOne<Employee>().WithMany().HasForeignKey(a => a.EmployeeId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(a => new { a.EmployeeId, a.PayrollMonth }).HasFilter("\"EmployeeId\" IS NOT NULL");
     }
 }
 

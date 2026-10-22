@@ -129,11 +129,21 @@ public interface IPayrollAdjustmentRepository : IRepository<PayrollAdjustment>
 // Shares of advances handed out with no one named, taken-back ones too.
 public interface IAdvanceAllocationRepository : IRepository<AdvanceAllocation>
 {
-    // The shares of these advances.
-    Task<IReadOnlyList<AdvanceAllocation>> GetForAdvancesAsync(IReadOnlyCollection<Guid> sourceTransactionIds, CancellationToken cancellationToken = default);
+    // The shares of these advances: safe entries or HR advances, by their ids.
+    Task<IReadOnlyList<AdvanceAllocation>> GetForAdvancesAsync(IReadOnlyCollection<Guid> sourceIds, CancellationToken cancellationToken = default);
 
     // The shares deducted in a payroll month: everyone's, or one employee's.
     Task<IReadOnlyList<AdvanceAllocation>> GetForPayrollMonthAsync(DateOnly month, Guid? employeeId = null, CancellationToken cancellationToken = default);
+}
+
+// Advances paid outside the till, recorded in HR only; voided ones too.
+public interface IHrAdvanceRepository : IRepository<HrAdvance>
+{
+    // Those paid to an employee and deducted in a payroll month: everyone's, or one employee's.
+    Task<IReadOnlyList<HrAdvance>> GetForPayrollMonthAsync(DateOnly month, Guid? employeeId = null, CancellationToken cancellationToken = default);
+
+    // Those paid to no one yet, not voided, given out or not.
+    Task<IReadOnlyList<HrAdvance>> GetPendingAsync(CancellationToken cancellationToken = default);
 }
 
 public interface IPayrollSlipRepository : IRepository<PayrollSlip>

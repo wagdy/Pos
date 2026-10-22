@@ -123,6 +123,7 @@ internal sealed class ApproveRequestHandler(
     MaterialUnitWriter units,
     CategoryDeleter categoryDeleter,
     EmployeeWriter employees,
+    HrAdvanceWriter hrAdvances,
     IRawMaterialRepository materials,
     IStockMovementRepository movements,
     IUnitOfWork unitOfWork) : IRequestHandler<ApproveRequestCommand, ApprovalRequestDto>
@@ -161,6 +162,11 @@ internal sealed class ApproveRequestHandler(
             // An employee added, changed, leaving or coming back, as asked.
             case (_, ApprovalModule.Employee):
                 await employees.ApplyAsync(approval.RecordId, ApprovalPayload.Read<EmployeeRequest>(approval), cancellationToken);
+                break;
+
+            // An advance paid outside the till, recorded in HR only.
+            case (ApprovalAction.Create, ApprovalModule.Advance):
+                await hrAdvances.ApplyAsync(approval.RecordId, ApprovalPayload.Read<HrAdvanceInput>(approval), approval.RequestedBy, request.StaffName, cancellationToken);
                 break;
 
             case (ApprovalAction.Create, ApprovalModule.Treasury):

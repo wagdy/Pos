@@ -418,6 +418,77 @@ public class HrApiTests
     }
 
     [Fact]
+    public async Task Advances_paid_outside_the_till_are_hrs_alone_and_come_off_the_pay_all_the_same()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var cashier = await api.CashierAsync(manager);
+        var today = await TodayAsync(manager);
+        var month = new DateOnly(today.Year, today.Month, 1);
+        var hassan = await HireAsync(manager, "Hassan", month.AddMonths(-1));
+        var mona = await HireAsync(manager, "Mona", month.AddMonths(-1));
+        Task<HttpResponseMessage> Record(HttpClient client, Guid id, decimal amount, Guid? employee, string? notes = null) =>
+            client.PostAsJsonAsync("/api/hr/advances", new { advanceId = id, amount, date = Iso(today), employeeId = employee, notes }, Cancel);
+        async Task<JsonElement> Advances() => await Json(await accountant.GetAsync($"/api/hr/advances?month={Iso(month)}", Cancel));
+        async Task<Dictionary<string, JsonElement>> Slips() => (await Json(await accountant.GetAsync($"/api/hr/payroll?month={Iso(month)}", Cancel)))
+            .GetProperty("slips").EnumerateArray().ToDictionary(s => s.GetProperty("employee").GetProperty("name").GetString()!);
+
+        // To Hassan, from the owner's pocket: recorded once, however often it is sent.
+        Assert.Equal(HttpStatusCode.Forbidden, (await Record(cashier, Guid.NewGuid(), 100, hassan)).StatusCode);
+        var toHassan = Guid.NewGuid();
+        var made = await Json(await Record(manager, toHassan, 500, hassan, "Rent"));
+        Assert.Equal(("Hassan", Iso(month), "Boss"), (made.GetProperty("employee").GetString(), made.GetProperty("payrollMonth").GetString(),
+            made.GetProperty("recordedBy").GetString()));
+        await Json(await Record(manager, toHassan, 500, hassan, "Rent"));
+
+        // No cash moved: the safe, the takings and Financials know nothing of it.
+        var cash = await Json(await manager.GetAsync($"/api/financials/daily-cash?from={Iso(today)}&to={Iso(today)}", Cancel));
+        Assert.Equal((0m, 0), (cash.GetProperty("deductions").GetDecimal(), cash.GetProperty("days").GetArrayLength()));
+        Assert.Empty((await Json(await accountant.GetAsync($"/api/financials/advances?from={Iso(month)}&to={Iso(today)}", Cancel))).EnumerateArray());
+
+        // But it comes off Hassan's pay, said to be paid outside the till.
+        var hassansSlip = (await Slips())["Hassan"];
+        Assert.Equal(500m, hassansSlip.GetProperty("figures").GetProperty("advances").GetDecimal());
+        Assert.Equal((true, "Rent"), (hassansSlip.GetProperty("advances")[0].GetProperty("outsideTill").GetBoolean(),
+            hassansSlip.GetProperty("advances")[0].GetProperty("notes").GetString()));
+        var allocated = (await Advances()).GetProperty("allocated").EnumerateArray().Single();
+        Assert.Equal(("Outside", true, JsonValueKind.Null), (allocated.GetProperty("origin").GetString(), allocated.GetProperty("outsideTill").GetBoolean(),
+            allocated.GetProperty("sourceTransactionId").ValueKind));
+
+        // To no one yet: a lump sum, given out as one from the till is.
+        var lump = Guid.NewGuid();
+        await Json(await Record(manager, lump, 900, null, "Eid"));
+        var pending = (await Advances()).GetProperty("pending").EnumerateArray().Single();
+        Assert.Equal((lump, 900m, true, JsonValueKind.Null), (pending.GetProperty("id").GetGuid(), pending.GetProperty("remaining").GetDecimal(),
+            pending.GetProperty("outsideTill").GetBoolean(), pending.GetProperty("fromTakingsOf").ValueKind));
+        var given = await Json(await manager.PostAsJsonAsync($"/api/hr/advances/{lump}/distribute", new { shares = new[] { new { employeeId = mona, amount = 400 } } }, Cancel));
+        Assert.Equal((500m, true), (given.GetProperty("remaining").GetDecimal(), given.GetProperty("outsideTill").GetBoolean()));
+        var monasLine = (await Slips())["Mona"].GetProperty("advances")[0];
+        Assert.Equal((400m, true), (monasLine.GetProperty("amount").GetDecimal(), monasLine.GetProperty("outsideTill").GetBoolean()));
+
+        // An accountant's waits for a manager, as their other HR entries do.
+        var asked = await Record(accountant, Guid.NewGuid(), 200, hassan);
+        Assert.True(asked.StatusCode == HttpStatusCode.Accepted, await asked.Content.ReadAsStringAsync(Cancel));
+        var request = (await Json(asked)).GetProperty("request");
+        Assert.Equal(("Advance", "Advance paid outside the till · Hassan · L.E 200.00"), (request.GetProperty("module").GetString(),
+            request.GetProperty("summary").GetString()));
+        Assert.Equal(500m, (await Slips())["Hassan"].GetProperty("figures").GetProperty("advances").GetDecimal());
+        await Json(await manager.PostAsJsonAsync($"/api/inventory/approval-requests/{request.GetProperty("id").GetGuid()}/approve", new { }, Cancel));
+        Assert.Equal(700m, (await Slips())["Hassan"].GetProperty("figures").GetProperty("advances").GetDecimal());
+
+        // Voided by a manager: a lump sum once its shares are taken back.
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.PostAsync($"/api/hr/advances/{toHassan}/void", null, Cancel)).StatusCode);
+        Assert.Contains("take those shares back first", await Problem(await manager.PostAsync($"/api/hr/advances/{lump}/void", null, Cancel)));
+        await Json(await manager.PostAsync($"/api/hr/advance-shares/{given.GetProperty("shares")[0].GetProperty("id").GetGuid()}/take-back", null, Cancel));
+        await Json(await manager.PostAsync($"/api/hr/advances/{lump}/void", null, Cancel));
+        await Json(await manager.PostAsync($"/api/hr/advances/{toHassan}/void", null, Cancel));
+        Assert.Empty((await Advances()).GetProperty("pending").EnumerateArray());
+        Assert.Equal(200m, (await Slips())["Hassan"].GetProperty("figures").GetProperty("advances").GetDecimal());
+        Assert.Contains("already been voided", await Problem(await manager.PostAsync($"/api/hr/advances/{toHassan}/void", null, Cancel)));
+    }
+
+    [Fact]
     public async Task A_months_pay_is_finalized_with_its_advances_and_paid_from_the_safe()
     {
         await using var api = await TestApi.StartAsync();

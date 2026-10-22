@@ -24,6 +24,7 @@ export const consequences: Record<ApprovalModule, string> = {
   PurchaseCategory:
     'The category goes and what is in it moves, converted as listed: raw materials made expense items have their past invoice lines restated as expenses on their own dates and their stock ledger taken out; expense items made raw materials start with nothing on hand.',
   Employee: 'They leave the payroll: paid to their last day.',
+  Advance: 'It is kept, marked voided: it no longer comes off anyone’s pay.',
 };
 
 // The posted records, which are voided rather than deleted.

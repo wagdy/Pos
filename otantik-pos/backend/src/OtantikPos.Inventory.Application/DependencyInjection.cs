@@ -25,6 +25,7 @@ public static class DependencyInjection
         services.AddScoped<Hr.DeviceIntake>();
         services.AddScoped<Hr.Presence>();
         services.AddScoped<Hr.AttendanceBroadcast>();
+        services.AddScoped<Hr.HrAdvanceWriter>();
         return services;
     }
 }

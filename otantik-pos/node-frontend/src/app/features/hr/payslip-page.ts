@@ -299,7 +299,7 @@ export class FinalizeDialog {
           <h3>Advances <span class="inline-ar">السلفيات</span></h3>
           @for (a of s.advances; track a.id) {
             <div class="line" [class.voided]="!!a.voidedAtUtc">
-              <span>{{ a.date | date: 'd MMM' }}<span class="muted"> · {{ a.fromTakingsOf ? 'from the takings of ' + (a.fromTakingsOf | date: 'd MMM') : 'from the safe' }}</span></span>
+              <span>{{ a.date | date: 'd MMM' }}<span class="muted"> · {{ a.outsideTill ? 'outside the till' : a.fromTakingsOf ? 'from the takings of ' + (a.fromTakingsOf | date: 'd MMM') : 'from the safe' }}</span></span>
               <span class="amount">{{ a.amount | money }}</span>
             </div>
           } @empty {

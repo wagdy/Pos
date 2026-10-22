@@ -24,6 +24,7 @@ public sealed class HrStore
     public AdjustmentStore Adjustments { get; } = new();
     public SlipStore Slips { get; } = new();
     public AllocationStore Allocations { get; } = new();
+    public HrAdvanceStore HrAdvances { get; } = new();
     public AttendanceSettingsStore Settings { get; } = new();
     public AttendanceNotifications Notifications { get; } = new();
     public DeviceLink Link { get; } = new();
@@ -225,8 +226,17 @@ public sealed class DeviceLink : IAttendanceDeviceLink
 public sealed class AllocationStore : ListStore<AdvanceAllocation>, IAdvanceAllocationRepository
 {
     public Task<IReadOnlyList<AdvanceAllocation>> GetForAdvancesAsync(IReadOnlyCollection<Guid> sourceTransactionIds, CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<AdvanceAllocation>>(Items.Where(a => sourceTransactionIds.Contains(a.SourceTransactionId)).ToList());
+        Task.FromResult<IReadOnlyList<AdvanceAllocation>>(Items.Where(a => sourceTransactionIds.Contains(a.SourceId)).ToList());
 
     public Task<IReadOnlyList<AdvanceAllocation>> GetForPayrollMonthAsync(DateOnly month, Guid? employeeId = null, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<AdvanceAllocation>>(Items.Where(a => a.PayrollMonth == month && (employeeId == null || a.EmployeeId == employeeId)).ToList());
+}
+
+public sealed class HrAdvanceStore : ListStore<HrAdvance>, IHrAdvanceRepository
+{
+    public Task<IReadOnlyList<HrAdvance>> GetForPayrollMonthAsync(DateOnly month, Guid? employeeId = null, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<HrAdvance>>(Items.Where(a => a.PayrollMonth == month && (employeeId == null || a.EmployeeId == employeeId)).ToList());
+
+    public Task<IReadOnlyList<HrAdvance>> GetPendingAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<HrAdvance>>(Items.Where(a => a.IsPending && !a.IsVoided).ToList());
 }

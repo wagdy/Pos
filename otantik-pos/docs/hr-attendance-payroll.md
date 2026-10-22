@@ -315,6 +315,7 @@ ClosedXML, as the raw materials and prep items imports use, in `Node.Infrastruct
 | `GET`/`PUT /api/hr/settings` | The grace, and how close two scans are to be one |
 | `GET /api/hr/devices`, `POST …/{id}/approve`, `…/revoke` | The devices, approved by name |
 | `GET /api/hr/advances?month=` | The month's advances, each deducted from whose pay (paid to them, or their share of a lump sum); and the advances handed out with no one named, every one not all given out: how much, given out, left, and the shares |
+| `POST /api/hr/advances`, `POST /api/hr/advances/{id}/void` | An advance paid outside the till, recorded in HR only (`{ advanceId, amount, date, employeeId?, notes }`): a manager's at once, anyone else's a request (module `Advance`); voided by a manager while its pay is not finalized, a lump sum once no share of it stands |
 | `POST /api/hr/advances/{id}/distribute`, `POST /api/hr/advance-shares/{id}/take-back` | A lump sum given out, a share each (`{ shares: [{ employeeId, amount, notes }] }`), in parts and never more than is left; a share taken back while its pay is not finalized: a manager's |
 | `GET /api/hr/payroll?month=` | Every slip as it stands |
 | `POST /api/hr/payroll/calculate?month=` | Saves the drafts |
@@ -330,6 +331,17 @@ ClosedXML, as the raw materials and prep items imports use, in `Node.Infrastruct
   finalized counts in the next month.
 - The daily cash, reconciliation and takings preview count advances and salaries paid out of a
   day's takings. The safe's ledger names the employee.
+
+**Where an advance is paid from:**
+- **From the till:** Financials (the advance voucher), Purchases (its New advance button opens the
+  same dialog), or the daily batch's advance block. A safe entry, out of the safe or a day's
+  takings.
+- **Outside the till:** HR → Advances → New advance, the same dialog without "Paid from". It covers
+  an advance from the owner's own pocket, say. It is an `HrAdvance` (migration `HrAdvances`),
+  recorded in HR only: no cash leaves the safe or the takings, and Financials never sees it.
+- **Either way:** paid to an employee, it comes off their pay (the payslip says "outside the till"
+  for these). Paid to no one yet, it is a lump sum given out a share each. A share
+  (`AdvanceAllocation`) is of a safe entry or of an HR advance, never both.
 
 **Advances handed out with no one named (السلفيات المعلقة):**
 - An advance voucher, or a line of the daily batch, may name no employee. Its cash leaves the safe

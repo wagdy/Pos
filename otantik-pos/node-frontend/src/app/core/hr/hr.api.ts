@@ -285,13 +285,14 @@ export interface AttendanceDevice {
 
 // HR's advances (السلفيات). Allocated: deducted from an employee's pay of payrollMonth, paid to
 // them (Direct) or their share of advances handed out with no one named (Share).
-export type AdvanceOrigin = 'Direct' | 'Share';
+// Outside: paid to them outside the till, recorded in HR only.
+export type AdvanceOrigin = 'Direct' | 'Share' | 'Outside';
 
 export interface AllocatedAdvance {
   id: string;
   origin: AdvanceOrigin;
-  // The safe entry the cash moved with.
-  sourceTransactionId: string;
+  // The safe entry the cash moved with; none outside the till.
+  sourceTransactionId: string | null;
   employeeId: string;
   employee: string;
   amount: number;
@@ -300,6 +301,7 @@ export interface AllocatedAdvance {
   fromTakingsOf: string | null;
   notes: string | null;
   recordedBy: string;
+  outsideTill: boolean;
 }
 
 export interface AdvanceShare {
@@ -326,6 +328,31 @@ export interface PendingAdvance {
   recordedBy: string;
   shares: AdvanceShare[];
   fullyAllocated: boolean;
+  // Paid outside the till: no takings or safe.
+  outsideTill: boolean;
+}
+
+// An advance paid outside the till (the owner's own pocket), recorded in HR only.
+export interface HrAdvance {
+  id: string;
+  amount: number;
+  date: string;
+  employeeId: string | null;
+  employee: string | null;
+  payrollMonth: string | null;
+  notes: string | null;
+  recordedBy: string;
+  approvedBy: string | null;
+  voidedAtUtc: string | null;
+}
+
+export interface HrAdvanceInput {
+  advanceId: string;
+  requestId: string;
+  amount: number;
+  date: string;
+  employeeId: string | null;
+  notes: string | null;
 }
 
 export interface AdvancesReport {
@@ -468,6 +495,8 @@ export interface PayrollCash {
   approvedBy: string | null;
   voidedAtUtc: string | null;
   voidedBy: string | null;
+  // An advance paid outside the till, recorded in HR only (or a share of one).
+  outsideTill?: boolean;
 }
 
 export interface PayrollSlip {
@@ -677,6 +706,15 @@ export class HrApi {
 
   takeBackAdvanceShare(shareId: string): Observable<PendingAdvance> {
     return this.http.post<PendingAdvance>(`/api/hr/advance-shares/${shareId}/take-back`, {});
+  }
+
+  // An advance paid outside the till: a manager's recorded (200), anyone else's asked (202).
+  recordHrAdvance(input: HrAdvanceInput): Observable<HrAdvance | ApprovalResult> {
+    return this.http.post<HrAdvance | ApprovalResult>('/api/hr/advances', input);
+  }
+
+  voidHrAdvance(id: string): Observable<HrAdvance> {
+    return this.http.post<HrAdvance>(`/api/hr/advances/${id}/void`, {});
   }
 
   // Excel: the template to fill in, a filled-in one imported, everyone employed exported, and a

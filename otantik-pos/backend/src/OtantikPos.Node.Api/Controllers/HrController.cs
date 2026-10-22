@@ -303,6 +303,24 @@ public sealed class HrController(ISender sender) : ControllerBase
     public Task<PendingAdvanceDto> DistributeAdvance(Guid advanceId, DistributeAdvanceRequest request, CancellationToken cancellationToken) =>
         sender.Send(new DistributeAdvanceCommand(advanceId, request.Shares ?? [], StaffName), cancellationToken);
 
+    // An advance paid outside the till (from the owner's own pocket, say), recorded in HR only: no
+    // cash leaves the safe or the takings. To an employee, or to no one yet (a lump sum). A
+    // manager's at once (200); anyone else's asked of a manager (202).
+    [HttpPost("advances")]
+    [Authorize(Policy = Permissions.HrManage)]
+    public async Task<IActionResult> RecordHrAdvance(RecordHrAdvanceRequest request, CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new RecordHrAdvanceCommand(
+            request.AdvanceId, request.RequestId ?? Guid.NewGuid(), new HrAdvanceInput(request.Amount, request.Date, request.EmployeeId, request.Notes),
+            StaffClaims.IdOf(User) ?? string.Empty, StaffName, CanApprove), cancellationToken);
+        return result.Outcome == ApprovalOutcome.Requested ? Accepted(new ApprovalResultDto(result.Outcome, result.Request!)) : Ok(result.Advance);
+    }
+
+    [HttpPost("advances/{advanceId:guid}/void")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<HrAdvanceDto> VoidHrAdvance(Guid advanceId, CancellationToken cancellationToken) =>
+        sender.Send(new VoidHrAdvanceCommand(advanceId, StaffName), cancellationToken);
+
     // A share taken back, for its advances to be given out again.
     [HttpPost("advance-shares/{shareId:guid}/take-back")]
     [Authorize(Policy = Permissions.ApprovalDecide)]
@@ -393,6 +411,9 @@ public sealed record SettleRequest(IReadOnlyList<Guid>? PunchIds);
 public sealed record ReadAttendanceRequest(DateOnly? From, DateOnly? To = null);
 
 public sealed record DistributeAdvanceRequest(IReadOnlyList<AdvanceShareRequest>? Shares);
+
+// AdvanceId and RequestId made by the till: a retry finds what was made, or asked.
+public sealed record RecordHrAdvanceRequest(Guid AdvanceId, decimal Amount, DateOnly Date, Guid? EmployeeId = null, string? Notes = null, Guid? RequestId = null);
 
 // The device's IP address; its port, 4370 unless said; its comm key, 0 (none) unless said.
 public sealed record DeviceAddressRequest(string Address, int? Port = null, int? CommKey = null);

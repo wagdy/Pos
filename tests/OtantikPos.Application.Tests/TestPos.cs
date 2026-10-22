@@ -106,6 +106,7 @@ public sealed class TestPos
         services.AddSingleton<OtantikPos.Hr.Domain.IPayrollAdjustmentRepository>(Hr.Adjustments);
         services.AddSingleton<OtantikPos.Hr.Domain.IPayrollSlipRepository>(Hr.Slips);
         services.AddSingleton<OtantikPos.Hr.Domain.IAdvanceAllocationRepository>(Hr.Allocations);
+        services.AddSingleton<OtantikPos.Hr.Domain.IHrAdvanceRepository>(Hr.HrAdvances);
         services.AddSingleton<OtantikPos.Inventory.Application.Hr.IAttendanceSettings>(Hr.Settings);
         services.AddSingleton<OtantikPos.Inventory.Application.Hr.IAttendanceNotifier>(Hr.Notifications);
         services.AddSingleton<OtantikPos.Inventory.Application.Hr.IAttendanceDeviceLink>(Hr.Link);

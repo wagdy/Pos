@@ -78,6 +78,9 @@ export interface SafeVoucherDialogData {
   supplierId?: string;
   // An advance's or a salary's employee, chosen already; a salary's month (its first day).
   employeeId?: string;
+  // An advance paid outside the till (HR's own): no cash out of the safe or a day's takings, so
+  // nothing to say it is paid from. The dialog only asks; HR records it.
+  outsideTill?: boolean;
   payrollMonth?: string;
   amount?: number;
   revenueDate?: string;
@@ -136,7 +139,7 @@ const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
       @if (loading()) {
         <mat-progress-bar mode="indeterminate" />
       }
-      <p class="muted">{{ explanation }}</p>
+      <p class="muted">{{ data.outsideTill ? explanationOutside : explanation }}</p>
       <div class="form">
         @if (data.kind === 'SupplierPayment') {
           <mat-form-field class="wide">
@@ -162,20 +165,24 @@ const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
               [none]="data.kind === 'EmployeeAdvance'" noneLabel="No one yet: give it out on HR → Advances"
               [hint]="data.kind === 'EmployeeAdvance' && !employeeId() ? 'A lump sum handed out as advances: a manager gives it out on HR → Advances' : null" />
           </div>
-          <mat-form-field>
-            <mat-label>Paid from · يُصرف من</mat-label>
-            <mat-select [(ngModel)]="paidFrom" aria-label="Paid from">
-              <mat-option value="Safe">The safe · الخزنة</mat-option>
-              <mat-option value="DayRevenue">A day’s takings · إيراد يوم</mat-option>
-            </mat-select>
-          </mat-form-field>
-          @if (paidFrom === 'DayRevenue') {
-            <mat-form-field>
-              <mat-label>Takings of · إيراد يوم</mat-label>
-              <input matInput type="date" [(ngModel)]="revenueDate" [max]="date" aria-label="Takings of" />
-            </mat-form-field>
+          @if (data.outsideTill) {
+            <p class="wide outside"><strong>Paid outside the till</strong> · من خارج الخزنة: nothing leaves the safe or a day’s takings.</p>
           } @else {
-            <span></span>
+            <mat-form-field>
+              <mat-label>Paid from · يُصرف من</mat-label>
+              <mat-select [(ngModel)]="paidFrom" aria-label="Paid from">
+                <mat-option value="Safe">The safe · الخزنة</mat-option>
+                <mat-option value="DayRevenue">A day’s takings · إيراد يوم</mat-option>
+              </mat-select>
+            </mat-form-field>
+            @if (paidFrom === 'DayRevenue') {
+              <mat-form-field>
+                <mat-label>Takings of · إيراد يوم</mat-label>
+                <input matInput type="date" [(ngModel)]="revenueDate" [max]="date" aria-label="Takings of" />
+              </mat-form-field>
+            } @else {
+              <span></span>
+            }
           }
         }
         @if (data.kind === 'ExpenseVoucher') {
@@ -348,7 +355,9 @@ export class SafeVoucherDialog {
   private readonly ref = inject<MatDialogRef<SafeVoucherDialog, SafeVoucherInput>>(MatDialogRef);
   protected readonly data = inject<SafeVoucherDialogData>(MAT_DIALOG_DATA);
 
-  protected readonly label = safeKindLabels[this.data.kind];
+  protected readonly label = this.data.outsideTill
+    ? { en: 'Advance outside the till', ar: 'سلفة من خارج الخزنة' }
+    : safeKindLabels[this.data.kind];
   protected readonly sources = sourcesFor[this.data.kind] ?? [];
   protected readonly sourceLabels = fundingSourceLabels;
   protected readonly today = this.data.today ?? todayIso();
@@ -387,6 +396,10 @@ export class SafeVoucherDialog {
       'Naming no one makes it a lump sum handed out as advances, given out to employees on HR → Advances.',
     SalaryPayment: 'Cash paid to an employee, from the safe or a day’s takings.',
   }[this.data.kind];
+
+  protected readonly explanationOutside =
+    'An advance paid outside the till: from the owner’s own pocket, say. No cash leaves the safe or a day’s takings, and Financials never sees it. ' +
+    'It comes off the employee’s pay for the month, on the payroll. Naming no one makes it a lump sum, given out a share each on this tab.';
 
   constructor() {
     void this.load();
@@ -453,7 +466,7 @@ export class SafeVoucherDialog {
       if (!this.employeeId() && this.data.kind === 'SalaryPayment') {
         return 'Choose the employee.';
       }
-      if (this.paidFrom === 'DayRevenue' && (!this.revenueDate || this.revenueDate > this.date)) {
+      if (!this.data.outsideTill && this.paidFrom === 'DayRevenue' && (!this.revenueDate || this.revenueDate > this.date)) {
         return `Choose the day whose takings pay it: that day or one before the ${this.data.kind === 'SalaryPayment' ? 'payment' : 'advance'}.`;
       }
     }
@@ -488,7 +501,7 @@ export class SafeVoucherDialog {
       date: this.date,
       source: this.sources.length ? this.source : null,
       revenueDate:
-        this.data.kind === 'RevenueTransfer' || (this.forEmployee && this.paidFrom === 'DayRevenue') ? this.revenueDate : null,
+        this.data.kind === 'RevenueTransfer' || (this.forEmployee && !this.data.outsideTill && this.paidFrom === 'DayRevenue') ? this.revenueDate : null,
       supplierId: this.data.kind === 'SupplierPayment' ? this.supplierId : null,
       expenseItemId: this.data.kind === 'ExpenseVoucher' ? this.expenseItemId : null,
       notes: this.notes.trim() || null,

@@ -16,7 +16,7 @@ function employee(id: string, name: string): Employee {
 
 const lump: PendingAdvance = {
   id: 'lump', date: '2026-10-22', amount: 1_000, allocated: 0, remaining: 1_000, fromTakingsOf: '2026-10-22', notes: 'Kitchen', recordedBy: 'Sara',
-  shares: [], fullyAllocated: false,
+  shares: [], fullyAllocated: false, outsideTill: false,
 };
 
 describe('giving out advances handed out with no one named', () => {

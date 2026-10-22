@@ -1114,7 +1114,10 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.Property<DateOnly>("PayrollMonth")
                         .HasColumnType("date");
 
-                    b.Property<Guid>("SourceTransactionId")
+                    b.Property<Guid?>("SourceAdvanceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("SourceTransactionId")
                         .HasColumnType("uuid");
 
                     b.Property<uint>("Version")
@@ -1132,11 +1135,71 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("SourceAdvanceId");
+
                     b.HasIndex("SourceTransactionId");
 
                     b.HasIndex("EmployeeId", "PayrollMonth");
 
-                    b.ToTable("AdvanceAllocations", "hr");
+                    b.ToTable("AdvanceAllocations", "hr", t =>
+                        {
+                            t.HasCheckConstraint("CK_AdvanceAllocations_OneSource", "(\"SourceTransactionId\" IS NULL) <> (\"SourceAdvanceId\" IS NULL)");
+                        });
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Payroll.HrAdvance", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("ApprovedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("date");
+
+                    b.Property<Guid?>("EmployeeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<DateOnly?>("PayrollMonth")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime>("RecordedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RecordedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.Property<DateTime?>("VoidedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("VoidedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EmployeeId", "PayrollMonth")
+                        .HasFilter("\"EmployeeId\" IS NOT NULL");
+
+                    b.ToTable("HrAdvances", "hr");
                 });
 
             modelBuilder.Entity("OtantikPos.Hr.Domain.Payroll.PayrollAdjustment", b =>
@@ -3001,11 +3064,23 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("OtantikPos.Hr.Domain.Payroll.HrAdvance", null)
+                        .WithMany()
+                        .HasForeignKey("SourceAdvanceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("OtantikPos.Inventory.Domain.Treasury.SafeTransaction", null)
                         .WithMany()
                         .HasForeignKey("SourceTransactionId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Payroll.HrAdvance", b =>
+                {
+                    b.HasOne("OtantikPos.Hr.Domain.Employees.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("EmployeeId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("OtantikPos.Hr.Domain.Payroll.PayrollAdjustment", b =>

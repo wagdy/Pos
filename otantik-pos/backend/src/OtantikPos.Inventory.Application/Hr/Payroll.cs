@@ -26,9 +26,10 @@ public sealed record PayrollAdjustmentDto(
 }
 
 // An advance or salary payment counted in the month. A void is shown on what it voided, not apart.
+// OutsideTill: an advance paid outside the till, recorded in HR only (or a share of one).
 public sealed record PayrollCashDto(
     Guid Id, SafeTransactionKind Kind, DateOnly Date, decimal Amount, DateOnly? FromTakingsOf, string? Notes, string RecordedBy, string? ApprovedBy,
-    DateTime? VoidedAtUtc, string? VoidedBy);
+    DateTime? VoidedAtUtc, string? VoidedBy, bool OutsideTill = false);
 
 public sealed record PayrollSlipDto(
     EmployeeDto Employee,
@@ -52,10 +53,11 @@ public sealed record PayrollTotals(
 
 public sealed record PayrollMonthDto(DateOnly Month, PayrollTotals Totals, IReadOnlyList<PayrollSlipDto> Slips);
 
-// Shares: their shares of advances handed out with no one named, deducted as their own advances are.
+// Shares: their shares of advances handed out with no one named; Outside: advances paid to them
+// outside the till, recorded in HR only; both deducted as their own advances from the till are.
 public sealed record WorkedOut(
     Employee Employee, PayrollFigures Figures, PayrollSlip? Slip, IReadOnlyList<PayrollAdjustment> Adjustments, IReadOnlyList<SafeTransaction> Cash,
-    EmployeeSheet Sheet, IReadOnlyList<AdvanceAllocation> Shares);
+    EmployeeSheet Sheet, IReadOnlyList<AdvanceAllocation> Shares, IReadOnlyList<HrAdvance> Outside);
 
 internal sealed class PayrollWorker(
     IEmployeeRepository employees,
@@ -63,7 +65,8 @@ internal sealed class PayrollWorker(
     IPayrollAdjustmentRepository adjustments,
     IPayrollSlipRepository slips,
     ISafeTransactionRepository safe,
-    IAdvanceAllocationRepository allocations)
+    IAdvanceAllocationRepository allocations,
+    IHrAdvanceRepository hrAdvances)
 {
     // Everyone employed in the month, or one employee, as their pay stands now: a finalized slip's
     // figures as they were finalized, a draft's worked out afresh.
@@ -82,6 +85,7 @@ internal sealed class PayrollWorker(
         var monthAdjustments = await adjustments.GetForMonthAsync(month, cancellationToken);
         var cash = await safe.GetForPayrollMonthAsync(month, employeeId, cancellationToken);
         var shares = (await allocations.GetForPayrollMonthAsync(month, employeeId, cancellationToken)).Where(a => !a.IsVoided).ToList();
+        var outside = (await hrAdvances.GetForPayrollMonthAsync(month, employeeId, cancellationToken)).Where(a => !a.IsVoided).ToList();
         var saved = (await slips.GetForMonthAsync(month, cancellationToken)).ToDictionary(s => s.EmployeeId);
         var before = (await slips.GetForMonthAsync(month.AddMonths(-1), cancellationToken)).ToDictionary(s => s.EmployeeId);
 
@@ -91,14 +95,16 @@ internal sealed class PayrollWorker(
             var theirs = monthAdjustments.Where(a => a.EmployeeId == e.Id).ToList();
             var theirCash = cash.Where(t => t.EmployeeId == e.Id).ToList();
             var theirShares = shares.Where(a => a.EmployeeId == e.Id).ToList();
+            var theirOutside = outside.Where(a => a.EmployeeId == e.Id).ToList();
             var slip = saved.GetValueOrDefault(e.Id);
             var figures = slip is { IsFinalized: true }
                 ? slip.Figures
                 : PayrollCalculator.Calculate(
                     e, month, sheet.Days.Select(d => d.Evaluation), theirs,
-                    Math.Max(0, -theirCash.Where(t => t.Kind == SafeTransactionKind.EmployeeAdvance).Sum(t => t.Amount)) + theirShares.Sum(a => a.Amount),
+                    Math.Max(0, -theirCash.Where(t => t.Kind == SafeTransactionKind.EmployeeAdvance).Sum(t => t.Amount)) + theirShares.Sum(a => a.Amount)
+                        + theirOutside.Sum(a => a.Amount),
                     before.GetValueOrDefault(e.Id) is { IsFinalized: true } previous ? previous.CarriedForward : 0);
-            return new WorkedOut(e, figures, slip, theirs, theirCash, sheet, theirShares);
+            return new WorkedOut(e, figures, slip, theirs, theirCash, sheet, theirShares, theirOutside);
         }).ToList();
     }
 
@@ -130,7 +136,9 @@ internal sealed class PayrollWorker(
                 .Concat(w.Shares.Select(a => new PayrollCashDto(
                     a.Id, SafeTransactionKind.EmployeeAdvance, a.Date, a.Amount, null,
                     $"Share of the advances handed out on {a.Date.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture)}" +
-                    (a.Notes is { } notes ? $": {notes}" : ""), a.AllocatedBy, null, null, null)))
+                    (a.Notes is { } notes ? $": {notes}" : ""), a.AllocatedBy, null, null, null, a.OutsideTill)))
+                .Concat(w.Outside.Select(a => new PayrollCashDto(
+                    a.Id, SafeTransactionKind.EmployeeAdvance, a.Date, a.Amount, null, a.Notes, a.RecordedBy, a.ApprovedBy, null, null, true)))
                 .OrderBy(c => c.Date).ToList(),
             entries.Where(t => t.Kind == SafeTransactionKind.SalaryPayment).Select(Cash).ToList());
     }

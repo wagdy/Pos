@@ -89,6 +89,20 @@ describe('entering a safe entry', () => {
     expect(close.mock.lastCall![0]).toMatchObject({ employeeId: 'hassan', revenueDate: '2026-10-19', supplierId: null, expenseItemId: null });
   });
 
+  it('asks for an advance paid outside the till, for HR: no safe or takings to say it is paid from', async () => {
+    const { el, page } = await dialog({ kind: 'EmployeeAdvance', canApprove: true, today: '2026-10-20', outsideTill: true });
+
+    expect(text(el.querySelector('h2')!)).toBe('Advance outside the till سلفة من خارج الخزنة');
+    expect(text(el)).toContain('No cash leaves the safe or a day’s takings, and Financials never sees it.');
+    expect(el.querySelector('[aria-label="Paid from"]')).toBeNull();
+    page['amount'] = 400;
+    page['paidFrom'] = 'DayRevenue';
+    page['revenueDate'] = '2026-10-25';
+    expect(page['problem']()).toBeNull();
+    page['done']();
+    expect(close.mock.lastCall![0]).toMatchObject({ kind: 'EmployeeAdvance', amount: 400, employeeId: null, revenueDate: null, date: '2026-10-20' });
+  });
+
   it('pays a finalized month’s salary to the employee it is for, left or not', async () => {
     const { el, page } = await dialog({ kind: 'SalaryPayment', canApprove: true, today: '2026-10-20', employeeId: 'old', payrollMonth: '2026-09-01', amount: 5_526.33 });
 

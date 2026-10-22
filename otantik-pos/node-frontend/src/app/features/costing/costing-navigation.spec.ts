@@ -4,6 +4,8 @@ import { routes } from '../../app.routes';
 import { Approvals } from './approvals';
 import { CostingPage } from './costing-page';
 import { CostingReportsShell } from './costing-reports-shell';
+import { AuthService } from '../../core/auth/auth.service';
+import { Treasury } from './financials';
 import { PurchasesShell } from './purchases-shell';
 
 // The route of that path, anywhere under these.
@@ -89,12 +91,37 @@ describe('the costing navigation', () => {
   });
 
   it('keeps Purchases to buying: no expense items or spending there, and the categories called simply Categories', async () => {
-    TestBed.configureTestingModule({ providers: [provideRouter([])] });
+    TestBed.configureTestingModule({
+      providers: [provideRouter([]), { provide: AuthService, useValue: { can: () => true } }, { provide: Treasury, useValue: { enter: vi.fn() } }],
+    });
     const fixture = TestBed.createComponent(PurchasesShell);
     await fixture.whenStable();
     const tabs = (fixture.componentInstance as unknown as Record<string, any>)['tabs'] as { path: string; en: string; ar: string }[];
 
     expect(tabs.map((t) => t.path)).toEqual(['new', 'batch', 'invoices', 'suppliers', 'categories']);
     expect(tabs.find((t) => t.path === 'categories')).toMatchObject({ en: 'Categories', ar: 'الأقسام' });
+  });
+
+  it('pays an employee advance from Purchases in the dialog Financials does, for whoever manages HR', async () => {
+    const enter = vi.fn().mockResolvedValue(true);
+    const can = vi.fn(() => true);
+    TestBed.configureTestingModule({
+      providers: [provideRouter([]), { provide: AuthService, useValue: { can } }, { provide: Treasury, useValue: { enter } }],
+    });
+    const fixture = TestBed.createComponent(PurchasesShell);
+    fixture.detectChanges();
+    const button = () => [...(fixture.nativeElement as HTMLElement).querySelectorAll('nav button')].find((b) => b.textContent!.includes('New advance'));
+
+    (button() as HTMLButtonElement).click();
+    expect(enter).toHaveBeenCalledWith('EmployeeAdvance');
+    TestBed.resetTestingModule();
+
+    can.mockReturnValue(false);
+    TestBed.configureTestingModule({
+      providers: [provideRouter([]), { provide: AuthService, useValue: { can } }, { provide: Treasury, useValue: { enter } }],
+    });
+    const viewer = TestBed.createComponent(PurchasesShell);
+    viewer.detectChanges();
+    expect([...(viewer.nativeElement as HTMLElement).querySelectorAll('nav button')].length).toBe(0);
   });
 });

@@ -689,7 +689,8 @@ export type ApprovalModule =
   | 'ProductionOrder'
   | 'Treasury'
   | 'PurchaseCategory'
-  | 'Employee';
+  | 'Employee'
+  | 'Advance';
 export type ApprovalAction = 'Create' | 'Update' | 'Delete';
 export type ApprovalStatus = 'Pending' | 'Approved' | 'Rejected';
 export type ApprovalOutcome = 'Requested' | 'Applied';
@@ -705,6 +706,7 @@ export const moduleLabels: Record<ApprovalModule, { en: string; ar: string }> = 
   Treasury: { en: 'Safe', ar: 'الخزنة' },
   PurchaseCategory: { en: 'Purchase category', ar: 'أقسام المشتريات' },
   Employee: { en: 'Employee', ar: 'الموظفين' },
+  Advance: { en: 'Advance', ar: 'السلفيات' },
 };
 
 export const actionLabels: Record<ApprovalAction, { en: string; ar: string }> = {

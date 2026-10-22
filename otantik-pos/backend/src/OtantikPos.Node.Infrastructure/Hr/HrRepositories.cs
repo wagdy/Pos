@@ -224,14 +224,34 @@ internal sealed class AdvanceAllocationRepository(NodeDbContext db) : IAdvanceAl
     public void Add(AdvanceAllocation aggregate) => db.AdvanceAllocations.Add(aggregate);
 
     public async Task<IReadOnlyList<AdvanceAllocation>> GetForAdvancesAsync(
-        IReadOnlyCollection<Guid> sourceTransactionIds, CancellationToken cancellationToken = default) =>
-        await db.AdvanceAllocations.Where(a => sourceTransactionIds.Contains(a.SourceTransactionId))
+        IReadOnlyCollection<Guid> sourceIds, CancellationToken cancellationToken = default) =>
+        await db.AdvanceAllocations
+            .Where(a => (a.SourceTransactionId != null && sourceIds.Contains(a.SourceTransactionId.Value))
+                || (a.SourceAdvanceId != null && sourceIds.Contains(a.SourceAdvanceId.Value)))
             .OrderBy(a => a.AllocatedAtUtc).ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyList<AdvanceAllocation>> GetForPayrollMonthAsync(
         DateOnly month, Guid? employeeId = null, CancellationToken cancellationToken = default) =>
         await db.AdvanceAllocations.AsNoTracking().Where(a => a.PayrollMonth == month && (employeeId == null || a.EmployeeId == employeeId))
             .OrderBy(a => a.Date).ThenBy(a => a.AllocatedAtUtc).ToListAsync(cancellationToken);
+}
+
+// Tracked: one is voided in place.
+internal sealed class HrAdvanceRepository(NodeDbContext db) : IHrAdvanceRepository
+{
+    public Task<HrAdvance?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.HrAdvances.SingleOrDefaultAsync(a => a.Id == id, cancellationToken);
+
+    public void Add(HrAdvance aggregate) => db.HrAdvances.Add(aggregate);
+
+    public async Task<IReadOnlyList<HrAdvance>> GetForPayrollMonthAsync(
+        DateOnly month, Guid? employeeId = null, CancellationToken cancellationToken = default) =>
+        await db.HrAdvances.AsNoTracking().Where(a => a.PayrollMonth == month && (employeeId == null || a.EmployeeId == employeeId))
+            .OrderBy(a => a.Date).ThenBy(a => a.RecordedAtUtc).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<HrAdvance>> GetPendingAsync(CancellationToken cancellationToken = default) =>
+        await db.HrAdvances.AsNoTracking().Where(a => a.EmployeeId == null && a.VoidedAtUtc == null)
+            .OrderByDescending(a => a.Date).ThenByDescending(a => a.RecordedAtUtc).ToListAsync(cancellationToken);
 }
 
 // Tracked: a draft is worked out again in place.
