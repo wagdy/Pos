@@ -154,8 +154,10 @@ public sealed record SupplierPaymentRow(
 
 // An employee's advance (سلفة): when and from where it was paid, and the payroll month whose slip
 // deducts it.
+// No employee and no payroll month: advances handed out with no one named, given out on HR →
+// Advances.
 public sealed record AdvanceRow(
-    Guid Id, DateOnly Date, Guid EmployeeId, string Employee, decimal Amount, DateOnly PayrollMonth, DateOnly? FromTakingsOf, string? Notes,
+    Guid Id, DateOnly Date, Guid? EmployeeId, string Employee, decimal Amount, DateOnly? PayrollMonth, DateOnly? FromTakingsOf, string? Notes,
     string RecordedBy, string? ApprovedBy, DateTime? VoidedAtUtc, string? VoidedBy);
 
 // Tax and service (إعدادات الضريبة والخدمة): the till's tax rate, as the delivery system set it (null
@@ -352,7 +354,9 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
             if (t.Kind is SafeTransactionKind.EmployeeAdvance or SafeTransactionKind.SalaryPayment)
                 return new DailyCashLine(
                     t.Id, t.Kind, t.BusinessDate,
-                    $"{(t.Kind == SafeTransactionKind.EmployeeAdvance ? "Advance to" : "Salary of")} {names.Employees.GetValueOrDefault(t.EmployeeId!.Value) ?? "a removed employee"}",
+                    t.EmployeeId is { } who
+                        ? $"{(t.Kind == SafeTransactionKind.EmployeeAdvance ? "Advance to" : "Salary of")} {names.Employees.GetValueOrDefault(who) ?? "a removed employee"}"
+                        : "Advances, not given out yet",
                     Money(-t.Amount), null, t.Notes is { } said ? [said] : [], t.RecordedBy, t.ApprovedBy);
             // An old debt paid: the supplier, and the notes (a receipt number) as what it was for.
             if (t.Kind == SafeTransactionKind.SupplierPayment)
@@ -605,8 +609,9 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
         var names = await db.Employees.AsNoTracking().ToDictionaryAsync(e => e.Id, e => e.Name, cancellationToken);
         return advances
             .Select(t => new AdvanceRow(
-                t.Id, t.BusinessDate, t.EmployeeId!.Value, names.GetValueOrDefault(t.EmployeeId.Value) ?? "A removed employee", Money(-t.Amount),
-                t.PayrollMonth!.Value, t.RevenueDate, t.Notes, t.RecordedBy, t.ApprovedBy, t.VoidedAtUtc, t.VoidedBy))
+                t.Id, t.BusinessDate, t.EmployeeId,
+                t.EmployeeId is { } id ? names.GetValueOrDefault(id) ?? "A removed employee" : "Not given out yet", Money(-t.Amount),
+                t.PayrollMonth, t.RevenueDate, t.Notes, t.RecordedBy, t.ApprovedBy, t.VoidedAtUtc, t.VoidedBy))
             .ToList();
     }
 
@@ -707,6 +712,7 @@ public sealed class TreasuryService(NodeDbContext db, RestaurantClock clock, Sal
             SafeTransactionKind.ExpenseVoucher => t.ExpenseItemId is { } e ? names.Expenses.GetValueOrDefault(e) ?? "A removed expense" : "An expense",
             SafeTransactionKind.SupplierPayment => $"Payment to {Supplier()}" +
                 (t.RevenueDate is { } paidFrom ? $" · from the takings of {paidFrom.ToString("d MMM", Invariant)}" : ""),
+            SafeTransactionKind.EmployeeAdvance when t.EmployeeId is null => "Advances, not given out yet" + Takings(),
             SafeTransactionKind.EmployeeAdvance => $"Advance to {Employee()}" + Takings(),
             SafeTransactionKind.SalaryPayment => $"Salary of {Employee()}" + (t.PayrollMonth is { } month ? $" · {month.ToString("MMMM yyyy", Invariant)}" : "") + Takings(),
             _ => (t.PurchaseInvoiceId is { } i && names.Invoices.GetValueOrDefault(i) is { } number ? $"Invoice {number}" : "Invoice") +

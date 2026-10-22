@@ -126,6 +126,16 @@ public interface IPayrollAdjustmentRepository : IRepository<PayrollAdjustment>
     Task<IReadOnlyList<PayrollAdjustment>> GetForMonthAsync(DateOnly month, CancellationToken cancellationToken = default);
 }
 
+// Shares of advances handed out with no one named, taken-back ones too.
+public interface IAdvanceAllocationRepository : IRepository<AdvanceAllocation>
+{
+    // The shares of these advances.
+    Task<IReadOnlyList<AdvanceAllocation>> GetForAdvancesAsync(IReadOnlyCollection<Guid> sourceTransactionIds, CancellationToken cancellationToken = default);
+
+    // The shares deducted in a payroll month: everyone's, or one employee's.
+    Task<IReadOnlyList<AdvanceAllocation>> GetForPayrollMonthAsync(DateOnly month, Guid? employeeId = null, CancellationToken cancellationToken = default);
+}
+
 public interface IPayrollSlipRepository : IRepository<PayrollSlip>
 {
     Task<PayrollSlip?> GetAsync(Guid employeeId, DateOnly month, CancellationToken cancellationToken = default);

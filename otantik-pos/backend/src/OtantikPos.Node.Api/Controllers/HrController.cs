@@ -289,6 +289,26 @@ public sealed class HrController(ISender sender) : ControllerBase
     public Task<AttendanceDeviceDto> RevokeDevice(Guid deviceId, CancellationToken cancellationToken) =>
         sender.Send(new ApproveAttendanceDeviceCommand(deviceId, null, StaffName), cancellationToken);
 
+    // ---- Advances ----
+
+    // A payroll month's advances, each deducted from whose pay; and the advances handed out with
+    // no one named (السلفيات المعلقة), every one not all given out.
+    [HttpGet("advances")]
+    public Task<AdvancesDto> GetAdvances([FromQuery] DateOnly month, CancellationToken cancellationToken) =>
+        sender.Send(new GetAdvancesQuery(month), cancellationToken);
+
+    // Advances handed out with no one named, given out: a share each, in part or the rest of them.
+    [HttpPost("advances/{advanceId:guid}/distribute")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<PendingAdvanceDto> DistributeAdvance(Guid advanceId, DistributeAdvanceRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new DistributeAdvanceCommand(advanceId, request.Shares ?? [], StaffName), cancellationToken);
+
+    // A share taken back, for its advances to be given out again.
+    [HttpPost("advance-shares/{shareId:guid}/take-back")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<PendingAdvanceDto> TakeBackAdvanceShare(Guid shareId, CancellationToken cancellationToken) =>
+        sender.Send(new TakeBackAdvanceShareCommand(shareId, StaffName), cancellationToken);
+
     // ---- Payroll ----
 
     // Each slip as it stands: a draft worked out now, a finalized one as it was finalized.
@@ -371,6 +391,8 @@ public sealed record HolidayRequest(string Name, DateOnly FirstDay, DateOnly Las
 public sealed record SettleRequest(IReadOnlyList<Guid>? PunchIds);
 
 public sealed record ReadAttendanceRequest(DateOnly? From, DateOnly? To = null);
+
+public sealed record DistributeAdvanceRequest(IReadOnlyList<AdvanceShareRequest>? Shares);
 
 // The device's IP address; its port, 4370 unless said; its comm key, 0 (none) unless said.
 public sealed record DeviceAddressRequest(string Address, int? Port = null, int? CommKey = null);

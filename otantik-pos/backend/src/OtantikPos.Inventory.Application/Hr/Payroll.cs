@@ -52,16 +52,18 @@ public sealed record PayrollTotals(
 
 public sealed record PayrollMonthDto(DateOnly Month, PayrollTotals Totals, IReadOnlyList<PayrollSlipDto> Slips);
 
+// Shares: their shares of advances handed out with no one named, deducted as their own advances are.
 public sealed record WorkedOut(
     Employee Employee, PayrollFigures Figures, PayrollSlip? Slip, IReadOnlyList<PayrollAdjustment> Adjustments, IReadOnlyList<SafeTransaction> Cash,
-    EmployeeSheet Sheet);
+    EmployeeSheet Sheet, IReadOnlyList<AdvanceAllocation> Shares);
 
 internal sealed class PayrollWorker(
     IEmployeeRepository employees,
     Timesheets timesheets,
     IPayrollAdjustmentRepository adjustments,
     IPayrollSlipRepository slips,
-    ISafeTransactionRepository safe)
+    ISafeTransactionRepository safe,
+    IAdvanceAllocationRepository allocations)
 {
     // Everyone employed in the month, or one employee, as their pay stands now: a finalized slip's
     // figures as they were finalized, a draft's worked out afresh.
@@ -79,6 +81,7 @@ internal sealed class PayrollWorker(
         var (_, sheets) = await timesheets.ReadAsync(people, month, last, cancellationToken);
         var monthAdjustments = await adjustments.GetForMonthAsync(month, cancellationToken);
         var cash = await safe.GetForPayrollMonthAsync(month, employeeId, cancellationToken);
+        var shares = (await allocations.GetForPayrollMonthAsync(month, employeeId, cancellationToken)).Where(a => !a.IsVoided).ToList();
         var saved = (await slips.GetForMonthAsync(month, cancellationToken)).ToDictionary(s => s.EmployeeId);
         var before = (await slips.GetForMonthAsync(month.AddMonths(-1), cancellationToken)).ToDictionary(s => s.EmployeeId);
 
@@ -87,14 +90,15 @@ internal sealed class PayrollWorker(
             var e = sheet.Employee;
             var theirs = monthAdjustments.Where(a => a.EmployeeId == e.Id).ToList();
             var theirCash = cash.Where(t => t.EmployeeId == e.Id).ToList();
+            var theirShares = shares.Where(a => a.EmployeeId == e.Id).ToList();
             var slip = saved.GetValueOrDefault(e.Id);
             var figures = slip is { IsFinalized: true }
                 ? slip.Figures
                 : PayrollCalculator.Calculate(
                     e, month, sheet.Days.Select(d => d.Evaluation), theirs,
-                    Math.Max(0, -theirCash.Where(t => t.Kind == SafeTransactionKind.EmployeeAdvance).Sum(t => t.Amount)),
+                    Math.Max(0, -theirCash.Where(t => t.Kind == SafeTransactionKind.EmployeeAdvance).Sum(t => t.Amount)) + theirShares.Sum(a => a.Amount),
                     before.GetValueOrDefault(e.Id) is { IsFinalized: true } previous ? previous.CarriedForward : 0);
-            return new WorkedOut(e, figures, slip, theirs, theirCash, sheet);
+            return new WorkedOut(e, figures, slip, theirs, theirCash, sheet, theirShares);
         }).ToList();
     }
 
@@ -122,7 +126,12 @@ internal sealed class PayrollWorker(
             EmployeeDto.From(w.Employee), PayrollMonth.Of(w.Sheet.Days[0].Evaluation.Day), w.Slip?.Status, w.Figures, paid,
             w.Slip is { IsFinalized: true } ? Math.Max(0, w.Figures.NetPayable - paid) : 0, w.Slip?.CalculatedAtUtc, w.Slip?.FinalizedAtUtc,
             w.Slip?.FinalizedBy, w.Adjustments.OrderBy(a => a.RecordedAtUtc).Select(PayrollAdjustmentDto.From).ToList(),
-            entries.Where(t => t.Kind == SafeTransactionKind.EmployeeAdvance).Select(Cash).ToList(),
+            entries.Where(t => t.Kind == SafeTransactionKind.EmployeeAdvance).Select(Cash)
+                .Concat(w.Shares.Select(a => new PayrollCashDto(
+                    a.Id, SafeTransactionKind.EmployeeAdvance, a.Date, a.Amount, null,
+                    $"Share of the advances handed out on {a.Date.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture)}" +
+                    (a.Notes is { } notes ? $": {notes}" : ""), a.AllocatedBy, null, null, null)))
+                .OrderBy(c => c.Date).ToList(),
             entries.Where(t => t.Kind == SafeTransactionKind.SalaryPayment).Select(Cash).ToList());
     }
 }

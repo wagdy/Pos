@@ -104,6 +104,7 @@ public static class DependencyInjection
         services.AddSingleton<Inventory.Application.Hr.IAttendanceDeviceLink, Hr.ZkTeco.ZkDeviceLink>();
         services.AddScoped<OtantikPos.Hr.Domain.IDailyRecordRepository, Hr.DailyRecordRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IPayrollAdjustmentRepository, Hr.PayrollAdjustmentRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IAdvanceAllocationRepository, Hr.AdvanceAllocationRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IPayrollSlipRepository, Hr.PayrollSlipRepository>();
         services.AddScoped<OtantikPos.Inventory.Application.Hr.IAttendanceSettings, Hr.AttendanceSettingsStore>();
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(RetryOnConflictBehavior<,>));

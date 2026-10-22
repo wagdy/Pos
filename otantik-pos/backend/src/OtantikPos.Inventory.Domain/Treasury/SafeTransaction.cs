@@ -145,6 +145,9 @@ public sealed class SafeTransaction : AggregateRoot
     public string? VoidedBy { get; private set; }
     public bool IsVoided => VoidedAtUtc is not null;
 
+    // Advances handed out with no one named yet, for a manager to give out.
+    public bool IsPendingAdvance => Kind == SafeTransactionKind.EmployeeAdvance && EmployeeId is null;
+
     public static SafeTransaction OpeningBalance(
         Guid id, decimal amount, DateOnly date, FundingSource source, string? notes, string recordedBy, string? approvedBy = null)
     {
@@ -265,6 +268,23 @@ public sealed class SafeTransaction : AggregateRoot
         };
     }
 
+    // Advances handed out with no one named yet (السلفيات المعلقة): a lump sum out of the safe or a
+    // day's takings, given out to employees later, a share each (HR's AdvanceAllocation). Deducted
+    // from no one's pay until then.
+    public static SafeTransaction PendingAdvance(
+        Guid id, decimal amount, DateOnly date, string? notes, string recordedBy, string? approvedBy = null, DateOnly? revenueDate = null,
+        bool takingsInSafe = false)
+    {
+        if (revenueDate > date)
+            throw new DomainException("An advance is paid from the takings of its day or a day before it.");
+        return new SafeTransaction(
+            id, SafeTransactionKind.EmployeeAdvance, revenueDate is null || takingsInSafe ? CashFund.Safe : CashFund.DayRevenue, -Positive(amount),
+            date, notes, recordedBy, approvedBy)
+        {
+            RevenueDate = revenueDate,
+        };
+    }
+
     // A month's pay, on or after the month starts.
     public static SafeTransaction SalaryPayment(
         Guid id, decimal amount, DateOnly date, Guid employeeId, DateOnly payrollMonth, string? notes, string recordedBy,
@@ -346,4 +366,7 @@ public interface ISafeTransactionRepository : IRepository<SafeTransaction>
     // An employee's advances and salary payments counted in a payroll month, voids and their
     // reversals too: everyone's, or one employee's.
     Task<IReadOnlyList<SafeTransaction>> GetForPayrollMonthAsync(DateOnly month, Guid? employeeId = null, CancellationToken cancellationToken = default);
+
+    // Advances handed out with no one named, not voided: every one, given out or not.
+    Task<IReadOnlyList<SafeTransaction>> GetPendingAdvancesAsync(CancellationToken cancellationToken = default);
 }

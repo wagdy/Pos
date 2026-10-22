@@ -314,6 +314,8 @@ ClosedXML, as the raw materials and prep items imports use, in `Node.Infrastruct
 | `PUT /api/hr/holidays/{id}`, `DELETE …/{id}` | A public holiday added or changed, or taken off: a manager's |
 | `GET`/`PUT /api/hr/settings` | The grace, and how close two scans are to be one |
 | `GET /api/hr/devices`, `POST …/{id}/approve`, `…/revoke` | The devices, approved by name |
+| `GET /api/hr/advances?month=` | The month's advances, each deducted from whose pay (paid to them, or their share of a lump sum); and the advances handed out with no one named, every one not all given out: how much, given out, left, and the shares |
+| `POST /api/hr/advances/{id}/distribute`, `POST /api/hr/advance-shares/{id}/take-back` | A lump sum given out, a share each (`{ shares: [{ employeeId, amount, notes }] }`), in parts and never more than is left; a share taken back while its pay is not finalized: a manager's |
 | `GET /api/hr/payroll?month=` | Every slip as it stands |
 | `POST /api/hr/payroll/calculate?month=` | Saves the drafts |
 | `POST /api/hr/payroll/{employeeId}/finalize?month=` | Finalizes one slip |
@@ -328,6 +330,20 @@ ClosedXML, as the raw materials and prep items imports use, in `Node.Infrastruct
   finalized counts in the next month.
 - The daily cash, reconciliation and takings preview count advances and salaries paid out of a
   day's takings. The safe's ledger names the employee.
+
+**Advances handed out with no one named (السلفيات المعلقة):**
+- An advance voucher, or a line of the daily batch, may name no employee. Its cash leaves the safe
+  or the takings at once, as any advance's does.
+- It waits on HR's Advances (`GET /api/hr/advances`). A manager gives it out to employees, a share
+  each (`AdvanceAllocation`, migration `AdvanceAllocations`): in parts if need be, and never more
+  than is left. It is fully allocated once the shares add up to it.
+- Each share is deducted from its employee's pay as their own advance would be: from the month the
+  money was handed out, or the first after it whose pay is not finalized for them. It shows on
+  their payslip as a share of that day's advances.
+- A share is taken back while that pay is not finalized. The lump sum is voided only once no share
+  of it stands.
+- Advances paid to an employee directly (from the daily batch or a Financials voucher) work as
+  before. They are listed beside the shares as allocated.
 
 **KPIs:** a finalized month's slips count as its wages (`WagesCost`), on top of what is
 entered. The old "سلفيات" expense item is archived once advances are entered as advances; what

@@ -36,12 +36,12 @@ public sealed record BatchInvoice(Guid InvoiceId, Guid? SupplierId, string? Supp
 
 public sealed record BatchPayment(Guid TransactionId, Guid SupplierId, decimal Amount, string? Notes = null);
 
-public sealed record BatchAdvance(Guid TransactionId, Guid EmployeeId, decimal Amount, string? Notes = null);
+public sealed record BatchAdvance(Guid TransactionId, Guid? EmployeeId, decimal Amount, string? Notes = null);
 
 // A payment the batch made (Applied), or asked of a manager (Requested): no cash moves until then.
 public sealed record BatchPaymentDto(Guid TransactionId, Guid SupplierId, string Supplier, decimal Amount, string? Notes, ApprovalOutcome Outcome);
 
-public sealed record BatchAdvanceDto(Guid TransactionId, Guid EmployeeId, string Employee, decimal Amount, string? Notes, ApprovalOutcome Outcome);
+public sealed record BatchAdvanceDto(Guid TransactionId, Guid? EmployeeId, string Employee, decimal Amount, string? Notes, ApprovalOutcome Outcome);
 
 public sealed record PurchaseBatchResult(IReadOnlyList<PurchaseInvoiceDto> Invoices, IReadOnlyList<BatchPaymentDto> Payments, IReadOnlyList<BatchAdvanceDto> Advances);
 
@@ -72,6 +72,9 @@ internal sealed class PostPurchaseBatchHandler(
     IUnitOfWork unitOfWork) : IRequestHandler<PostPurchaseBatchCommand, PurchaseBatchResult>
 {
     public const int MaxInvoices = 50;
+
+    // What an advance handed out with no one named is called in the batch's answer.
+    private const string PendingAdvances = "Advances, not given out yet";
 
     public async Task<PurchaseBatchResult> Handle(PostPurchaseBatchCommand request, CancellationToken cancellationToken)
     {
@@ -188,7 +191,8 @@ internal sealed class PostPurchaseBatchHandler(
         for (var i = 0; i < advances.Count; i++)
         {
             var entry = advances[i];
-            var name = (await employees.GetByIdAsync(entry.EmployeeId, cancellationToken))?.Name;
+            // No one named: advances handed out as a lump sum, given out on HR → Advances.
+            var name = entry.EmployeeId is { } advancedTo ? (await employees.GetByIdAsync(advancedTo, cancellationToken))?.Name : PendingAdvances;
             try
             {
                 // Sent again after an answer was lost: paid, or asked, already.

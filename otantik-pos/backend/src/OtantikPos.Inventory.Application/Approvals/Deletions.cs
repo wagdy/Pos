@@ -38,7 +38,8 @@ internal sealed class DeletionTargets(
     ISafeTransactionRepository safe,
     TreasuryWriter treasury,
     IRecordDescriptions descriptions,
-    IPayrollSlipRepository slips)
+    IPayrollSlipRepository slips,
+    IAdvanceAllocationRepository allocations)
 {
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
@@ -226,6 +227,9 @@ internal sealed class DeletionTargets(
         if (entry is { Kind: SafeTransactionKind.EmployeeAdvance, EmployeeId: { } employee, PayrollMonth: { } month }
             && await slips.GetAsync(employee, month, cancellationToken) is { IsFinalized: true })
             throw new DomainException($"This advance is deducted from the finalized pay of {month.ToString("MMMM yyyy", Invariant)}: it cannot be voided now.");
+        // Given out to employees, in part or whole: its shares are taken back first.
+        if (entry.IsPendingAdvance && (await allocations.GetForAdvancesAsync([entry.Id], cancellationToken)).Any(a => !a.IsVoided))
+            throw new DomainException("Part of these advances is given out to employees: take those shares back on HR → Advances first.");
         return entry;
     }
 

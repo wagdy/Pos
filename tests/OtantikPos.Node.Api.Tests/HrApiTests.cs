@@ -327,6 +327,97 @@ public class HrApiTests
     }
 
     [Fact]
+    public async Task Advances_handed_out_with_no_one_named_wait_to_be_given_out_and_each_share_is_deducted()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var today = await TodayAsync(manager);
+        var month = new DateOnly(today.Year, today.Month, 1);
+        var hassan = await HireAsync(manager, "Hassan", month.AddMonths(-1));
+        var mona = await HireAsync(manager, "Mona", month.AddMonths(-1));
+        Task<HttpResponseMessage> Distribute(HttpClient client, Guid advance, params object[] shares) =>
+            client.PostAsJsonAsync($"/api/hr/advances/{advance}/distribute", new { shares }, Cancel);
+        async Task<JsonElement> Advances() => await Json(await accountant.GetAsync($"/api/hr/advances?month={Iso(month)}", Cancel));
+
+        // A lump sum from today's takings, no one named (Scenario C), in the daily batch: out of the
+        // drawer at once, as any advance.
+        var lump = Guid.NewGuid();
+        var batch = await Json(await manager.PostAsJsonAsync("/api/inventory/purchase-invoices/batch", new
+        {
+            invoiceDate = Iso(today), paymentMethod = "DayRevenue", revenueDate = Iso(today), invoices = Array.Empty<object>(),
+            advances = new[] { new { transactionId = lump, employeeId = (Guid?)null, amount = 1_000m, notes = "Kitchen staff" } },
+        }, Cancel));
+        Assert.Equal(("Advances, not given out yet", JsonValueKind.Null, "Applied"), (batch.GetProperty("advances")[0].GetProperty("employee").GetString(),
+            batch.GetProperty("advances")[0].GetProperty("employeeId").ValueKind, batch.GetProperty("advances")[0].GetProperty("outcome").GetString()));
+        var day = (await Json(await manager.GetAsync($"/api/financials/daily-cash?from={Iso(today)}&to={Iso(today)}", Cancel))).GetProperty("days")[0];
+        Assert.Equal((1_000m, "Advances, not given out yet"), (day.GetProperty("deductions").GetDecimal(),
+            day.GetProperty("paid")[0].GetProperty("description").GetString()));
+
+        // One paid to Hassan from the safe (Scenario B), and an accountant's lump sum, which waits for
+        // a manager as their advances do.
+        await Json(await AdvanceAsync(manager, hassan, 150, today));
+        var asked = await accountant.PostAsJsonAsync("/api/financials/vouchers", new
+        {
+            requestId = Guid.NewGuid(), transactionId = Guid.NewGuid(), kind = "EmployeeAdvance", amount = 400, date = Iso(today), employeeId = (Guid?)null,
+        }, Cancel);
+        Assert.Equal(HttpStatusCode.Accepted, asked.StatusCode);
+        Assert.StartsWith("Advances, not given out yet · L.E 400.00", (await Json(asked)).GetProperty("request").GetProperty("summary").GetString());
+
+        // HR's view: Hassan's direct advance allocated; the lump sum pending, all of it.
+        var seen = await Advances();
+        Assert.Equal([("Direct", "Hassan", 150m)], seen.GetProperty("allocated").EnumerateArray()
+            .Select(a => (a.GetProperty("origin").GetString(), a.GetProperty("employee").GetString(), a.GetProperty("amount").GetDecimal())));
+        var pending = seen.GetProperty("pending").EnumerateArray().Single();
+        Assert.Equal((lump, 1_000m, 0m, 1_000m, false, Iso(today), "Kitchen staff"), (pending.GetProperty("id").GetGuid(), pending.GetProperty("amount").GetDecimal(),
+            pending.GetProperty("allocated").GetDecimal(), pending.GetProperty("remaining").GetDecimal(), pending.GetProperty("fullyAllocated").GetBoolean(),
+            pending.GetProperty("fromTakingsOf").GetString(), pending.GetProperty("notes").GetString()));
+
+        // Given out by a manager, in parts, never more than is left, one share each.
+        Assert.Equal(HttpStatusCode.Forbidden, (await Distribute(accountant, lump, new { employeeId = hassan, amount = 500 })).StatusCode);
+        var part = await Json(await Distribute(manager, lump, new { employeeId = hassan, amount = 500, notes = "Grill" }));
+        Assert.Equal((500m, 500m), (part.GetProperty("allocated").GetDecimal(), part.GetProperty("remaining").GetDecimal()));
+        Assert.Contains("L.E 500.00 of these advances is left to give out, and the shares come to L.E 600.00",
+            await Problem(await Distribute(manager, lump, new { employeeId = mona, amount = 600 })));
+        Assert.Contains("Mona is on the list twice", await Problem(await Distribute(manager, lump,
+            new { employeeId = mona, amount = 100 }, new { employeeId = mona, amount = 100 })));
+        Assert.Contains("Only advances handed out with no one named",
+            await Problem(await Distribute(manager, seen.GetProperty("allocated")[0].GetProperty("id").GetGuid(), new { employeeId = mona, amount = 10 })));
+        var all = await Json(await Distribute(manager, lump, new { employeeId = mona, amount = 500 }));
+        Assert.Equal((0m, true, 2), (all.GetProperty("remaining").GetDecimal(), all.GetProperty("fullyAllocated").GetBoolean(), all.GetProperty("shares").GetArrayLength()));
+        Assert.Contains("all given out already", await Problem(await Distribute(manager, lump, new { employeeId = mona, amount = 1 })));
+
+        // Each share deducted from its employee's pay of the month, on their slip.
+        var slips = (await Json(await accountant.GetAsync($"/api/hr/payroll?month={Iso(month)}", Cancel))).GetProperty("slips").EnumerateArray()
+            .ToDictionary(s => s.GetProperty("employee").GetProperty("name").GetString()!);
+        Assert.Equal((650m, 500m), (slips["Hassan"].GetProperty("figures").GetProperty("advances").GetDecimal(),
+            slips["Mona"].GetProperty("figures").GetProperty("advances").GetDecimal()));
+        Assert.Equal(2, slips["Hassan"].GetProperty("advances").GetArrayLength());
+        Assert.StartsWith("Share of the advances handed out on", slips["Mona"].GetProperty("advances")[0].GetProperty("notes").GetString());
+        seen = await Advances();
+        Assert.Equal(3, seen.GetProperty("allocated").GetArrayLength());
+        Assert.True(seen.GetProperty("pending")[0].GetProperty("fullyAllocated").GetBoolean());
+
+        // Not voided while shares of it stand; a share taken back goes back to be given out.
+        Assert.Contains("take those shares back on HR → Advances first", await Problem(await manager.PostAsJsonAsync("/api/inventory/deletion-requests", new
+        {
+            requestId = Guid.NewGuid(), module = "Treasury", recordId = lump,
+        }, Cancel)));
+        var monasShare = all.GetProperty("shares").EnumerateArray().Single(s => s.GetProperty("employee").GetString() == "Mona").GetProperty("id").GetGuid();
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.PostAsync($"/api/hr/advance-shares/{monasShare}/take-back", null, Cancel)).StatusCode);
+        var back = await Json(await manager.PostAsync($"/api/hr/advance-shares/{monasShare}/take-back", null, Cancel));
+        Assert.Equal((500m, 1), (back.GetProperty("remaining").GetDecimal(), back.GetProperty("shares").GetArrayLength()));
+        Assert.Equal(0m, (await Json(await accountant.GetAsync($"/api/hr/payroll?month={Iso(month)}", Cancel))).GetProperty("slips").EnumerateArray()
+            .Single(s => s.GetProperty("employee").GetProperty("name").GetString() == "Mona").GetProperty("figures").GetProperty("advances").GetDecimal());
+
+        // Financials' list says it is not given out yet.
+        var financials = (await Json(await accountant.GetAsync($"/api/financials/advances?from={Iso(month)}&to={Iso(today)}", Cancel))).EnumerateArray()
+            .Single(a => a.GetProperty("id").GetGuid() == lump);
+        Assert.Equal(("Not given out yet", JsonValueKind.Null, JsonValueKind.Null), (financials.GetProperty("employee").GetString(),
+            financials.GetProperty("employeeId").ValueKind, financials.GetProperty("payrollMonth").ValueKind));
+    }
+
+    [Fact]
     public async Task A_months_pay_is_finalized_with_its_advances_and_paid_from_the_safe()
     {
         await using var api = await TestApi.StartAsync();

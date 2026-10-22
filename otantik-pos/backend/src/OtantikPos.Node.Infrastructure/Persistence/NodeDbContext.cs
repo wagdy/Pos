@@ -93,6 +93,7 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
     public DbSet<JobRole> JobRoles => Set<JobRole>();
     public DbSet<DailyRecord> DailyRecords => Set<DailyRecord>();
     public DbSet<PayrollAdjustment> PayrollAdjustments => Set<PayrollAdjustment>();
+    public DbSet<AdvanceAllocation> AdvanceAllocations => Set<AdvanceAllocation>();
     public DbSet<PayrollSlip> PayrollSlips => Set<PayrollSlip>();
     public DbSet<HrSettings> HrSettings => Set<HrSettings>();
 

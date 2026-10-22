@@ -105,6 +105,7 @@ public sealed class TestPos
         services.AddSingleton<OtantikPos.Hr.Domain.IDailyRecordRepository>(Hr.Records);
         services.AddSingleton<OtantikPos.Hr.Domain.IPayrollAdjustmentRepository>(Hr.Adjustments);
         services.AddSingleton<OtantikPos.Hr.Domain.IPayrollSlipRepository>(Hr.Slips);
+        services.AddSingleton<OtantikPos.Hr.Domain.IAdvanceAllocationRepository>(Hr.Allocations);
         services.AddSingleton<OtantikPos.Inventory.Application.Hr.IAttendanceSettings>(Hr.Settings);
         services.AddSingleton<OtantikPos.Inventory.Application.Hr.IAttendanceNotifier>(Hr.Notifications);
         services.AddSingleton<OtantikPos.Inventory.Application.Hr.IAttendanceDeviceLink>(Hr.Link);
@@ -672,6 +673,8 @@ public sealed class SafeStore : ISafeTransactionRepository
     public Task<IReadOnlyList<SafeTransaction>> GetForPayrollMonthAsync(DateOnly month, Guid? employeeId = null, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<SafeTransaction>>(_entries
             .Where(t => t.PayrollMonth == month && t.EmployeeId != null && (employeeId == null || t.EmployeeId == employeeId)).ToList());
+    public Task<IReadOnlyList<SafeTransaction>> GetPendingAdvancesAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<SafeTransaction>>(_entries.Where(t => t.IsPendingAdvance && !t.IsReversal && !t.IsVoided).ToList());
 }
 
 public sealed class SupplierLedgerStore : ISupplierLedgerRepository

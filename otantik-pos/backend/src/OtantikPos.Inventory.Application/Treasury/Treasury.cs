@@ -183,6 +183,9 @@ internal sealed class TreasuryWriter(
                 break;
             case SafeTransactionKind.EmployeeAdvance:
             {
+                // No one named: advances handed out as a lump sum, given out to employees later.
+                if (voucher.EmployeeId is null)
+                    break;
                 var employee = await EmployeeAsync(voucher.EmployeeId, cancellationToken);
                 if (!employee.IsEmployedOn(voucher.Date))
                     throw new DomainException($"{employee.Name} is not employed on {Day(voucher.Date)}.");
@@ -245,9 +248,13 @@ internal sealed class TreasuryWriter(
                 break;
             }
             case SafeTransactionKind.EmployeeAdvance:
-                entry = SafeTransaction.EmployeeAdvance(
-                    id, voucher.Amount, voucher.Date, voucher.EmployeeId!.Value, await OpenMonthAsync(voucher.EmployeeId.Value, voucher.Date, cancellationToken),
-                    voucher.Notes, recordedBy, approvedBy, voucher.RevenueDate, await TakingsInSafeAsync(voucher.RevenueDate, cancellationToken));
+                entry = voucher.EmployeeId is not { } advancedTo
+                    ? SafeTransaction.PendingAdvance(
+                        id, voucher.Amount, voucher.Date, voucher.Notes, recordedBy, approvedBy, voucher.RevenueDate,
+                        await TakingsInSafeAsync(voucher.RevenueDate, cancellationToken))
+                    : SafeTransaction.EmployeeAdvance(
+                        id, voucher.Amount, voucher.Date, advancedTo, await OpenMonthAsync(advancedTo, voucher.Date, cancellationToken),
+                        voucher.Notes, recordedBy, approvedBy, voucher.RevenueDate, await TakingsInSafeAsync(voucher.RevenueDate, cancellationToken));
                 break;
             case SafeTransactionKind.SalaryPayment:
                 entry = SafeTransaction.SalaryPayment(
@@ -372,6 +379,14 @@ internal sealed class TreasuryWriter(
                           $"{(name is null ? "" : $" · {name}")} paid from {fromWhere} · {Money(invoice.Total)}";
                 changes.Add(new ApprovalChange("Paid from", null, fromWhere));
                 break;
+            case SafeTransactionKind.EmployeeAdvance when voucher.EmployeeId is null:
+            {
+                var advanceFrom = voucher.RevenueDate is { } advanceDay ? $"the takings of {Day(advanceDay)}" : "the safe";
+                summary = $"Advances, not given out yet · {amount}{(voucher.RevenueDate is null ? "" : $" from {advanceFrom}")}";
+                changes.Add(new ApprovalChange("Employee", null, "None yet: a manager gives it out on HR → Advances"));
+                changes.Add(new ApprovalChange("Paid from", null, advanceFrom));
+                break;
+            }
             case SafeTransactionKind.EmployeeAdvance:
             {
                 var employee = await EmployeeAsync(voucher.EmployeeId, cancellationToken);
@@ -429,6 +444,7 @@ internal sealed class TreasuryWriter(
             SafeTransactionKind.ExpenseVoucher => $"Expense voucher · {(entry.ExpenseItemId is { } e ? (await expenses.GetByIdAsync(e, cancellationToken))?.Name : null) ?? "an expense"}",
             SafeTransactionKind.SupplierPayment => $"Supplier payment · {(entry.SupplierId is { } s ? (await suppliers.GetByIdAsync(s, cancellationToken))?.Name : null) ?? "a supplier"}" +
                 (entry.RevenueDate is { } paidFrom ? $" from the takings of {Day(paidFrom)}" : ""),
+            SafeTransactionKind.EmployeeAdvance when entry.EmployeeId is null => "Advances, not given out yet" + From(entry.RevenueDate),
             SafeTransactionKind.EmployeeAdvance => $"Employee advance · {await EmployeeNameAsync(entry.EmployeeId, cancellationToken)}" + From(entry.RevenueDate),
             SafeTransactionKind.SalaryPayment => $"Salary · {await EmployeeNameAsync(entry.EmployeeId, cancellationToken)}" +
                 (entry.PayrollMonth is { } month ? $" · {MonthName(month)}" : "") + From(entry.RevenueDate),

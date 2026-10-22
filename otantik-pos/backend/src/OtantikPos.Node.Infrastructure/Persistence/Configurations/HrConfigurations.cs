@@ -196,6 +196,24 @@ internal sealed class PayrollAdjustmentConfiguration : IEntityTypeConfiguration<
     }
 }
 
+internal sealed class AdvanceAllocationConfiguration : IEntityTypeConfiguration<AdvanceAllocation>
+{
+    public void Configure(EntityTypeBuilder<AdvanceAllocation> builder)
+    {
+        builder.ToTable("AdvanceAllocations", NodeDbContext.HrSchema);
+        builder.Property(a => a.Amount).HasPrecision(18, 2);
+        builder.Property(a => a.Notes).HasMaxLength(AdvanceAllocation.MaxNotesLength);
+        builder.Property(a => a.AllocatedBy).HasMaxLength(200);
+        builder.Property(a => a.VoidedBy).HasMaxLength(200);
+        builder.Ignore(a => a.IsVoided);
+        builder.HasOne<Employee>().WithMany().HasForeignKey(a => a.EmployeeId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<OtantikPos.Inventory.Domain.Treasury.SafeTransaction>().WithMany().HasForeignKey(a => a.SourceTransactionId)
+            .OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(a => a.SourceTransactionId);
+        builder.HasIndex(a => new { a.EmployeeId, a.PayrollMonth });
+    }
+}
+
 internal sealed class PayrollSlipConfiguration : IEntityTypeConfiguration<PayrollSlip>
 {
     public void Configure(EntityTypeBuilder<PayrollSlip> builder)

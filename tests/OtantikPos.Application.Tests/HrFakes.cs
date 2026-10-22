@@ -23,6 +23,7 @@ public sealed class HrStore
     public DailyRecordStore Records { get; } = new();
     public AdjustmentStore Adjustments { get; } = new();
     public SlipStore Slips { get; } = new();
+    public AllocationStore Allocations { get; } = new();
     public AttendanceSettingsStore Settings { get; } = new();
     public AttendanceNotifications Notifications { get; } = new();
     public DeviceLink Link { get; } = new();
@@ -219,4 +220,13 @@ public sealed class DeviceLink : IAttendanceDeviceLink
 
     public Task<DeviceReading> ReadAsync(string address, int port, int commKey, CancellationToken cancellationToken) =>
         Holds is { } d ? Task.FromResult(d) : throw new Otantik.BuildingBlocks.DomainException($"No answer from {address} on port {port}.");
+}
+
+public sealed class AllocationStore : ListStore<AdvanceAllocation>, IAdvanceAllocationRepository
+{
+    public Task<IReadOnlyList<AdvanceAllocation>> GetForAdvancesAsync(IReadOnlyCollection<Guid> sourceTransactionIds, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<AdvanceAllocation>>(Items.Where(a => sourceTransactionIds.Contains(a.SourceTransactionId)).ToList());
+
+    public Task<IReadOnlyList<AdvanceAllocation>> GetForPayrollMonthAsync(DateOnly month, Guid? employeeId = null, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<AdvanceAllocation>>(Items.Where(a => a.PayrollMonth == month && (employeeId == null || a.EmployeeId == employeeId)).ToList());
 }

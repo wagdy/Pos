@@ -206,6 +206,7 @@ internal sealed class SafeTransactionConfiguration : IEntityTypeConfiguration<Sa
         builder.Ignore(t => t.PaidOut);
         builder.Ignore(t => t.IsReversal);
         builder.Ignore(t => t.IsVoided);
+        builder.Ignore(t => t.IsPendingAdvance);
         builder.HasOne<Supplier>().WithMany().HasForeignKey(t => t.SupplierId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne<PurchaseInvoice>().WithMany().HasForeignKey(t => t.PurchaseInvoiceId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne<ExpenseItem>().WithMany().HasForeignKey(t => t.ExpenseItemId).OnDelete(DeleteBehavior.Restrict);

@@ -246,6 +246,12 @@ internal sealed class SafeTransactionRepository(NodeDbContext db) : ISafeTransac
             .OrderBy(t => t.BusinessDate).ThenBy(t => t.RecordedAtUtc)
             .ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<SafeTransaction>> GetPendingAdvancesAsync(CancellationToken cancellationToken = default) =>
+        await db.SafeTransactions.AsNoTracking()
+            .Where(t => t.Kind == SafeTransactionKind.EmployeeAdvance && t.EmployeeId == null && t.ReversalOf == null && t.VoidedAtUtc == null)
+            .OrderByDescending(t => t.BusinessDate).ThenByDescending(t => t.RecordedAtUtc)
+            .ToListAsync(cancellationToken);
+
     public Task<bool> AnyOpeningBalanceAsync(CancellationToken cancellationToken = default) =>
         db.SafeTransactions.AnyAsync(t => t.Kind == SafeTransactionKind.OpeningBalance && t.ReversalOf == null && t.VoidedAtUtc == null, cancellationToken);
 }

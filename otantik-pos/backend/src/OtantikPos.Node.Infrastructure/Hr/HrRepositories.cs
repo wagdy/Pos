@@ -215,6 +215,25 @@ internal sealed class PayrollAdjustmentRepository(NodeDbContext db) : IPayrollAd
         await db.PayrollAdjustments.AsNoTracking().Where(a => a.Month == month).ToListAsync(cancellationToken);
 }
 
+// Tracked: a share is taken back in place.
+internal sealed class AdvanceAllocationRepository(NodeDbContext db) : IAdvanceAllocationRepository
+{
+    public Task<AdvanceAllocation?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.AdvanceAllocations.SingleOrDefaultAsync(a => a.Id == id, cancellationToken);
+
+    public void Add(AdvanceAllocation aggregate) => db.AdvanceAllocations.Add(aggregate);
+
+    public async Task<IReadOnlyList<AdvanceAllocation>> GetForAdvancesAsync(
+        IReadOnlyCollection<Guid> sourceTransactionIds, CancellationToken cancellationToken = default) =>
+        await db.AdvanceAllocations.Where(a => sourceTransactionIds.Contains(a.SourceTransactionId))
+            .OrderBy(a => a.AllocatedAtUtc).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<AdvanceAllocation>> GetForPayrollMonthAsync(
+        DateOnly month, Guid? employeeId = null, CancellationToken cancellationToken = default) =>
+        await db.AdvanceAllocations.AsNoTracking().Where(a => a.PayrollMonth == month && (employeeId == null || a.EmployeeId == employeeId))
+            .OrderBy(a => a.Date).ThenBy(a => a.AllocatedAtUtc).ToListAsync(cancellationToken);
+}
+
 // Tracked: a draft is worked out again in place.
 internal sealed class PayrollSlipRepository(NodeDbContext db) : IPayrollSlipRepository
 {
