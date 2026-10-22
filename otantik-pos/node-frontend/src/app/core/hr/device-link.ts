@@ -18,6 +18,11 @@ export function isIPv4(address: string): boolean {
   return parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
 }
 
+// "about 5 hours", "about an hour", "25 minutes": how far a device's clock runs ahead.
+export function aheadBy(minutes: number): string {
+  return minutes >= 90 ? `about ${Math.round(minutes / 60)} hours` : minutes >= 50 ? 'about an hour' : `${minutes} minutes`;
+}
+
 // The address a device last called from, when it is one the till can reach it at.
 export function addressOf(device: AttendanceDevice): string | null {
   const address = device.lastAddress?.replace(/^::ffff:/, '') ?? '';

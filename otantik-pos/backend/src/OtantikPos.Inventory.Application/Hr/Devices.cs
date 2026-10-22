@@ -23,26 +23,44 @@ public sealed record DeviceCommandDto(
 
 // A device, and its newest commands, newest first.
 // CallingIn: it has called the till over ADMS in the last few minutes, so its punches come as
-// they are made; otherwise only when the till reads it.
+// they are made; otherwise only when the till reads it. ClockAheadMinutes: its last punch came
+// stamped this far ahead of when it reached the till, so its clock is fast and its punches count
+// at the wrong times; none when its clock is right (or behind, which cannot be told apart from a
+// punch kept while it was away and sent late).
 public sealed record AttendanceDeviceDto(
     Guid Id, string SerialNumber, string? Name, bool IsApproved, string? ApprovedBy, DateTime? ApprovedAtUtc, DateTime FirstSeenAtUtc,
-    DateTime LastSeenAtUtc, string? LastAddress, IReadOnlyList<DeviceCommandDto> Commands, DateTime? LastCalledInAtUtc, bool CallingIn)
+    DateTime LastSeenAtUtc, string? LastAddress, IReadOnlyList<DeviceCommandDto> Commands, DateTime? LastCalledInAtUtc, bool CallingIn,
+    int? ClockAheadMinutes)
 {
-    public static AttendanceDeviceDto From(AttendanceDevice d, IEnumerable<DeviceCommand>? commands = null) => new(
+    // A punch can arrive a little ahead of the till's clock; this far, the device's clock is wrong.
+    public static readonly TimeSpan ClockTolerance = TimeSpan.FromMinutes(10);
+
+    public static AttendanceDeviceDto From(AttendanceDevice d, IEnumerable<DeviceCommand>? commands = null, int? clockAheadMinutes = null) => new(
         d.Id, d.SerialNumber, d.Name, d.IsApproved, d.ApprovedBy, d.ApprovedAtUtc, d.FirstSeenAtUtc, d.LastSeenAtUtc, d.LastAddress,
         (commands ?? []).Where(c => c.DeviceSerialNumber == d.SerialNumber).OrderByDescending(c => c.Number).Select(DeviceCommandDto.From).ToList(),
-        d.LastCalledInAtUtc, d.IsCallingIn(DateTime.UtcNow));
+        d.LastCalledInAtUtc, d.IsCallingIn(DateTime.UtcNow), clockAheadMinutes);
 }
 
 public sealed record GetAttendanceDevicesQuery : IRequest<IReadOnlyList<AttendanceDeviceDto>>;
 
-internal sealed class GetAttendanceDevicesHandler(IAttendanceDeviceRepository devices, IDeviceCommandRepository commands)
+internal sealed class GetAttendanceDevicesHandler(
+    IAttendanceDeviceRepository devices, IDeviceCommandRepository commands, IAttendanceLogRepository logs, IRecordDescriptions clock)
     : IRequestHandler<GetAttendanceDevicesQuery, IReadOnlyList<AttendanceDeviceDto>>
 {
     public async Task<IReadOnlyList<AttendanceDeviceDto>> Handle(GetAttendanceDevicesQuery request, CancellationToken cancellationToken)
     {
         var recent = await commands.GetRecentAsync(3, cancellationToken);
-        return (await devices.GetAllAsync(cancellationToken)).Select(d => AttendanceDeviceDto.From(d, recent)).ToList();
+        var list = new List<AttendanceDeviceDto>();
+        foreach (var d in await devices.GetAllAsync(cancellationToken))
+        {
+            int? ahead = null;
+            if (await logs.GetLastReceivedFromDeviceAsync(d.SerialNumber, cancellationToken) is { } last
+                && last.PunchedAt - clock.LocalTimeOf(last.ReceivedAtUtc) is var early && early > AttendanceDeviceDto.ClockTolerance)
+                ahead = (int)Math.Round(early.TotalMinutes);
+            list.Add(AttendanceDeviceDto.From(d, recent, ahead));
+        }
+
+        return list;
     }
 }
 

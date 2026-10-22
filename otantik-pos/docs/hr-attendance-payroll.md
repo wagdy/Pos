@@ -213,6 +213,15 @@ call is kept apart from when the till last read it (`LastCalledInAtUtc`, migrati
 someone presses Sync. A device added by a Sync has never called in until it is pointed at the
 till.
 
+**Its clock.** A device sets its clock from the time of the till's answer (UTC) and a time zone:
+left to its own, +8 as ZKTeco ships it, its punches run hours ahead, and count on the wrong day
+(the K40 did, five hours fast, on 2026-10-22). The till sends the restaurant's zone as it starts
+(`TimeZone=` in the options, whole hours, or minutes for a zone on the half hour), so it sets its
+clock right each time it starts; a change of daylight saving reaches it at its next start. A
+device whose last punch (ignored ones aside) came stamped more than ten minutes ahead of its
+arrival is said to have a fast clock, on Now and the Devices tab, until a punch comes right or
+those punches are ignored. A slow clock cannot be told from punches kept while it was away.
+
 ## Reaching the device on its own port (built): TCP 4370
 
 Beside ADMS, the till can reach the device itself over ZKTeco's binary protocol on TCP port

@@ -5,6 +5,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
+import { aheadBy } from '../../core/hr/device-link';
 import { errorMessage } from '../../core/http/error-message';
 import { AttendanceSignal } from '../../core/hr/attendance-signal';
 import { AttendanceDevice, Department, EmployeeStatus, HrApi, Presence, PresenceState, clock } from '../../core/hr/hr.api';
@@ -27,7 +28,8 @@ const states: Record<PresenceState, { en: string; ar: string; tone: string }> = 
 // every minute for the clock, and after the connection was lost.
 //
 // Punches come as they are made only while the device calls the till over ADMS: when it has not
-// for a few minutes, the page says so, and where to point it.
+// for a few minutes, the page says so, and where to point it. A device whose punches come stamped
+// ahead of the till's clock is said too: they count at the wrong times.
 @Component({
   selector: 'app-now-page',
   imports: [DatePipe, MatIconModule, MatProgressBarModule, RouterLink],
@@ -55,6 +57,17 @@ const states: Record<PresenceState, { en: string; ar: string; tone: string }> = 
           @if (pointAt(); as at) {
             On the device, set Cloud Server Setting to <strong>{{ at }}</strong>.
           }
+          <a routerLink="/hr/devices">Attendance devices</a>
+        </span>
+      </div>
+    }
+    @for (d of fast(); track d.id) {
+      <div class="quiet" role="status">
+        <mat-icon>schedule</mat-icon>
+        <span>
+          <strong>{{ d.name ?? d.serialNumber }}'s clock is {{ ahead(d.clockAheadMinutes!) }} ahead</strong>: its punches are stamped later than
+          they happen, and count at the wrong times. The till sends it the restaurant's time zone each time it starts: restart the device to set
+          its clock, and ignore those punches on the Attendance tab.
           <a routerLink="/hr/devices">Attendance devices</a>
         </span>
       </div>
@@ -274,6 +287,8 @@ export class NowPage {
 
   // Approved devices not calling the till over ADMS, and where they should call.
   protected readonly quiet = signal<AttendanceDevice[]>([]);
+  protected readonly fast = signal<AttendanceDevice[]>([]);
+  protected readonly ahead = aheadBy;
   protected readonly quietNames = computed(() => this.quiet().map((d) => d.name ?? d.serialNumber).join(', '));
   private readonly connection = signal<{ devicePort: number | null; addresses: string[] } | null>(null);
   protected readonly pointAt = computed(() => {
@@ -412,7 +427,10 @@ export class NowPage {
   private async load(): Promise<void> {
     this.loading.set(true);
     void firstValueFrom(this.api.devices()).then(
-      (devices) => this.quiet.set(devices.filter((d) => d.isApproved && !d.callingIn)),
+      (devices) => {
+        this.quiet.set(devices.filter((d) => d.isApproved && !d.callingIn));
+        this.fast.set(devices.filter((d) => d.isApproved && d.clockAheadMinutes !== null));
+      },
       () => undefined,
     );
     try {

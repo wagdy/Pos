@@ -52,6 +52,9 @@ public interface IAttendanceLogRepository : IRepository<AttendanceLog>
     // A device's punches already kept from `from` to `to`, both included: a resent one is kept once.
     Task<IReadOnlyList<AttendanceLog>> GetFromDeviceAsync(string serialNumber, DateTime from, DateTime to, CancellationToken cancellationToken = default);
 
+    // The punch it sent last (the latest on its clock of those it sent last), ignored ones left out.
+    Task<AttendanceLog?> GetLastReceivedFromDeviceAsync(string serialNumber, CancellationToken cancellationToken = default);
+
     // Every punch from `from` up to `to`, ignored ones and ones nobody has yet too; one
     // employee's alone when given.
     Task<IReadOnlyList<AttendanceLog>> GetBetweenAsync(DateTime from, DateTime to, Guid? employeeId = null, CancellationToken cancellationToken = default);

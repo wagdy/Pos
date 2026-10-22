@@ -84,6 +84,12 @@ internal sealed class AttendanceLogRepository(NodeDbContext db) : IAttendanceLog
             .Where(l => l.DeviceSerialNumber == serialNumber && l.PunchedAt >= from && l.PunchedAt <= to)
             .ToListAsync(cancellationToken);
 
+    public Task<AttendanceLog?> GetLastReceivedFromDeviceAsync(string serialNumber, CancellationToken cancellationToken = default) =>
+        db.AttendanceLogs.AsNoTracking()
+            .Where(l => l.DeviceSerialNumber == serialNumber && l.IgnoredAtUtc == null)
+            .OrderByDescending(l => l.ReceivedAtUtc).ThenByDescending(l => l.PunchedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
     public async Task<IReadOnlyList<AttendanceLog>> GetBetweenAsync(
         DateTime from, DateTime to, Guid? employeeId = null, CancellationToken cancellationToken = default) =>
         await db.AttendanceLogs.AsNoTracking()

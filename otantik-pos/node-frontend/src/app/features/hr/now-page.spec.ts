@@ -38,6 +38,7 @@ const everyone: Presence[] = [
 const k40: AttendanceDevice = {
   id: 'd1', serialNumber: 'GED7234801177', name: 'K40 Pro (192.168.1.8)', isApproved: true, approvedBy: 'Omar', approvedAtUtc: null,
   firstSeenAtUtc: '', lastSeenAtUtc: '', lastAddress: '192.168.1.8', commands: [], lastCalledInAtUtc: null, callingIn: false,
+  clockAheadMinutes: null,
 };
 
 function pushed(employeeId: string, extra: Partial<EmployeeStatus>): EmployeeStatus {
@@ -146,6 +147,17 @@ describe('who is in now', () => {
 
     devices.mockReturnValue(of([{ ...k40, callingIn: true }]));
     expect((await render()).el.querySelector('.quiet')).toBeNull();
+  });
+
+  it('says when the device’s clock is ahead, as its punches then count at the wrong times', async () => {
+    devices.mockReturnValue(of([{ ...k40, callingIn: true, clockAheadMinutes: 301 }]));
+    const { el } = await render();
+
+    expect(text(el.querySelector('.quiet')!)).toBe(
+      "scheduleK40 Pro (192.168.1.8)'s clock is about 5 hours ahead: its punches are stamped later than they happen, and count at the " +
+        "wrong times. The till sends it the restaurant's time zone each time it starts: restart the device to set its clock, and ignore those " +
+        'punches on the Attendance tab. Attendance devices',
+    );
   });
 
   it('reads it all again after the connection was lost, and points to what waits on Corrections', async () => {

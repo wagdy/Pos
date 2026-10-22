@@ -90,6 +90,10 @@ public sealed class PunchStore : ListStore<AttendanceLog>, IAttendanceLogReposit
     public Task<IReadOnlyList<AttendanceLog>> GetFromDeviceAsync(string serialNumber, DateTime from, DateTime to, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<AttendanceLog>>(Items.Where(l => l.DeviceSerialNumber == serialNumber && l.PunchedAt >= from && l.PunchedAt <= to).ToList());
 
+    public Task<AttendanceLog?> GetLastReceivedFromDeviceAsync(string serialNumber, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Items.Where(l => l.DeviceSerialNumber == serialNumber && l.IgnoredAtUtc == null)
+            .OrderByDescending(l => l.ReceivedAtUtc).ThenByDescending(l => l.PunchedAt).FirstOrDefault());
+
     public Task<IReadOnlyList<AttendanceLog>> GetBetweenAsync(DateTime from, DateTime to, Guid? employeeId = null, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<AttendanceLog>>(Items
             .Where(l => l.PunchedAt >= from && l.PunchedAt < to && (employeeId == null || l.EmployeeId == employeeId))

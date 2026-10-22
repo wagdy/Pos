@@ -733,7 +733,12 @@ public class HrApiTests
         var now = DateTime.Now;
         var day = DateOnly.FromDateTime(now.AddHours(-4));
         var dayStarts = day.ToDateTime(new TimeOnly(4, 0));
-        var punchedIn = now.AddMinutes(-2) < dayStarts ? dayStarts.AddSeconds(30) : now.AddMinutes(-2);
+        // In two minutes ago and out five after, both within the day whenever the test runs: just
+        // after 04:00, or just before the next.
+        var dayEnds = dayStarts.AddDays(1);
+        var punchedIn = now.AddMinutes(-2) < dayStarts ? dayStarts.AddSeconds(30)
+            : now.AddMinutes(4) >= dayEnds ? dayEnds.AddMinutes(-7)
+            : now.AddMinutes(-2);
         string At(DateTime time) => time.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
         async Task Punch(DateTime time) => await Json(await manager.PostAsJsonAsync("/api/hr/punches", new
         {
@@ -936,5 +941,21 @@ public class HrApiTests
         var sheet = await Json(await accountant.GetAsync($"/api/hr/employees/{hassan}/timesheet?month={Iso(month)}", Cancel));
         Assert.Equal(DateTime.DaysInMonth(month.Year, month.Month), sheet.GetProperty("days").GetArrayLength());
         Assert.Equal(1, sheet.GetProperty("totals").GetProperty("daysWorked").GetInt32());
+
+        // Its clock: told the restaurant's zone as it starts, to set its clock by (left to its own,
+        // +8 as shipped, it runs hours ahead). A punch arriving stamped hours ahead says its clock
+        // is fast, until that punch is ignored.
+        var cairo = TimeZoneInfo.FindSystemTimeZoneById("Africa/Cairo");
+        Assert.Contains($"\r\nTimeZone={cairo.GetUtcOffset(DateTime.UtcNow).TotalHours.ToString("0", CultureInfo.InvariantCulture)}\r\n", options);
+        async Task<JsonElement> ClockAhead() =>
+            (await Json(await manager.GetAsync("/api/hr/devices", Cancel))).EnumerateArray().Single().GetProperty("clockAheadMinutes");
+        Assert.Equal(JsonValueKind.Null, (await ClockAhead()).ValueKind);
+        var fast = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, cairo).AddHours(5);
+        Assert.Equal("OK:1", await (await Upload($"77\t{fast.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)}\t0\t1", "56")).Content.ReadAsStringAsync(Cancel));
+        Assert.InRange((await ClockAhead()).GetInt32(), 299, 301);
+        var stray = await api.Db(db => Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.SingleAsync(
+            db.AttendanceLogs.Where(l => l.DeviceUserId == "77").Select(l => l.Id), Cancel));
+        await Json(await manager.PostAsJsonAsync($"/api/hr/punches/{stray}/ignore", new { reason = "Device clock 5 hours fast" }, Cancel));
+        Assert.Equal(JsonValueKind.Null, (await ClockAhead()).ValueKind);
     }
 }

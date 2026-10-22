@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using MediatR;
+using OtantikPos.Inventory.Application.Approvals;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using OtantikPos.Inventory.Application.Hr;
@@ -31,7 +32,7 @@ namespace OtantikPos.Node.Api.Controllers;
 [AllowAnonymous]
 [Route("iclock")]
 [ApiExplorerSettings(IgnoreApi = true)]
-public sealed partial class IclockController(ISender sender, ILogger<IclockController> logger) : ControllerBase
+public sealed partial class IclockController(ISender sender, IRecordDescriptions clock, ILogger<IclockController> logger) : ControllerBase
 {
     // A day's punches are a few hundred lines; a device sending its whole log after weeks away, or
     // read again, tens of thousands, which it splits. A line is under 60 bytes.
@@ -56,6 +57,7 @@ public sealed partial class IclockController(ISender sender, ILogger<IclockContr
             "TransTimes=00:00;14:05",
             "TransInterval=1",
             "TransFlag=TransData AttLog\tOpLog",
+            $"TimeZone={TimeZone()}",
             "Realtime=1",
             "Encrypt=None"));
     }
@@ -190,6 +192,17 @@ public sealed partial class IclockController(ISender sender, ILogger<IclockContr
     }
 
     private string? Address => HttpContext.Connection.RemoteIpAddress?.ToString();
+
+    // The restaurant's offset from UTC now, as the device takes it: whole hours, or minutes for a
+    // zone on the half hour. The device sets its clock from the time of our answer (UTC) and this
+    // zone; left out, it keeps its own, +8 as ZKTeco ships it, and its punches run hours ahead.
+    // Sent on each start, so a change of daylight saving reaches it the next time it starts.
+    private string TimeZone()
+    {
+        var now = DateTime.UtcNow;
+        var minutes = (int)Math.Round((clock.LocalTimeOf(now) - now).TotalMinutes);
+        return (minutes % 60 == 0 ? minutes / 60 : minutes).ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
 
     private static bool IsSerial(string? serial) => serial is { Length: > 0 and <= 64 } && SerialPattern().IsMatch(serial);
 

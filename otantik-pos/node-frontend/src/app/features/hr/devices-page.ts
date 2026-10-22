@@ -10,7 +10,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
-import { addressOf, isIPv4, saveDeviceLink, savedDeviceLink, ZkPort } from '../../core/hr/device-link';
+import { aheadBy, addressOf, isIPv4, saveDeviceLink, savedDeviceLink, ZkPort } from '../../core/hr/device-link';
 import { errorMessage } from '../../core/http/error-message';
 import { AttendanceDevice, AttendancePolicy, DeviceCommand, HrApi } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
@@ -229,6 +229,11 @@ export class ReadAttendanceDialog {
                     punches come only with Sync
                   </div>
                 }
+                @if (d.clockAheadMinutes !== null) {
+                  <div class="small adms bad-text">
+                    <mat-icon inline>schedule</mat-icon> Its clock is {{ ahead(d.clockAheadMinutes) }} ahead: restart it to set its clock by the till's
+                  </div>
+                }
               </td>
               <td class="nowrap">{{ d.lastSeenAtUtc | date: 'd MMM, HH:mm' }}</td>
               <td class="num nowrap" [attr.rowspan]="d.isApproved ? 2 : 1">
@@ -443,6 +448,7 @@ export class DevicesPage {
   private poll: ReturnType<typeof setInterval> | null = null;
 
   protected readonly canApprove = this.approvals.canApprove;
+  protected readonly ahead = aheadBy;
   protected readonly devices = signal<AttendanceDevice[]>([]);
   protected readonly loading = signal(true);
   protected readonly error = signal<string | null>(null);

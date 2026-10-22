@@ -245,7 +245,7 @@ describe('the employees', () => {
     };
     const door: AttendanceDevice = {
       id: 'd1', serialNumber: 'CQZ', name: 'Kitchen door', isApproved: true, approvedBy: 'Omar', approvedAtUtc: null, firstSeenAtUtc: '', lastSeenAtUtc: '',
-      lastAddress: '192.168.1.106', commands: [], lastCalledInAtUtc: null, callingIn: false,
+      lastAddress: '192.168.1.106', commands: [], lastCalledInAtUtc: null, callingIn: false, clockAheadMinutes: null,
     };
     const synced = (extra: Partial<DeviceSyncResult> = {}): DeviceSyncResult => ({
       serialNumber: 'CQZ', deviceName: 'Kitchen door', newDevice: false, users: 3, usersNotOnTheTill: 1, punches: 40, newPunches: 12, ...extra,

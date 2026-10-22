@@ -279,6 +279,8 @@ export interface AttendanceDevice {
   // punches come as they are made. Otherwise they come only when the till reads it (Sync).
   lastCalledInAtUtc: string | null;
   callingIn: boolean;
+  // Its last punch came stamped this far ahead of when it reached the till: its clock is fast.
+  clockAheadMinutes: number | null;
 }
 
 // Employees brought in from Excel: each added, or asked of a manager (requested); the rows
