@@ -402,6 +402,11 @@ migration `PublicHolidays`); leave allowances entered by a manager are for anyth
   minute for the clock, and after the connection was lost. Each card opens the employee's month.
   When an approved device has not called in over ADMS for three minutes, the page says so (its
   punches then come only with Sync) and where to point it; the Devices tab says it of each.
+  - Employees, in two lists one at a time (a switch at the top, each side with its count; the
+    second kept in the address as `?view=device`): System employees (الموظفين العاملين), and
+    Device users (مسجلين على جهاز البصمة), the device's users nobody on the till has the number of
+    yet, each leaving it once added or linked. Show who has left and Department filter the
+    first; Excel, Sync device and Add employee are above both;
   - Employees: add, change, leave and come back; an accountant's go to a manager; a row (or the
     name) opens the employee's profile;
   - An employee's profile (`/hr/employees/{id}`): their personal details (full name, national
@@ -410,7 +415,7 @@ migration `PublicHolidays`); leave allowances entered by a manager are for anyth
     the Employees form, Deactivate their leaving, Bring back their return, all locked while a
     change waits for a manager; below, their payslip for the business month, a month back at a
     time, as Payroll has it (incentives, finalizing and paying included), printing alone;
-  - Employees also lists the device's users nobody has the number of yet, to add or link;
+  - Device users: add each as an employee, or link their number to one already here;
     the form takes the department, a role of it (picked, or a new one typed), monthly or daily
     pay, and flexible hours (no start time); the list shows each one's department, filters by
     one, and a daily worker's wage a day; Sync device reads each device directly over TCP 4370

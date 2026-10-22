@@ -1,7 +1,8 @@
 import { DatePipe } from '@angular/common';
-import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
+import { Component, DestroyRef, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
@@ -70,19 +71,23 @@ export class LinkDeviceUserDialog {
   protected employeeId = '';
 }
 
-// The employees (الموظفين): a row opens the employee's profile. Who is on the payroll and in which department, their pay (a monthly
-// salary or a daily wage), their nine-hour shift (or flexible hours) and days off, and their
-// number on the attendance device. Added, changed, leaving
-// and coming back by whoever manages HR: a manager's at once, anyone else's waiting for a manager,
-// listed above the table until then (a new one) or locking its row (a change). Below, the users
-// the device has listed that nobody on the till has the number of yet, to add as employees or
-// link to one.
+// The employees (الموظفين), in two lists, one shown at a time (?view=device for the second):
+// - System employees (الموظفين العاملين): who is on the payroll and in which department, their
+//   pay (a monthly salary or a daily wage), their nine-hour shift (or flexible hours) and days
+//   off, and their number on the attendance device; a row opens the employee's profile. Added,
+//   changed, leaving and coming back by whoever manages HR: a manager's at once, anyone else's
+//   waiting for a manager, listed above the table until then (a new one) or locking its row (a
+//   change).
+// - Device users (مسجلين على جهاز البصمة): the users the device has listed that nobody on the till
+//   has the number of yet, to add as employees or link to one; each leaves the list once added.
+// Sync device, Excel and Add employee are above both.
 @Component({
   selector: 'app-employees-page',
   imports: [
     DatePipe,
     FormsModule,
     MatButtonModule,
+    MatButtonToggleModule,
     MatFormFieldModule,
     MatIconModule,
     MatMenuModule,
@@ -94,21 +99,33 @@ export class LinkDeviceUserDialog {
     RouterLink,
   ],
   template: `
+    <mat-button-toggle-group class="lists" [value]="list()" (change)="showList($event.value)" aria-label="Which list" hideSingleSelectionIndicator>
+      <mat-button-toggle value="employees">
+        System employees <span class="inline-ar">الموظفين العاملين</span> <span class="count">{{ active().length }}</span>
+      </mat-button-toggle>
+      <mat-button-toggle value="device">
+        Device users <span class="inline-ar">مسجلين على جهاز البصمة</span> <span class="count" [class.waiting-count]="unknown().length > 0">{{ unknown().length }}</span>
+      </mat-button-toggle>
+    </mat-button-toggle-group>
     <div class="toolbar">
-      <mat-slide-toggle [ngModel]="showLeft()" (ngModelChange)="showLeft.set($event)">Show who has left · عرض من ترك العمل</mat-slide-toggle>
-      @if (departments().length > 1) {
-        <mat-form-field subscriptSizing="dynamic" class="department">
-          <mat-label>Department · القسم</mat-label>
-          <mat-select [ngModel]="department()" (ngModelChange)="department.set($event)" aria-label="Department">
-            <mat-option value="">All departments</mat-option>
-            @for (d of departments(); track d.id) {
-              <mat-option [value]="d.id">{{ d.name }}</mat-option>
-            }
-          </mat-select>
-        </mat-form-field>
+      @if (list() === 'employees') {
+        <mat-slide-toggle [ngModel]="showLeft()" (ngModelChange)="showLeft.set($event)">Show who has left · عرض من ترك العمل</mat-slide-toggle>
+        @if (departments().length > 1) {
+          <mat-form-field subscriptSizing="dynamic" class="department">
+            <mat-label>Department · القسم</mat-label>
+            <mat-select [ngModel]="department()" (ngModelChange)="department.set($event)" aria-label="Department">
+              <mat-option value="">All departments</mat-option>
+              @for (d of departments(); track d.id) {
+                <mat-option [value]="d.id">{{ d.name }}</mat-option>
+              }
+            </mat-select>
+          </mat-form-field>
+        }
       }
       <span class="spacer"></span>
-      <span class="muted">{{ active().length }} employed · {{ payroll() | money }} a month@if (daily()) { · {{ daily() }} on daily wages}</span>
+      @if (list() === 'employees') {
+        <span class="muted">{{ active().length }} employed · {{ payroll() | money }} a month@if (daily()) { · {{ daily() }} on daily wages}</span>
+      }
       <button mat-stroked-button [matMenuTriggerFor]="excel" [disabled]="excelBusy()" aria-label="Excel">
         <mat-icon>table_view</mat-icon> Excel <span class="inline-ar">إكسيل</span>
       </button>
@@ -135,7 +152,7 @@ export class LinkDeviceUserDialog {
     }
     @if (error()) {
       <p class="error">{{ error() }}</p>
-    } @else {
+    } @else if (list() === 'employees') {
       @if (waiting().length) {
         <ul class="waiting">
           @for (w of waiting(); track w.id) {
@@ -230,10 +247,10 @@ export class LinkDeviceUserDialog {
           </tbody>
         </table>
       </div>
-
-      @if (unknown().length) {
-        <section class="on-device" aria-labelledby="on-device-title">
-          <h3 id="on-device-title">On the attendance device, not on the till yet <span class="inline-ar">على جهاز البصمة وليسوا في النظام</span></h3>
+    } @else {
+      <section class="on-device" aria-labelledby="on-device-title">
+        <h3 id="on-device-title">On the attendance device, not on the till yet <span class="inline-ar">على جهاز البصمة وليسوا في النظام</span></h3>
+        @if (unknown().length) {
           <p class="muted small">As the device listed them. Add each as an employee, or give their number to one already here: their punches count from then.</p>
           <div class="table-wrap">
             <table class="grid">
@@ -266,12 +283,49 @@ export class LinkDeviceUserDialog {
               </tbody>
             </table>
           </div>
-        </section>
-      }
+        } @else if (deviceUsers().length) {
+          <p class="muted">Everyone the device has listed is an employee here. Sync device reads it again for anyone new.</p>
+        } @else {
+          <p class="muted">
+            No users read from the attendance device yet. Sync device reads them, as does a device’s “Read its users” on
+            the <a routerLink="/hr/devices">Attendance devices</a> tab.
+          </p>
+        }
+      </section>
     }
   `,
   styleUrl: '../costing/costing.scss',
   styles: `
+    .lists {
+      margin: 0 0 12px;
+      flex-wrap: wrap;
+
+      .count {
+        display: inline-block;
+        min-width: 20px;
+        margin-left: 6px;
+        padding: 0 6px;
+        border-radius: 999px;
+        font: var(--mat-sys-label-small);
+        line-height: 20px;
+        background: var(--mat-sys-surface-container-high);
+      }
+      .waiting-count {
+        background: color-mix(in srgb, var(--till-warn) 30%, transparent);
+      }
+    }
+    /* On a phone, one under the other, each as wide as the page. */
+    @media (max-width: 600px) {
+      .lists {
+        display: flex;
+        flex-direction: column;
+
+        mat-button-toggle + mat-button-toggle {
+          border-left: none;
+          border-top: solid 1px var(--mat-sys-outline);
+        }
+      }
+    }
     .waiting {
       margin: 0 0 12px;
       padding: 0;
@@ -322,7 +376,6 @@ export class LinkDeviceUserDialog {
       min-width: 200px;
     }
     .on-device {
-      margin-top: 24px;
 
       h3 {
         margin: 0;
@@ -357,6 +410,9 @@ export class EmployeesPage {
   protected readonly error = signal<string | null>(null);
   protected readonly canManage = computed(() => this.auth.can(Permissions.HrManage));
   protected readonly showLeft = signal(false);
+  // The list shown: the employees, or the device's users not on the till yet (?view=device).
+  readonly startList = input<string | undefined>(undefined, { alias: 'view' });
+  protected readonly list = signal<EmployeeList>('employees');
 
   protected readonly active = computed(() => this.employees().filter((e) => e.isActive));
   protected readonly shown = computed(() =>
@@ -371,6 +427,10 @@ export class EmployeesPage {
   protected readonly unnumbered = computed(() => this.active().filter((e) => !e.deviceUserId));
 
   constructor() {
+    effect(() => {
+      const asked = this.startList();
+      untracked(() => this.list.set(asked === 'device' ? 'device' : 'employees'));
+    });
     this.destroyRef.onDestroy(() => (this.destroyed = true));
     void this.load();
     void this.approvals.refresh();
@@ -421,7 +481,7 @@ export class EmployeesPage {
         ...(read.length ? [`Synced ${read.join('; ')}.`] : []),
         ...unreached,
         ...(overAdms.length
-          ? [`Asked ${overAdms.map((d) => d.name ?? d.serialNumber).join(', ')} for ${overAdms.length === 1 ? 'its' : 'their'} users over ADMS: they appear below within seconds.`]
+          ? [`Asked ${overAdms.map((d) => d.name ?? d.serialNumber).join(', ')} for ${overAdms.length === 1 ? 'its' : 'their'} users over ADMS: they appear under Device users within seconds.`]
           : []),
       ].join(' ');
       if (!unreached.length) {
@@ -489,6 +549,12 @@ export class EmployeesPage {
     }
   }
 
+  // Kept in the address, so a reload or coming Back shows the same list.
+  protected showList(list: EmployeeList): void {
+    this.list.set(list);
+    void this.router.navigate([], { queryParams: { view: list === 'device' ? 'device' : null }, queryParamsHandling: 'merge', replaceUrl: true });
+  }
+
   protected profile(e: Employee): void {
     void this.router.navigate(['/hr/employees', e.id]);
   }
@@ -511,6 +577,7 @@ export class EmployeesPage {
     await this.open({ employee, departments: this.departments(), canApprove: this.approvals.canApprove(), today: await this.businessDay.today() });
   }
 
+  // Added from the device: the list stays on its users, the one added leaving it.
   protected async addFromDevice(user: DeviceUser): Promise<void> {
     await this.open({
       fromDevice: { name: user.name, deviceUserId: user.deviceUserId },
@@ -570,7 +637,11 @@ export class EmployeesPage {
     const result = await firstValueFrom(
       this.dialog.open<EmployeeDialog, EmployeeDialogData, Employee | ApprovalResult>(EmployeeDialog, { data, width: '620px', maxWidth: '95vw' }).afterClosed(),
     );
-    await this.saved(result, data.employee ? `${result && !isRequested(result) ? result.name : 'The employee'} saved.` : 'Employee added.');
+    const name = result && !isRequested(result) ? result.name : 'The employee';
+    await this.saved(
+      result,
+      data.employee ? `${name} saved.` : data.fromDevice ? `${name} added, with number ${data.fromDevice.deviceUserId} on the device.` : 'Employee added.',
+    );
   }
 
   private async employment(data: EmploymentDialogData): Promise<void> {
@@ -612,6 +683,8 @@ export class EmployeesPage {
     }
   }
 }
+
+type EmployeeList = 'employees' | 'device';
 
 function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;

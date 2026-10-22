@@ -68,7 +68,7 @@ describe('the employees', () => {
     waitingToBeMade: (module: string) => pending().filter((r) => r.module === module && r.action === 'Create'),
   };
 
-  async function render(manage = true) {
+  async function render(manage = true, view?: string) {
     TestBed.configureTestingModule({
       providers: [
         {
@@ -85,6 +85,9 @@ describe('the employees', () => {
       ],
     });
     const fixture = TestBed.createComponent(EmployeesPage);
+    if (view) {
+      fixture.componentRef.setInput('view', view);
+    }
     await fixture.whenStable();
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
@@ -324,7 +327,7 @@ describe('the employees', () => {
       expect(syncDevice).toHaveBeenCalledWith('192.168.1.106', 4370, 0);
       expect(readDeviceUsers).toHaveBeenCalledWith('d1');
       expect(notify.attention).toHaveBeenCalledWith(
-        `${closed.error.errors[0]} Asked Kitchen door for its users over ADMS: they appear below within seconds.`,
+        `${closed.error.errors[0]} Asked Kitchen door for its users over ADMS: they appear under Device users within seconds.`,
       );
       expect(devicesOf).toHaveBeenCalledTimes(2);
       expect(page['unknown']().map((u: DeviceUser) => u.deviceUserId)).toEqual(['31']);
@@ -348,12 +351,50 @@ describe('the employees', () => {
     expect(rows()[0][2]).toBe('Flexible ساعات مرنة');
   });
 
+  it('shows one list at a time, the employees first, each with its count, and keeps the one chosen in the address', async () => {
+    deviceUsers.mockReturnValue(of([deviceUser('12', 'منى'), deviceUser('7', 'Hassan', { employeeId: 'hassan', employeeName: 'Hassan' })]));
+    const { el, refresh } = await render();
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const toggles = () => [...el.querySelectorAll('.lists mat-button-toggle')];
+
+    expect(toggles().map(cell)).toEqual(['System employees الموظفين العاملين 2', 'Device users مسجلين على جهاز البصمة 1']);
+    expect(toggles()[0].classList).toContain('mat-button-toggle-checked');
+    expect(el.querySelectorAll('table.grid tbody tr').length).toBe(2);
+    expect(el.querySelector('.on-device')).toBeNull();
+    expect(el.querySelector('mat-slide-toggle')).not.toBeNull();
+
+    toggles()[1].querySelector('button')!.click();
+    await refresh();
+    expect(navigate).toHaveBeenCalledWith([], { queryParams: { view: 'device' }, queryParamsHandling: 'merge', replaceUrl: true });
+    expect(el.querySelector('.on-device')).not.toBeNull();
+    expect(el.querySelectorAll('.on-device tbody tr').length).toBe(1);
+    expect(el.querySelector('a.name')).toBeNull();
+    // Its filters are the employees'; Sync, Excel and Add employee stay above both.
+    expect(el.querySelector('mat-slide-toggle')).toBeNull();
+    expect([...el.querySelectorAll('.toolbar button')].map(text)).toEqual(['table_view Excel إكسيل', 'sync Sync device مزامنة الجهاز', 'person_add Add employee إضافة موظف']);
+
+    toggles()[0].querySelector('button')!.click();
+    await refresh();
+    expect(navigate).toHaveBeenLastCalledWith([], { queryParams: { view: null }, queryParamsHandling: 'merge', replaceUrl: true });
+    expect(el.querySelector('.on-device')).toBeNull();
+  });
+
+  it('opens on the device’s users when the address asks for them, and says when there are none', async () => {
+    const { el } = await render(true, 'device');
+
+    expect(text(el.querySelector('.on-device p')!)).toBe(
+      'No users read from the attendance device yet. Sync device reads them, as does a device’s “Read its users” on the Attendance devices tab.',
+    );
+    expect(el.querySelector('.on-device a')!.getAttribute('href')).toBe('/hr/devices');
+    expect(el.querySelector('table.grid')).toBeNull();
+  });
+
   it('lists the device’s users nobody has the number of, to add as employees or link to one', async () => {
     deviceUsers.mockReturnValue(of([
       deviceUser('7', 'Hassan', { employeeId: 'hassan', employeeName: 'Hassan' }),
       deviceUser('12', 'منى', { waitingPunches: 40 }),
     ]));
-    const { el, page } = await render();
+    const { el, page, refresh } = await render(true, 'device');
 
     const listed = [...el.querySelectorAll('.on-device tbody tr')];
     expect(listed.map((r) => [...r.querySelectorAll('td')].slice(0, 4).map(cell))).toEqual([['12', 'منى', 'Kitchen door', '40']]);
@@ -362,6 +403,23 @@ describe('the employees', () => {
     await page['addFromDevice'](deviceUser('12', 'منى'));
     expect(open.mock.lastCall![0]).toBe(EmployeeDialog);
     expect(open.mock.lastCall![1].data).toEqual({ fromDevice: { name: 'منى', deviceUserId: '12' }, departments, canApprove: true, today: '2026-10-20' });
+
+    // Added: both lists read again, the page staying on the device's users, the one added gone
+    // from them and on the employees' count.
+    const added = employee('mona2', 'منى', { deviceUserId: '12' });
+    open.mockReturnValue({ afterClosed: () => of(added) });
+    employees.mockReturnValue(of([gone, hassan, mona, added]));
+    deviceUsers.mockReturnValue(of([
+      deviceUser('7', 'Hassan', { employeeId: 'hassan', employeeName: 'Hassan' }),
+      deviceUser('12', 'منى', { employeeId: 'mona2', employeeName: 'منى' }),
+    ]));
+    await page['addFromDevice'](deviceUser('12', 'منى'));
+    await refresh();
+    expect(notify.info).toHaveBeenCalledWith('منى added, with number 12 on the device.');
+    expect(page['list']()).toBe('device');
+    expect(el.querySelectorAll('.on-device tbody tr').length).toBe(0);
+    expect(text(el.querySelector('.on-device p')!)).toBe('Everyone the device has listed is an employee here. Sync device reads it again for anyone new.');
+    expect([...el.querySelectorAll('.lists .count')].map(text)).toEqual(['3', '0']);
 
     // Linked to Mona, employed without a number: saved as she is, with it, her ID card's number and
     // her mobile kept.
