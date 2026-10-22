@@ -36,6 +36,7 @@ describe('the HR navigation', () => {
       ['attendance', 'page'],
       ['payroll', 'page'],
       ['payroll/:employeeId', 'page'],
+      ['advances', 'page'],
       ['corrections', 'page'],
       ['holidays', 'page'],
       ['devices', 'page'],
@@ -44,7 +45,7 @@ describe('the HR navigation', () => {
     expect(find(find(routes, 'financials')!.children, 'advances')!.canActivate?.length).toBe(1);
   });
 
-  it('has a tab each for now, the employees, departments, attendance, corrections, payroll, holidays and devices, counting what waits', async () => {
+  it('has a tab each for now, the employees, departments, attendance, corrections, payroll, advances, holidays and devices, counting what waits', async () => {
     const count = signal(0);
     const refresh = vi.fn();
     TestBed.configureTestingModule({ providers: [provideRouter([]), { provide: CorrectionsCount, useValue: { count, refresh } }] });
@@ -54,7 +55,7 @@ describe('the HR navigation', () => {
     const el = fixture.nativeElement as HTMLElement;
 
     expect(text(el.querySelector('h1')!)).toBe('HR & Payroll الموارد البشرية والرواتب');
-    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('href'))).toEqual(['/now', '/employees', '/departments', '/attendance', '/corrections', '/payroll', '/holidays', '/devices']);
+    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('href'))).toEqual(['/now', '/employees', '/departments', '/attendance', '/corrections', '/payroll', '/advances', '/holidays', '/devices']);
     expect(refresh).toHaveBeenCalled();
     expect(el.querySelector('.count')).toBeNull();
 

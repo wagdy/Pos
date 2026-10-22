@@ -344,6 +344,16 @@ ClosedXML, as the raw materials and prep items imports use, in `Node.Infrastruct
   of it stands.
 - Advances paid to an employee directly (from the daily batch or a Financials voucher) work as
   before. They are listed beside the shares as allocated.
+- **Screens:**
+  - The employee is chosen by typing part of their name or job (`EmployeePicker`), in the daily
+    batch's advance block and the Financials advance voucher. "No one yet" makes the advance a
+    lump sum, and Financials → Advances counts lump sums apart, with a link to HR → Advances.
+  - HR → Advances (السلفيات) has two views. Pending (وضع معلق) shows each lump sum: what is given
+    out and what is left, and its shares, each taken back by a manager. Allocated shows the
+    month's advances off whose pay: paid to them, or a share.
+  - A manager's Distribute dialog has a row an employee, offered only those employed on its day
+    and each once. Split equally shares what is left in whole pounds, the odd ones on the first.
+    It never gives out more than is left, and some may stay for later.
 
 **KPIs:** a finalized month's slips count as its wages (`WagesCost`), on top of what is
 entered. The old "سلفيات" expense item is archived once advances are entered as advances; what

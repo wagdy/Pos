@@ -3,7 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { ErrorStateMatcher } from '@angular/material/core';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
-import { MatSelectModule } from '@angular/material/select';
+import { EmployeePicker } from '../../core/hr/employee-picker';
 import { Employee } from '../../core/hr/hr.api';
 import { FormChecks, FormProblem } from './form-checks';
 
@@ -11,8 +11,9 @@ import { FormChecks, FormProblem } from './form-checks';
 const defaultMatcher = new ErrorStateMatcher();
 
 // An employee's advance (سلفة) paid in the daily batch: out of the safe or the day's takings, as the
-// batch is paid, and off the employee's pay for the month on the payroll. Its id is the advance's,
-// made here: a retry pays once.
+// batch is paid, and off the employee's pay for the month on the payroll. With no employee, it is a
+// lump sum handed out as advances (سلف معلقة), given out to employees on HR → Advances. Its id is
+// the advance's, made here: a retry pays once.
 export interface AdvanceEntry {
   id: string;
   employeeId: string | null;
@@ -24,24 +25,14 @@ export function newAdvance(): AdvanceEntry {
   return { id: crypto.randomUUID(), employeeId: null, amount: null, notes: '' };
 }
 
-// Who is advanced, how much, and a note. Only those employed are offered. Its fields sit in the
-// form around it.
+// Who is advanced (found by typing their name; or no one yet), how much, and a note. Only those
+// employed are offered. Its fields sit in the form around it.
 @Component({
   selector: 'app-advance-fields',
-  imports: [FormsModule, MatFormFieldModule, MatInputModule, MatSelectModule],
+  imports: [EmployeePicker, FormsModule, MatFormFieldModule, MatInputModule],
   template: `
-    <mat-form-field subscriptSizing="dynamic" class="employee">
-      <mat-label>Employee · الموظف</mat-label>
-      <mat-select [(ngModel)]="advance().employeeId" (ngModelChange)="changed.emit()" [aria-label]="label() + ', employee'"
-        [errorStateMatcher]="marked(', employee')">
-        @for (e of employees(); track e.id) {
-          <mat-option [value]="e.id">{{ e.name }} · {{ e.jobTitle }}</mat-option>
-        } @empty {
-          <mat-option disabled>No employees yet: add them under HR &amp; Payroll</mat-option>
-        }
-      </mat-select>
-      <mat-error>{{ said(', employee') }}</mat-error>
-    </mat-form-field>
+    <app-employee-picker [employees]="employees()" [value]="advance().employeeId" (valueChange)="advance().employeeId = $event; changed.emit()"
+      [none]="true" noneLabel="No one yet: give it out on HR → Advances" [ariaLabel]="label() + ', employee'" />
     <mat-form-field subscriptSizing="dynamic" class="amount">
       <mat-label>Amount · المبلغ</mat-label>
       <input matInput type="number" min="0" step="any" [(ngModel)]="advance().amount" (ngModelChange)="changed.emit()" [attr.aria-label]="label() + ', amount'"
@@ -57,9 +48,6 @@ export function newAdvance(): AdvanceEntry {
   styles: `
     :host {
       display: contents;
-    }
-    .employee {
-      min-width: 240px;
     }
     .amount {
       width: 170px;
@@ -86,12 +74,9 @@ export class AdvanceFields {
   }
 }
 
-// What holds an advance up, by its fields: an employee and an amount.
+// What holds an advance up: its amount. No employee is a lump sum, given out later.
 export function advanceProblems(advance: AdvanceEntry, label: string): FormProblem[] {
   const found: FormProblem[] = [];
-  if (!advance.employeeId) {
-    found.push({ where: label, what: 'choose the employee', field: `${label}, employee` });
-  }
   if (!((advance.amount ?? 0) > 0)) {
     found.push({ where: label, what: 'enter the amount', field: `${label}, amount` });
   }

@@ -72,8 +72,12 @@ describe('entering a safe entry', () => {
     expect(text(el)).toContain('It is not an expense: it comes off their pay for the month');
     expect(page['payable']().map((e: Employee) => e.name)).toEqual(['Hassan']);
     page['amount'] = 300;
-    expect(page['problem']()).toBe('Choose the employee.');
-    page['employeeId'] = 'hassan';
+    // No one named: a lump sum handed out as advances, given out on HR → Advances.
+    expect(page['problem']()).toBeNull();
+    expect(text(el)).toContain('A lump sum handed out as advances: a manager gives it out on HR → Advances');
+    page['done']();
+    expect(close.mock.lastCall![0]).toMatchObject({ kind: 'EmployeeAdvance', amount: 300, employeeId: null });
+    page['employeeId'].set('hassan');
     page['done']();
     expect(close.mock.lastCall![0]).toMatchObject({ kind: 'EmployeeAdvance', amount: 300, employeeId: 'hassan', revenueDate: null, date: '2026-10-20' });
 

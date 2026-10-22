@@ -316,7 +316,6 @@ describe('a day’s purchases entered together', () => {
     expect(page['employees']().map((e: Employee) => e.name)).toEqual(['Hassan']);
     expect(page['missing']().map((p: { where: string; what: string }) => `${p.where}: ${p.what}`)).toEqual([
       'Paid: choose how they were paid',
-      'Advance 1: choose the employee',
       'Advance 1: enter the amount',
     ]);
 

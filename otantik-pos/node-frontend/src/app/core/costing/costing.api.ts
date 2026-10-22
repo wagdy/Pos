@@ -951,7 +951,8 @@ export interface PurchaseBatch {
   revenueDate: string | null;
   invoices: { invoiceId: string; supplierId: string | null; supplierInvoiceNumber: string | null; lines: SavePurchaseLine[] }[];
   payments: { transactionId: string; supplierId: string; amount: number; notes: string | null }[];
-  advances?: { transactionId: string; employeeId: string; amount: number; notes: string | null }[];
+  // No employee: advances handed out with no one named, given out on HR → Advances.
+  advances?: { transactionId: string; employeeId: string | null; amount: number; notes: string | null }[];
 }
 
 // A supplier paid in a batch: at once (Applied), or asked of a manager (Requested).
@@ -967,7 +968,7 @@ export interface BatchPaymentMade {
 // An employee's advance paid in a batch: at once (Applied), or asked of a manager (Requested).
 export interface BatchAdvanceMade {
   transactionId: string;
-  employeeId: string;
+  employeeId: string | null;
   employee: string;
   amount: number;
   notes: string | null;
@@ -1964,13 +1965,15 @@ export interface SupplierPaymentRow {
 
 // An employee's advance (سلفة): when and from where it was paid, and the payroll month whose slip
 // deducts it (its first day).
+// No employee and no payroll month: advances handed out with no one named, given out on HR →
+// Advances.
 export interface AdvanceRow {
   id: string;
   date: string;
-  employeeId: string;
+  employeeId: string | null;
   employee: string;
   amount: number;
-  payrollMonth: string;
+  payrollMonth: string | null;
   fromTakingsOf: string | null;
   notes: string | null;
   recordedBy: string;

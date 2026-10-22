@@ -4,6 +4,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { AdvanceRow, CostingApi } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
@@ -14,10 +15,11 @@ import { Treasury, monthBounds } from './financials';
 // Employees' advances (السلفيات): cash advanced to an employee from the safe or a day's takings, a
 // month at a time. Each is owed until the payslip of its payroll month deducts it; one asked for by
 // someone who may not approve is listed as waiting, and no cash has moved. Each employee's total
-// for the month is shown above the list.
+// for the month is shown above the list. One naming no one is a lump sum, given out a share each
+// on HR → Advances: counted apart, and deducted from no one's pay until then.
 @Component({
   selector: 'app-advances-page',
-  imports: [DatePipe, MatButtonModule, MatIconModule, MatProgressBarModule, MatTooltipModule, MoneyPipe],
+  imports: [DatePipe, MatButtonModule, MatIconModule, MatProgressBarModule, MatTooltipModule, MoneyPipe, RouterLink],
   template: `
     <div class="toolbar">
       <button mat-icon-button (click)="move(-1)" aria-label="The month before"><mat-icon>chevron_left</mat-icon></button>
@@ -86,7 +88,13 @@ import { Treasury, monthBounds } from './financials';
                     <div><span class="pending-badge">{{ pendingLabel(asked).en }}<span class="ar">{{ pendingLabel(asked).ar }}</span></span></div>
                   }
                 </td>
-                <td class="nowrap">{{ a.payrollMonth | date: 'MMMM y' }}</td>
+                <td class="nowrap">
+                  @if (a.payrollMonth) {
+                    {{ a.payrollMonth | date: 'MMMM y' }}
+                  } @else {
+                    <a routerLink="/hr/advances">Given out on HR → Advances</a>
+                  }
+                </td>
                 <td class="num">{{ a.amount | money }}</td>
                 <td>{{ a.recordedBy || '—' }}@if (a.approvedBy) {<div class="muted small">approved by {{ a.approvedBy }}</div>}</td>
                 <td class="num">
@@ -169,15 +177,18 @@ export class AdvancesPage {
   protected readonly isThisMonth = computed(() => this.year() === new Date().getFullYear() && this.month() === new Date().getMonth() + 1);
   private readonly standing = computed(() => this.advances().filter((a) => !a.voidedAtUtc));
   protected readonly total = computed(() => this.standing().reduce((sum, a) => sum + a.amount, 0));
-  protected readonly waiting = computed(() => this.approvals.waitingToBeMade('Treasury').filter((r) => r.summary.startsWith('Employee advance')));
+  protected readonly waiting = computed(() =>
+    this.approvals.waitingToBeMade('Treasury').filter((r) => r.summary.startsWith('Employee advance') || r.summary.startsWith('Advances, not given out')),
+  );
 
-  // Each employee's total, largest first.
+  // Each employee's total, largest first; the lump sums not named to anyone together.
   protected readonly byEmployee = computed(() => {
     const totals = new Map<string, { employeeId: string; employee: string; amount: number }>();
     for (const a of this.standing()) {
-      const row = totals.get(a.employeeId) ?? { employeeId: a.employeeId, employee: a.employee, amount: 0 };
+      const key = a.employeeId ?? 'not given out';
+      const row = totals.get(key) ?? { employeeId: key, employee: a.employeeId ? a.employee : 'Not given out yet', amount: 0 };
       row.amount = Math.round((row.amount + a.amount) * 100) / 100;
-      totals.set(a.employeeId, row);
+      totals.set(key, row);
     }
     return [...totals.values()].sort((a, b) => b.amount - a.amount);
   });
@@ -202,7 +213,7 @@ export class AdvancesPage {
 
   protected async voidAdvance(advance: AdvanceRow): Promise<void> {
     const day = new Date(advance.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-    if ((await this.approvals.delete('Treasury', advance.id, `the advance to ${advance.employee} of ${day}`)) === 'Applied') {
+    if ((await this.approvals.delete('Treasury', advance.id, advance.employeeId ? `the advance to ${advance.employee} of ${day}` : `the advances of ${day}, not given out yet`)) === 'Applied') {
       await this.load();
     }
   }

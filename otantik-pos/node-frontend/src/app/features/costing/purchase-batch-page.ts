@@ -164,7 +164,9 @@ const storageKey = 'otantik-till.purchase-batch';
                       <td>{{ adv.notes ?? '—' }}</td>
                       <td class="num">{{ adv.amount | money }}</td>
                       <td>
-                        @if (adv.outcome === 'Applied') {
+                        @if (adv.outcome === 'Applied' && !adv.employeeId) {
+                          Paid; give it out on <a routerLink="/hr/advances">HR → Advances</a><span class="ar">صُرفت، للتوزيع</span>
+                        } @else if (adv.outcome === 'Applied') {
                           Paid, off their pay<span class="ar">صُرفت</span>
                         } @else {
                           Waits for a manager<span class="ar">بانتظار موافقة المدير</span>
@@ -615,7 +617,7 @@ export class PurchaseBatchPage {
             lines: b.editor.toSave(),
           })),
           payments: this.payments().map((p) => ({ transactionId: p.id, supplierId: p.supplierId!, amount: p.amount!, notes: p.notes.trim() || null })),
-          advances: this.advances().map((a) => ({ transactionId: a.id, employeeId: a.employeeId!, amount: a.amount!, notes: a.notes.trim() || null })),
+          advances: this.advances().map((a) => ({ transactionId: a.id, employeeId: a.employeeId, amount: a.amount!, notes: a.notes.trim() || null })),
         }),
       );
       this.posted.set(made);

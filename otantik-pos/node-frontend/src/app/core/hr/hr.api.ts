@@ -283,6 +283,63 @@ export interface AttendanceDevice {
   clockAheadMinutes: number | null;
 }
 
+// HR's advances (السلفيات). Allocated: deducted from an employee's pay of payrollMonth, paid to
+// them (Direct) or their share of advances handed out with no one named (Share).
+export type AdvanceOrigin = 'Direct' | 'Share';
+
+export interface AllocatedAdvance {
+  id: string;
+  origin: AdvanceOrigin;
+  // The safe entry the cash moved with.
+  sourceTransactionId: string;
+  employeeId: string;
+  employee: string;
+  amount: number;
+  date: string;
+  payrollMonth: string;
+  fromTakingsOf: string | null;
+  notes: string | null;
+  recordedBy: string;
+}
+
+export interface AdvanceShare {
+  id: string;
+  employeeId: string;
+  employee: string;
+  amount: number;
+  payrollMonth: string;
+  notes: string | null;
+  allocatedBy: string;
+  allocatedAtUtc: string;
+}
+
+// Advances handed out with no one named (السلفيات المعلقة): how much, how much is given out, what is
+// left, and the shares standing.
+export interface PendingAdvance {
+  id: string;
+  date: string;
+  amount: number;
+  allocated: number;
+  remaining: number;
+  fromTakingsOf: string | null;
+  notes: string | null;
+  recordedBy: string;
+  shares: AdvanceShare[];
+  fullyAllocated: boolean;
+}
+
+export interface AdvancesReport {
+  month: string;
+  allocated: AllocatedAdvance[];
+  pending: PendingAdvance[];
+}
+
+export interface AdvanceShareInput {
+  employeeId: string;
+  amount: number;
+  notes: string | null;
+}
+
 // Employees brought in from Excel: each added, or asked of a manager (requested); the rows
 // skipped and why; the departments the sheet added.
 export interface ImportedEmployee {
@@ -606,6 +663,20 @@ export class HrApi {
 
   saveSettings(policy: AttendancePolicy): Observable<AttendancePolicy> {
     return this.http.put<AttendancePolicy>('/api/hr/settings', policy);
+  }
+
+  // A payroll month's advances, and every lump sum not all given out; given out a share each, or a
+  // share taken back: a manager's.
+  advances(month: string): Observable<AdvancesReport> {
+    return this.http.get<AdvancesReport>('/api/hr/advances', { params: { month } });
+  }
+
+  distributeAdvance(advanceId: string, shares: AdvanceShareInput[]): Observable<PendingAdvance> {
+    return this.http.post<PendingAdvance>(`/api/hr/advances/${advanceId}/distribute`, { shares });
+  }
+
+  takeBackAdvanceShare(shareId: string): Observable<PendingAdvance> {
+    return this.http.post<PendingAdvance>(`/api/hr/advance-shares/${shareId}/take-back`, {});
   }
 
   // Excel: the template to fill in, a filled-in one imported, everyone employed exported, and a

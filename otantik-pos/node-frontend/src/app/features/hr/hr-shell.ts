@@ -7,7 +7,8 @@ import { CorrectionsCount } from './corrections-count';
 // departments, their attendance and its corrections, the monthly payroll, the public holidays,
 // and the attendance devices that send their punches. The Corrections tab counts what waits there
 // for a manager. Managers and accountants (HrView); an accountant's changes go to a manager.
-// Advances are paid in Financials and in the daily batch, from the safe or a day's takings.
+// Advances are paid in Financials and in the daily batch, from the safe or a day's takings; the
+// Advances tab says whose pay each comes off, and gives out those handed out with no one named.
 @Component({
   selector: 'app-hr-shell',
   imports: [MatTabsModule, RouterLink, RouterLinkActive, RouterOutlet],
@@ -65,6 +66,7 @@ export class HrShell {
     { path: 'attendance', en: 'Attendance', ar: 'الحضور والانصراف' },
     { path: 'corrections', en: 'Corrections', ar: 'مراجعة وجزاءات' },
     { path: 'payroll', en: 'Payroll', ar: 'مسير الرواتب' },
+    { path: 'advances', en: 'Advances', ar: 'السلفيات' },
     { path: 'holidays', en: 'Holidays', ar: 'العطلات الرسمية' },
     { path: 'devices', en: 'Attendance devices', ar: 'أجهزة البصمة' },
   ];

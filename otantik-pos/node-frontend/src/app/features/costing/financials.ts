@@ -25,6 +25,7 @@ import {
   safeKindLabels,
 } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
+import { EmployeePicker } from '../../core/hr/employee-picker';
 import { Employee, HrApi } from '../../core/hr/hr.api';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
@@ -118,6 +119,7 @@ const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
 @Component({
   selector: 'app-safe-voucher-dialog',
   imports: [
+    EmployeePicker,
     FormsModule,
     MatButtonModule,
     MatCheckboxModule,
@@ -155,16 +157,11 @@ const sourcesFor: Partial<Record<SafeTransactionKind, FundingSource[]>> = {
           @if (data.kind === 'SalaryPayment' && data.payrollMonth) {
             <p class="wide muted">The pay of {{ monthName(data.payrollMonth) }}, as their finalized payslip says.</p>
           }
-          <mat-form-field class="wide">
-            <mat-label>Employee · الموظف</mat-label>
-            <mat-select [(ngModel)]="employeeId" aria-label="Employee" [disabled]="data.kind === 'SalaryPayment'">
-              @for (e of payable(); track e.id) {
-                <mat-option [value]="e.id">{{ e.name }} <span class="muted">· {{ e.jobTitle }}</span></mat-option>
-              } @empty {
-                <mat-option disabled>No employees yet: add them under HR &amp; Payroll</mat-option>
-              }
-            </mat-select>
-          </mat-form-field>
+          <div class="wide picker">
+            <app-employee-picker [employees]="payable()" [(value)]="employeeId" [disabled]="data.kind === 'SalaryPayment'" [fill]="true"
+              [none]="data.kind === 'EmployeeAdvance'" noneLabel="No one yet: give it out on HR → Advances"
+              [hint]="data.kind === 'EmployeeAdvance' && !employeeId() ? 'A lump sum handed out as advances: a manager gives it out on HR → Advances' : null" />
+          </div>
           <mat-form-field>
             <mat-label>Paid from · يُصرف من</mat-label>
             <mat-select [(ngModel)]="paidFrom" aria-label="Paid from">
@@ -371,7 +368,7 @@ export class SafeVoucherDialog {
   protected source: FundingSource | null = this.sources[0] ?? null;
   protected supplierId: string | null = this.data.supplierId ?? null;
   protected expenseItemId: string | null = null;
-  protected employeeId: string | null = this.data.employeeId ?? null;
+  protected readonly employeeId = signal<string | null>(this.data.employeeId ?? null);
   // An advance's or a salary's: who it is for, and the safe or a day's takings paying it.
   protected readonly forEmployee = this.data.kind === 'EmployeeAdvance' || this.data.kind === 'SalaryPayment';
   protected paidFrom: 'Safe' | 'DayRevenue' = this.data.revenueDate ? 'DayRevenue' : 'Safe';
@@ -386,7 +383,8 @@ export class SafeVoucherDialog {
     SupplierPayment: 'Cash paid to a supplier from the safe, against what the restaurant owes them.',
     InvoicePayment: '',
     EmployeeAdvance:
-      'Cash advanced to an employee (سلفة), from the safe or a day’s takings. It is not an expense: it comes off their pay for the month, on the payroll.',
+      'Cash advanced to an employee (سلفة), from the safe or a day’s takings. It is not an expense: it comes off their pay for the month, on the payroll. ' +
+      'Naming no one makes it a lump sum handed out as advances, given out to employees on HR → Advances.',
     SalaryPayment: 'Cash paid to an employee, from the safe or a day’s takings.',
   }[this.data.kind];
 
@@ -451,7 +449,8 @@ export class SafeVoucherDialog {
       return 'Choose what the expense is.';
     }
     if (this.forEmployee) {
-      if (!this.employeeId) {
+      // An advance may name no one: a lump sum, given out on HR → Advances.
+      if (!this.employeeId() && this.data.kind === 'SalaryPayment') {
         return 'Choose the employee.';
       }
       if (this.paidFrom === 'DayRevenue' && (!this.revenueDate || this.revenueDate > this.date)) {
@@ -495,7 +494,7 @@ export class SafeVoucherDialog {
       notes: this.notes.trim() || null,
       reason: null,
       includesTax: this.data.kind === 'RevenueTransfer' && this.includesTax && this.data.taxPercent != null,
-      employeeId: this.forEmployee ? this.employeeId : null,
+      employeeId: this.forEmployee ? this.employeeId() : null,
       payrollMonth: this.data.kind === 'SalaryPayment' ? (this.data.payrollMonth ?? null) : null,
     };
     this.ref.close(voucher);

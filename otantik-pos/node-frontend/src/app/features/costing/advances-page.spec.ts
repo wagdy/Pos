@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
+import { provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { AdvanceRow, ApprovalRequest, CostingApi } from '../../core/costing/costing.api';
 import { AdvancesPage } from './advances-page';
@@ -8,7 +9,7 @@ import { Treasury } from './financials';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
-function advance(id: string, employeeId: string, employee: string, amount: number, extra: Partial<AdvanceRow> = {}): AdvanceRow {
+function advance(id: string, employeeId: string | null, employee: string, amount: number, extra: Partial<AdvanceRow> = {}): AdvanceRow {
   return {
     id, date: '2026-10-12', employeeId, employee, amount, payrollMonth: '2026-10-01', fromTakingsOf: null, notes: null, recordedBy: 'Omar', approvedBy: null,
     voidedAtUtc: null, voidedBy: null, ...extra,
@@ -30,6 +31,7 @@ describe('employees’ advances', () => {
   async function render() {
     TestBed.configureTestingModule({
       providers: [
+        provideRouter([]),
         { provide: CostingApi, useValue: { advances } },
         { provide: Treasury, useValue: { enter } },
         { provide: Approvals, useValue: approvals },
@@ -63,6 +65,19 @@ describe('employees’ advances', () => {
     expect(text(first.querySelectorAll('td')[2])).toBe('October 2026');
     expect(text(el.querySelectorAll('tbody tr')[1].querySelectorAll('td')[2])).toBe('November 2026');
     expect(el.querySelectorAll('tbody tr')[3].classList).toContain('voided');
+  });
+
+  it('counts a lump sum handed out with no one named apart, given out on HR → Advances', async () => {
+    advances.mockReturnValue(of([
+      advance('a1', 'hassan', 'Hassan', 300),
+      advance('lump', null, 'Not given out yet', 1_000, { payrollMonth: null, fromTakingsOf: '2026-10-12', notes: 'Kitchen' }),
+    ]));
+    const { el } = await render();
+
+    expect([...el.querySelectorAll('.totals .chip')].map(text)).toEqual(['Not given out yet L.E 1,000.00', 'Hassan L.E 300.00']);
+    const lump = el.querySelectorAll('tbody tr')[1];
+    expect(text(lump.querySelectorAll('td')[2])).toBe('Given out on HR → Advances');
+    expect(lump.querySelector('td a')!.getAttribute('href')).toBe('/hr/advances');
   });
 
   it('pays a new one through the safe entry dialog, and voids one as a safe entry is', async () => {
