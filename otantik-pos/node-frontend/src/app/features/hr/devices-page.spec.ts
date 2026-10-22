@@ -14,6 +14,7 @@ const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 const waiting: AttendanceDevice = {
   id: 'd1', serialNumber: 'CQZ7232060112', name: null, isApproved: false, approvedBy: null, approvedAtUtc: null,
   firstSeenAtUtc: '2026-10-20T08:00:00Z', lastSeenAtUtc: '2026-10-20T08:00:00Z', lastAddress: '192.168.1.40', commands: [],
+  lastCalledInAtUtc: '2026-10-20T08:00:00Z', callingIn: true,
 };
 
 function command(extra: Partial<DeviceCommand> = {}): DeviceCommand {
@@ -22,7 +23,9 @@ function command(extra: Partial<DeviceCommand> = {}): DeviceCommand {
     answeredAtUtc: null, returnCode: null, ...extra,
   };
 }
-const approved: AttendanceDevice = { ...waiting, id: 'd2', serialNumber: 'CQZ0000000002', name: 'Kitchen door', isApproved: true, approvedBy: 'Omar' };
+const approved: AttendanceDevice = {
+  ...waiting, id: 'd2', serialNumber: 'CQZ0000000002', name: 'Kitchen door', isApproved: true, approvedBy: 'Omar', lastCalledInAtUtc: null, callingIn: false,
+};
 
 describe('the attendance devices', () => {
   const devices = vi.fn();
@@ -85,6 +88,10 @@ describe('the attendance devices', () => {
     expect(text(rows[0].querySelector('button')!)).toBe('Approve');
     expect(text(rows[1].querySelector('.status')!)).toBe('Approvedمعتمد');
     expect(text(rows[1].querySelectorAll('td')[1].querySelector('.muted')!)).toBe('by Omar');
+    // Whether each calls the till over ADMS, so its punches come as they are made.
+    expect(text(rows[0].querySelector('.adms')!)).toBe('wifi Calling in over ADMS: punches come as they are made');
+    expect(text(rows[1].querySelector('.adms')!)).toBe('wifi_off Not calling in over ADMS: punches come only with Sync');
+    expect(rows[1].querySelector('.adms')!.classList).toContain('bad-text');
   });
 
   it('gives the device this machine’s network address and the device’s own port, when the till has one', async () => {

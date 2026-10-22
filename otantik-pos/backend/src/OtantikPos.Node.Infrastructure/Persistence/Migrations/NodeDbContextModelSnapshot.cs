@@ -595,6 +595,9 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
+                    b.Property<DateTime?>("LastCalledInAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime>("LastSeenAtUtc")
                         .HasColumnType("timestamp with time zone");
 

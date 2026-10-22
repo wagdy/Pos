@@ -1,9 +1,14 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using ClosedXML.Excel;
+using Microsoft.AspNetCore.SignalR.Client;
+using Otantik.SharedKernel.Orders;
+using OtantikPos.Inventory.Application.Hr;
+using OtantikPos.Hr.Domain.Attendance;
 using OtantikPos.Hr.Domain.Employees;
 using OtantikPos.Node.Infrastructure.Excel;
 
@@ -737,7 +742,21 @@ public class HrApiTests
         async Task<Dictionary<string, JsonElement>> Now() => (await Json(await accountant.GetAsync("/api/hr/attendance/now", Cancel)))
             .GetProperty("employees").EnumerateArray().ToDictionary(e => e.GetProperty("employee").GetProperty("name").GetString()!);
 
+        // Whoever sees HR is told each changed card as it changes, over the till's own connection.
+        var pushed = new ConcurrentQueue<EmployeeStatusDto>();
+        await using var hub = await api.ConnectTillAsync(accountant, new ConcurrentQueue<Order>());
+        hub.On<List<EmployeeStatusDto>>("EmployeeStatusChanged", statuses => statuses.ForEach(pushed.Enqueue));
+        async Task<EmployeeStatusDto> Pushed(Guid employee, PresenceState state)
+        {
+            Assert.True(await TestApi.WaitFor(() => Task.FromResult(pushed.Any(s => s.EmployeeId == employee && s.State == state))), $"No {state} pushed for {employee}.");
+            var status = pushed.Last(s => s.EmployeeId == employee && s.State == state);
+            pushed.Clear();
+            return status;
+        }
+
         await Punch(punchedIn);
+        var arrived = await Pushed(hassan, PresenceState.In);
+        Assert.Equal((day, punchedIn.AddTicks(-(punchedIn.Ticks % TimeSpan.TicksPerSecond))), (arrived.Day, arrived.Since));
         var first = await Now();
         Assert.Equal(("In", At(punchedIn), Iso(day)), (first["Hassan"].GetProperty("state").GetString(), first["Hassan"].GetProperty("since").GetString(),
             first["Hassan"].GetProperty("day").GetString()));
@@ -750,7 +769,9 @@ public class HrApiTests
         await Punch(punchedIn.AddMinutes(1));
         Assert.Equal("In", (await Now())["Hassan"].GetProperty("state").GetString());
         await Punch(punchedIn.AddMinutes(5));
+        Assert.Equal(punchedIn.AddMinutes(5).ToString("HH:mm:ss"), (await Pushed(hassan, PresenceState.Left)).Since!.Value.ToString("HH:mm:ss"));
         Assert.Equal(HttpStatusCode.NoContent, (await manager.PutAsJsonAsync($"/api/hr/employees/{mona}/days/{Iso(day)}", new { kind = "DayOff" }, Cancel)).StatusCode);
+        Assert.Equal(DayStatus.DayOff, (await Pushed(mona, PresenceState.Off)).DayStatus);
         var second = await Now();
         Assert.Equal(("Left", At(punchedIn.AddMinutes(5))), (second["Hassan"].GetProperty("state").GetString(), second["Hassan"].GetProperty("since").GetString()));
         Assert.Equal("Off", second["Mona"].GetProperty("state").GetString());
@@ -810,6 +831,8 @@ public class HrApiTests
             sync.GetProperty("users").GetInt32(), sync.GetProperty("usersNotOnTheTill").GetInt32(), sync.GetProperty("punches").GetInt32(), sync.GetProperty("newPunches").GetInt32()));
         var device = (await Json(await manager.GetAsync("/api/hr/devices", Cancel))).EnumerateArray().Single();
         Assert.Equal((true, "127.0.0.1", "Boss"), (device.GetProperty("isApproved").GetBoolean(), device.GetProperty("lastAddress").GetString(), device.GetProperty("approvedBy").GetString()));
+        // Read by the till, it has never called in over ADMS: its punches come only when it is read.
+        Assert.Equal((false, JsonValueKind.Null), (device.GetProperty("callingIn").GetBoolean(), device.GetProperty("lastCalledInAtUtc").ValueKind));
         var users = (await Json(await accountant.GetAsync("/api/hr/device-users", Cancel))).EnumerateArray().ToDictionary(u => u.GetProperty("deviceUserId").GetString()!);
         Assert.Equal(("Hassan", "منى", 1), (users["7"].GetProperty("employeeName").GetString(), users["12"].GetProperty("name").GetString(), users["12"].GetProperty("waitingPunches").GetInt32()));
         var hassanDay = (await Json(await accountant.GetAsync($"/api/hr/attendance?date={Iso(day)}", Cancel))).GetProperty("employees").EnumerateArray()
@@ -855,6 +878,9 @@ public class HrApiTests
         var deviceId = waiting.GetProperty("id").GetGuid();
         Assert.Equal(HttpStatusCode.Forbidden, (await accountant.PostAsJsonAsync($"/api/hr/devices/{deviceId}/approve", new { name = "Door" }, Cancel)).StatusCode);
         await Json(await manager.PostAsJsonAsync($"/api/hr/devices/{deviceId}/approve", new { name = "Kitchen door" }, Cancel));
+
+        // Calling in over ADMS: its punches come as they are made.
+        Assert.Equal((true, true), (waiting.GetProperty("callingIn").GetBoolean(), waiting.GetProperty("lastCalledInAtUtc").ValueKind == JsonValueKind.String));
 
         // Where it reaches the till: no device port here, and this machine's addresses.
         var connection = await Json(await accountant.GetAsync("/api/hr/devices/connection", Cancel));

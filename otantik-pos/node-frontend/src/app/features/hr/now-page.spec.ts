@@ -1,9 +1,9 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { of } from 'rxjs';
+import { Subject, of } from 'rxjs';
 import { AttendanceSignal } from '../../core/hr/attendance-signal';
-import { Department, Employee, HrApi, Presence } from '../../core/hr/hr.api';
+import { AttendanceDevice, Department, Employee, EmployeeStatus, HrApi, Presence } from '../../core/hr/hr.api';
 import { CorrectionsCount } from './corrections-count';
 import { NowPage } from './now-page';
 
@@ -35,16 +35,29 @@ const everyone: Presence[] = [
   presence(employee('ali', 'Ali', 'service', 'Captain'), { state: 'Off', dayStatus: 'Holiday', holidayName: 'Armed Forces Day' }),
 ];
 
+const k40: AttendanceDevice = {
+  id: 'd1', serialNumber: 'GED7234801177', name: 'K40 Pro (192.168.1.8)', isApproved: true, approvedBy: 'Omar', approvedAtUtc: null,
+  firstSeenAtUtc: '', lastSeenAtUtc: '', lastAddress: '192.168.1.8', commands: [], lastCalledInAtUtc: null, callingIn: false,
+};
+
+function pushed(employeeId: string, extra: Partial<EmployeeStatus>): EmployeeStatus {
+  return { employeeId, day: '2026-10-21', state: 'In', since: null, dueAt: '2026-10-21T16:00:00', dayStatus: 'Open', holidayName: null, at: '2026-10-21T16:22:05', ...extra };
+}
+
 describe('who is in now', () => {
   const presenceOf = vi.fn();
-  const punches = { changes: signal(0) };
+  const devices = vi.fn();
+  const punches = { changes: signal(0), statuses: new Subject<EmployeeStatus[]>() };
   const waiting = { count: signal(0), refresh: vi.fn() };
 
   async function render() {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: HrApi, useValue: { presence: presenceOf, departments: () => of(departments) } },
+        {
+          provide: HrApi,
+          useValue: { presence: presenceOf, departments: () => of(departments), devices, deviceConnection: () => of({ devicePort: 5082, addresses: ['192.168.1.57'] }) },
+        },
         { provide: AttendanceSignal, useValue: punches },
         { provide: CorrectionsCount, useValue: waiting },
       ],
@@ -59,6 +72,7 @@ describe('who is in now', () => {
 
   beforeEach(() => {
     presenceOf.mockReset().mockReturnValue(of({ now: '2026-10-21T16:20:00', employees: everyone }));
+    devices.mockReset().mockReturnValue(of([{ ...k40, callingIn: true, lastCalledInAtUtc: '2026-10-21T13:19:50Z' }]));
     waiting.count.set(0);
   });
 
@@ -90,7 +104,51 @@ describe('who is in now', () => {
     expect(sections[0].querySelector('.card')!.getAttribute('href')).toBe('/hr/attendance?employee=hassan&month=2026-10-21');
   });
 
-  it('reads again the moment the till says punches came, and points to what waits on Corrections', async () => {
+  it('changes a pushed card in place, lit up for a moment, without reading the page again', async () => {
+    const { fixture, el } = await render();
+    const card = () => [...el.querySelectorAll('.card')].find((c) => c.textContent!.includes('Omar'))!;
+    expect(card().classList).toContain('late');
+
+    vi.useFakeTimers();
+    try {
+      punches.statuses.next([pushed('omar', { state: 'In', since: '2026-10-21T16:22:00' })]);
+      fixture.detectChanges();
+      expect(presenceOf).toHaveBeenCalledTimes(1);
+      expect([card().classList.contains('in'), card().classList.contains('fresh')]).toEqual([true, true]);
+      expect(parts(card().querySelector('.state')!)).toEqual(['Inموجود', 'since 16:22']);
+      expect(text(el.querySelector('.count.in')!)).toBe('2 inموجود');
+      expect(text(el.querySelector('.toolbar .muted')!)).toBe('As of 16:22 · live');
+
+      vi.advanceTimersByTime(4_000);
+      fixture.detectChanges();
+      expect(card().classList.contains('fresh')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reads the page again for a pushed employee it does not show yet', async () => {
+    await render();
+    punches.statuses.next([pushed('new-hire', {})]);
+    expect(presenceOf).toHaveBeenCalledTimes(2);
+  });
+
+  it('says when the device is not calling in over ADMS, and where to point it', async () => {
+    devices.mockReturnValue(of([k40]));
+    const { el } = await render();
+
+    expect(text(el.querySelector('.quiet')!)).toBe(
+      'wifi_offK40 Pro (192.168.1.8) is not calling in over ADMS: punches reach the till only when someone presses Sync. ' +
+        'On the device, set Cloud Server Setting to 192.168.1.57, port 5082. Attendance devices',
+    );
+    expect(el.querySelector('.quiet a')!.getAttribute('href')).toBe('/hr/devices');
+    TestBed.resetTestingModule();
+
+    devices.mockReturnValue(of([{ ...k40, callingIn: true }]));
+    expect((await render()).el.querySelector('.quiet')).toBeNull();
+  });
+
+  it('reads it all again after the connection was lost, and points to what waits on Corrections', async () => {
     const { fixture, el } = await render();
     expect(presenceOf).toHaveBeenCalledTimes(1);
 

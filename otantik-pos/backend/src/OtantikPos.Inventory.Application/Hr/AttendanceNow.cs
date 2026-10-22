@@ -1,4 +1,5 @@
 using MediatR;
+using Microsoft.Extensions.Logging;
 using OtantikPos.Hr.Domain;
 using OtantikPos.Hr.Domain.Attendance;
 using OtantikPos.Inventory.Application.Approvals;
@@ -10,10 +11,11 @@ namespace OtantikPos.Inventory.Application.Hr;
 // and an early one has begun. Their scans are paired as the timesheet pairs them: an odd number
 // is in, an even one out, as staff forget the device's In and Out keys.
 
-// Told when punches come or change, so the screens showing who is in read it again at once.
+// Told when punches come or a day is put right: the employees it touched, as they stand now, for
+// the screens showing who is in to change their cards at once.
 public interface IAttendanceNotifier
 {
-    Task AttendanceChangedAsync(CancellationToken cancellationToken);
+    Task StatusChangedAsync(IReadOnlyList<EmployeeStatusDto> statuses, CancellationToken cancellationToken);
 }
 
 public enum PresenceState
@@ -41,16 +43,52 @@ public sealed record PresenceDto(
 
 public sealed record PresenceReport(DateTime Now, IReadOnlyList<PresenceDto> Employees);
 
+// One employee's card as it changed: the day it is for them, their state, since when, when their
+// shift starts, and the time it was worked out (At).
+public sealed record EmployeeStatusDto(
+    Guid EmployeeId, DateOnly Day, PresenceState State, DateTime? Since, DateTime? DueAt, DayStatus DayStatus, string? HolidayName, DateTime At)
+{
+    public static EmployeeStatusDto From(PresenceDto p, DateTime at) => new(p.Employee.Id, p.Day, p.State, p.Since, p.DueAt, p.DayStatus, p.HolidayName, at);
+}
+
 public sealed record GetPresenceQuery : IRequest<PresenceReport>;
 
-internal sealed class GetPresenceHandler(IEmployeeRepository employees, Timesheets timesheets, IAttendanceSettings settings, IRecordDescriptions clock)
-    : IRequestHandler<GetPresenceQuery, PresenceReport>
+internal sealed class GetPresenceHandler(Presence presence) : IRequestHandler<GetPresenceQuery, PresenceReport>
 {
-    public async Task<PresenceReport> Handle(GetPresenceQuery request, CancellationToken cancellationToken)
+    public Task<PresenceReport> Handle(GetPresenceQuery request, CancellationToken cancellationToken) => presence.ReadAsync(null, cancellationToken);
+}
+
+// The employees whose punches or days changed, told as they stand now. Never throws: what changed
+// is saved, and a screen that missed it reads again on its minute.
+internal sealed class AttendanceBroadcast(Presence presence, IAttendanceNotifier notifier, ILogger<AttendanceBroadcast> logger)
+{
+    public async Task ChangedAsync(IEnumerable<Guid> employeeIds, CancellationToken cancellationToken)
+    {
+        var ids = employeeIds.ToHashSet();
+        if (ids.Count == 0)
+            return;
+        try
+        {
+            var report = await presence.ReadAsync(ids, cancellationToken);
+            if (report.Employees.Count > 0)
+                await notifier.StatusChangedAsync(report.Employees.Select(p => EmployeeStatusDto.From(p, report.Now)).ToList(), cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Could not work out who is in for the HR screens; they read again within a minute");
+        }
+    }
+}
+
+// Who is in now: everyone employed on their own day, or only some of them.
+internal sealed class Presence(IEmployeeRepository employees, Timesheets timesheets, IAttendanceSettings settings, IRecordDescriptions clock)
+{
+    public async Task<PresenceReport> ReadAsync(IReadOnlySet<Guid>? only, CancellationToken cancellationToken)
     {
         var now = clock.LocalTimeOf(DateTime.UtcNow);
         var policy = await settings.GetAsync(cancellationToken);
-        var people = (await employees.GetAllAsync(cancellationToken)).Where(e => e.IsEmployedOn(Timesheet.DayOf(e, now))).ToList();
+        var people = (await employees.GetAllAsync(cancellationToken))
+            .Where(e => (only is null || only.Contains(e.Id)) && e.IsEmployedOn(Timesheet.DayOf(e, now))).ToList();
         var list = new List<PresenceDto>();
         // Most share a day: read a day's together.
         foreach (var group in people.GroupBy(e => Timesheet.DayOf(e, now)))

@@ -22,13 +22,16 @@ public sealed record DeviceCommandDto(
 }
 
 // A device, and its newest commands, newest first.
+// CallingIn: it has called the till over ADMS in the last few minutes, so its punches come as
+// they are made; otherwise only when the till reads it.
 public sealed record AttendanceDeviceDto(
     Guid Id, string SerialNumber, string? Name, bool IsApproved, string? ApprovedBy, DateTime? ApprovedAtUtc, DateTime FirstSeenAtUtc,
-    DateTime LastSeenAtUtc, string? LastAddress, IReadOnlyList<DeviceCommandDto> Commands)
+    DateTime LastSeenAtUtc, string? LastAddress, IReadOnlyList<DeviceCommandDto> Commands, DateTime? LastCalledInAtUtc, bool CallingIn)
 {
     public static AttendanceDeviceDto From(AttendanceDevice d, IEnumerable<DeviceCommand>? commands = null) => new(
         d.Id, d.SerialNumber, d.Name, d.IsApproved, d.ApprovedBy, d.ApprovedAtUtc, d.FirstSeenAtUtc, d.LastSeenAtUtc, d.LastAddress,
-        (commands ?? []).Where(c => c.DeviceSerialNumber == d.SerialNumber).OrderByDescending(c => c.Number).Select(DeviceCommandDto.From).ToList());
+        (commands ?? []).Where(c => c.DeviceSerialNumber == d.SerialNumber).OrderByDescending(c => c.Number).Select(DeviceCommandDto.From).ToList(),
+        d.LastCalledInAtUtc, d.IsCallingIn(DateTime.UtcNow));
 }
 
 public sealed record GetAttendanceDevicesQuery : IRequest<IReadOnlyList<AttendanceDeviceDto>>;
@@ -79,12 +82,13 @@ internal sealed class DeviceContactHandler(IAttendanceDeviceRepository devices, 
         if (device is null)
         {
             device = AttendanceDevice.FirstSeen(request.SerialNumber, now, request.Address);
+            device.CalledIn(now, request.Address);
             devices.Add(device);
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
-        else if (now - device.LastSeenAtUtc > SeenEvery || (request.Address is not null && request.Address != device.LastAddress))
+        else if (device.LastCalledInAtUtc is not { } last || now - last > SeenEvery || (request.Address is not null && request.Address != device.LastAddress))
         {
-            device.Seen(now, request.Address);
+            device.CalledIn(now, request.Address);
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
@@ -120,7 +124,7 @@ internal sealed class RecordDevicePunchesHandler(IAttendanceDeviceRepository dev
 
         if (!string.IsNullOrWhiteSpace(request.Stamp))
             device.Acknowledge(request.Stamp);
-        device.Seen(DateTime.UtcNow, request.Address);
+        device.CalledIn(DateTime.UtcNow, request.Address);
         var kept = await intake.KeepPunchesAsync(device, request.Punches, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return new DevicePunchesResult(request.Punches.Count, kept);
@@ -130,15 +134,16 @@ internal sealed class RecordDevicePunchesHandler(IAttendanceDeviceRepository dev
 // What a device sends or is read for, kept the same way whichever way it came (ADMS, or port 4370):
 // its punches once each, to whoever has their number; its users by number and name.
 internal sealed class DeviceIntake(
-    IAttendanceLogRepository logs, IEmployeeRepository employees, IDeviceUserRepository users, IUnitOfWork unitOfWork, IAttendanceNotifier notifier)
+    IAttendanceLogRepository logs, IEmployeeRepository employees, IDeviceUserRepository users, IUnitOfWork unitOfWork, AttendanceBroadcast broadcast)
 {
     // Saved this many at a time, so a device back after weeks away is not one long save.
     public const int SaveEvery = 1_000;
 
-    // How many were new; saved, and the screens told when any were.
+    // How many were new; saved, and the screens told whose status they changed.
     public async Task<int> KeepPunchesAsync(AttendanceDevice device, IReadOnlyList<DevicePunch> punches, CancellationToken cancellationToken)
     {
         var kept = 0;
+        var whose = new HashSet<Guid>();
         if (punches.Count > 0)
         {
             var from = punches.Min(p => p.PunchedAt).AddSeconds(-1);
@@ -157,6 +162,8 @@ internal sealed class DeviceIntake(
                     continue;
                 logs.Add(punch);
                 kept++;
+                if (punch.EmployeeId is { } employee)
+                    whose.Add(employee);
                 // A clash with another upload of the same punches comes back as a conflict, and
                 // the whole upload is read again: what was saved is then known, and not kept twice.
                 if (kept % SaveEvery == 0)
@@ -165,8 +172,7 @@ internal sealed class DeviceIntake(
         }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        if (kept > 0)
-            await notifier.AttendanceChangedAsync(cancellationToken);
+        await broadcast.ChangedAsync(whose, cancellationToken);
         return kept;
     }
 

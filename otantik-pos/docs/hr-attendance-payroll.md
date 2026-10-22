@@ -207,6 +207,12 @@ it changes).
 - If the Mac sleeps or the till is down, the device holds its punches and sends them when it
   reconnects.
 
+**Calling in.** A device calling over ADMS asks for commands every few seconds, and its last
+call is kept apart from when the till last read it (`LastCalledInAtUtc`, migration
+`DeviceCallIns`). Quiet for three minutes, it is not reaching the till: its punches come only when
+someone presses Sync. A device added by a Sync has never called in until it is pointed at the
+till.
+
 ## Reaching the device on its own port (built): TCP 4370
 
 Beside ADMS, the till can reach the device itself over ZKTeco's binary protocol on TCP port
@@ -291,7 +297,7 @@ ClosedXML, as the raw materials and prep items imports use, in `Node.Infrastruct
 | `PUT /api/hr/departments/{id}/roles/{roleId}`, `DELETE /api/hr/roles/{roleId}?moveTo=` | A department's role added or renamed, or deleted with its holders moved to another: a manager's |
 | `GET /api/hr/devices/connection` | Where a device reaches the till: the device's own port, when set, and the machine's addresses |
 | `POST /api/hr/devices/test`, `…/sync` | The till reaching the device at `{ address, port = 4370, commKey = 0 }`: whether it answers and what it holds, or its users and whole log read and kept (approved if new): a manager's |
-| `GET /api/hr/attendance/now` | Who is in now: each employee on the day their own window puts now in, in (an odd number of scans), left (even), not arrived, late (their shift and its grace started) or off; the till's hub says `AttendanceChanged` to whoever sees HR as punches come or a day is put right |
+| `GET /api/hr/attendance/now` | Who is in now: each employee on the day their own window puts now in, in (an odd number of scans), left (even), not arrived, late (their shift and its grace started) or off. As punches come or a day is put right, the till's hub sends `EmployeeStatusChanged` to whoever sees HR: each employee it touched, with their day, state, since when, when due, and the time it was worked out |
 | `GET /api/hr/holidays?year=` | A year's public holidays |
 | `POST /api/hr/devices/{id}/read-users`, `…/read-attendance` | A command left for the device: list its users, or send its attendance from a day to another again: a manager's |
 | `GET /api/hr/device-users` | The users the devices listed, who on the till has each number, and the punches waiting under it |
@@ -327,8 +333,11 @@ migration `PublicHolidays`); leave allowances entered by a manager are for anyth
 **Built:**
 - HR & Payroll in the top bar (`hr.view`), opening on Now (الآن): who is in the restaurant right
   now, by department, green in since their last scan, grey left, yellow not arrived yet, red
-  late, and off today; with the counts, and what waits on Corrections. Read again the moment the
-  till says punches came, and every minute for the clock. Each card opens the employee's month.
+  late, and off today; with the counts, and what waits on Corrections. A pushed card changes in
+  place, lit up for a moment, without the page being read again; the whole page is read every
+  minute for the clock, and after the connection was lost. Each card opens the employee's month.
+  When an approved device has not called in over ADMS for three minutes, the page says so (its
+  punches then come only with Sync) and where to point it; the Devices tab says it of each.
   - Employees: add, change, leave and come back; an accountant's go to a manager;
   - Employees also lists the device's users nobody has the number of yet, to add or link;
     the form takes the department, a role of it (picked, or a new one typed), monthly or daily

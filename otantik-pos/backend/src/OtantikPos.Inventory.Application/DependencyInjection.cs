@@ -23,6 +23,8 @@ public static class DependencyInjection
         services.AddScoped<Hr.Timesheets>();
         services.AddScoped<Hr.PayrollWorker>();
         services.AddScoped<Hr.DeviceIntake>();
+        services.AddScoped<Hr.Presence>();
+        services.AddScoped<Hr.AttendanceBroadcast>();
         return services;
     }
 }

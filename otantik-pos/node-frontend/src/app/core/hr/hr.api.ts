@@ -244,6 +244,19 @@ export interface Presence {
   holidayName: string | null;
 }
 
+// One employee's card as punches or a correction changed it, pushed by the till's hub
+// (EmployeeStatusChanged) to whoever sees HR: worked out at `at`.
+export interface EmployeeStatus {
+  employeeId: string;
+  day: string;
+  state: PresenceState;
+  since: string | null;
+  dueAt: string | null;
+  dayStatus: DayStatus;
+  holidayName: string | null;
+  at: string;
+}
+
 export interface PresenceReport {
   now: string;
   employees: Presence[];
@@ -262,6 +275,10 @@ export interface AttendanceDevice {
   lastSeenAtUtc: string;
   lastAddress: string | null;
   commands: DeviceCommand[];
+  // When it last called the till over ADMS; and whether that was in the last few minutes, so its
+  // punches come as they are made. Otherwise they come only when the till reads it (Sync).
+  lastCalledInAtUtc: string | null;
+  callingIn: boolean;
 }
 
 // Employees brought in from Excel: each added, or asked of a manager (requested); the rows

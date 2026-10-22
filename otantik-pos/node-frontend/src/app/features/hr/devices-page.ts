@@ -221,6 +221,14 @@ export class ReadAttendanceDialog {
                   <span class="pending-badge">Waiting for approval<span class="ar">بانتظار الموافقة</span></span>
                   <div class="muted small">Nothing it sends is taken until then</div>
                 }
+                @if (d.callingIn) {
+                  <div class="small adms ok-text"><mat-icon inline>wifi</mat-icon> Calling in over ADMS: punches come as they are made</div>
+                } @else {
+                  <div class="small adms bad-text">
+                    <mat-icon inline>wifi_off</mat-icon> Not calling in over ADMS@if (d.lastCalledInAtUtc) { since {{ d.lastCalledInAtUtc | date: 'd MMM, HH:mm' }}}:
+                    punches come only with Sync
+                  </div>
+                }
               </td>
               <td class="nowrap">{{ d.lastSeenAtUtc | date: 'd MMM, HH:mm' }}</td>
               <td class="num nowrap" [attr.rowspan]="d.isApproved ? 2 : 1">
@@ -409,6 +417,12 @@ export class ReadAttendanceDialog {
       button {
         margin-right: 8px;
       }
+    }
+    .adms {
+      margin-top: 2px;
+    }
+    .ok-text {
+      color: #2e7d32;
     }
     .command {
       font-size: 0.85em;

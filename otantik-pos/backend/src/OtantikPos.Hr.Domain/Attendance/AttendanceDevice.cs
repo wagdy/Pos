@@ -12,6 +12,10 @@ public sealed partial class AttendanceDevice : AggregateRoot
     public const int MaxSerialNumberLength = 64;
     public const int MaxNameLength = 100;
 
+    // Calling the till over ADMS, it asks for commands every few seconds: quiet longer than this,
+    // it is not reaching the till, and its punches come only when the till reads it (port 4370).
+    public static readonly TimeSpan QuietAfter = TimeSpan.FromMinutes(3);
+
     private AttendanceDevice() { }
 
     private AttendanceDevice(string serialNumber, DateTime atUtc, string? address)
@@ -32,6 +36,10 @@ public sealed partial class AttendanceDevice : AggregateRoot
 
     // The network address it last called from, to tell two devices apart in the list.
     public string? LastAddress { get; private set; }
+
+    // When it last called the till over ADMS; never, for one only read over port 4370. Last seen
+    // is either.
+    public DateTime? LastCalledInAtUtc { get; private set; }
 
     public bool IsApproved => ApprovedAtUtc is not null;
     public DateTime? ApprovedAtUtc { get; private set; }
@@ -55,6 +63,16 @@ public sealed partial class AttendanceDevice : AggregateRoot
             LastSeenAtUtc = atUtc;
         LastAddress = Address(address) ?? LastAddress;
     }
+
+    // It called the till over ADMS.
+    public void CalledIn(DateTime atUtc, string? address)
+    {
+        Seen(atUtc, address);
+        if (LastCalledInAtUtc is not { } last || atUtc > last)
+            LastCalledInAtUtc = atUtc;
+    }
+
+    public bool IsCallingIn(DateTime nowUtc) => LastCalledInAtUtc is { } last && nowUtc - last <= QuietAfter;
 
     public void Approve(string name, string approvedBy)
     {

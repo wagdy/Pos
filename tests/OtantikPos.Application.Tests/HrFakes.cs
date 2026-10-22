@@ -191,14 +191,14 @@ public sealed class AttendanceSettingsStore : IAttendanceSettings
     }
 }
 
-// The screens told of punches: counted, for a test to see.
+// The screens told of punches: each employee's status sent, for a test to see.
 public sealed class AttendanceNotifications : IAttendanceNotifier
 {
-    public int Sent { get; private set; }
+    public List<EmployeeStatusDto> Sent { get; } = [];
 
-    public Task AttendanceChangedAsync(CancellationToken cancellationToken)
+    public Task StatusChangedAsync(IReadOnlyList<EmployeeStatusDto> statuses, CancellationToken cancellationToken)
     {
-        Sent++;
+        Sent.AddRange(statuses);
         return Task.CompletedTask;
     }
 }

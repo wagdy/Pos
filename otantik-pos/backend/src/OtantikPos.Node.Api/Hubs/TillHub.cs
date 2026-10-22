@@ -60,19 +60,20 @@ public interface ITillClient
     // everything has printed.
     Task PrintersChanged(IReadOnlyList<PrinterProblem> printers);
 
-    // Punches came from a device, or a day was put right: who is in now is read again.
-    Task AttendanceChanged();
+    // Punches came from a device, or a day was put right: the employees it touched, each card on
+    // who is in now as it stands, to whoever sees HR.
+    Task EmployeeStatusChanged(IReadOnlyList<EmployeeStatusDto> statuses);
 }
 
 // HR's IAttendanceNotifier: to whoever sees HR, after punches are saved.
 internal sealed class AttendanceNotifier(IHubContext<TillHub, ITillClient> hub, ILogger<AttendanceNotifier> logger) : IAttendanceNotifier
 {
     // Never throws: the punches are saved, and a screen that missed it reads again on its minute.
-    public async Task AttendanceChangedAsync(CancellationToken cancellationToken)
+    public async Task StatusChangedAsync(IReadOnlyList<EmployeeStatusDto> statuses, CancellationToken cancellationToken)
     {
         try
         {
-            await hub.Clients.Group(TillHub.Attendance).AttendanceChanged();
+            await hub.Clients.Group(TillHub.Attendance).EmployeeStatusChanged(statuses);
         }
         catch (Exception ex)
         {

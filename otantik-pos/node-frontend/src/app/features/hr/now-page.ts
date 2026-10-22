@@ -1,12 +1,13 @@
 import { DatePipe } from '@angular/common';
 import { Component, DestroyRef, computed, effect, inject, signal, untracked } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { errorMessage } from '../../core/http/error-message';
 import { AttendanceSignal } from '../../core/hr/attendance-signal';
-import { Department, HrApi, Presence, PresenceState, clock } from '../../core/hr/hr.api';
+import { AttendanceDevice, Department, EmployeeStatus, HrApi, Presence, PresenceState, clock } from '../../core/hr/hr.api';
 import { CorrectionsCount } from './corrections-count';
 
 // What a state is called, and its colour.
@@ -21,8 +22,12 @@ const states: Record<PresenceState, { en: string; ar: string; tone: string }> = 
 // Now (الآن): who is in the restaurant right now, from the attendance device's punches as they
 // come in. Each employee on their own day, so a shift past midnight is still on: in (green) since
 // their last scan, left (grey), not arrived yet (yellow) or late (red) once their shift and its
-// grace have started, or off today. Grouped by department, read again the moment the till says
-// punches came, and every minute for the clock.
+// grace have started, or off today. Grouped by department. Each card changes in place the moment
+// the till pushes it (EmployeeStatusChanged), lit up for a moment; the whole page is read again
+// every minute for the clock, and after the connection was lost.
+//
+// Punches come as they are made only while the device calls the till over ADMS: when it has not
+// for a few minutes, the page says so, and where to point it.
 @Component({
   selector: 'app-now-page',
   imports: [DatePipe, MatIconModule, MatProgressBarModule, RouterLink],
@@ -41,6 +46,19 @@ const states: Record<PresenceState, { en: string; ar: string; tone: string }> = 
         <span class="muted small">As of {{ r.now | date: 'HH:mm' }} · live</span>
       }
     </div>
+    @if (quiet().length) {
+      <div class="quiet" role="status">
+        <mat-icon>wifi_off</mat-icon>
+        <span>
+          <strong>{{ quietNames() }} {{ quiet().length === 1 ? 'is' : 'are' }} not calling in over ADMS</strong>@if (quiet()[0].lastCalledInAtUtc; as last) {
+            since {{ last | date: 'd MMM, HH:mm' }}}: punches reach the till only when someone presses Sync.
+          @if (pointAt(); as at) {
+            On the device, set Cloud Server Setting to <strong>{{ at }}</strong>.
+          }
+          <a routerLink="/hr/devices">Attendance devices</a>
+        </span>
+      </div>
+    }
     @if (loading() && !report()) {
       <mat-progress-bar mode="indeterminate" />
     }
@@ -53,7 +71,8 @@ const states: Record<PresenceState, { en: string; ar: string; tone: string }> = 
         <h3>{{ g.name }} <span class="muted small">· {{ g.in }} in of {{ g.people.length }}</span></h3>
         <div class="cards">
           @for (p of g.people; track p.employee.id) {
-            <a class="card" [class]="tone(p)" routerLink="/hr/attendance" [queryParams]="{ employee: p.employee.id, month: p.day }">
+            <a class="card" [class]="tone(p)" [class.fresh]="fresh().has(p.employee.id)" routerLink="/hr/attendance"
+              [queryParams]="{ employee: p.employee.id, month: p.day }">
               <span class="dot" aria-hidden="true"></span>
               <span class="who">
                 <strong>{{ p.employee.name }}</strong>
@@ -195,6 +214,36 @@ const states: Record<PresenceState, { en: string; ar: string; tone: string }> = 
       &.late .label {
         color: var(--late);
       }
+      &.fresh {
+        animation: fresh 4s ease-out;
+      }
+    }
+    @keyframes fresh {
+      from {
+        box-shadow: 0 0 0 3px var(--mat-sys-primary);
+        background: color-mix(in srgb, var(--mat-sys-primary) 12%, var(--mat-sys-surface));
+      }
+      to {
+        box-shadow: 0 0 0 0 transparent;
+      }
+    }
+    .quiet {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin: 8px 0;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--mat-sys-error) 10%, var(--mat-sys-surface));
+      color: var(--mat-sys-on-surface);
+
+      mat-icon {
+        flex: none;
+        color: var(--mat-sys-error);
+      }
+      a {
+        color: var(--mat-sys-primary);
+      }
     }
     .ar {
       direction: rtl;
@@ -220,6 +269,18 @@ export class NowPage {
   private readonly departments = signal<Department[]>([]);
   protected readonly loading = signal(false);
   protected readonly error = signal<string | null>(null);
+  // The cards just changed by a push, lit up for a moment.
+  protected readonly fresh = signal<ReadonlySet<string>>(new Set());
+
+  // Approved devices not calling the till over ADMS, and where they should call.
+  protected readonly quiet = signal<AttendanceDevice[]>([]);
+  protected readonly quietNames = computed(() => this.quiet().map((d) => d.name ?? d.serialNumber).join(', '));
+  private readonly connection = signal<{ devicePort: number | null; addresses: string[] } | null>(null);
+  protected readonly pointAt = computed(() => {
+    const c = this.connection();
+    const port = c?.devicePort ?? (location.port || null);
+    return c?.addresses.length && port ? `${c.addresses.join(' or ')}, port ${port}` : null;
+  });
 
   protected readonly counts = computed(() => {
     const people = this.report()?.employees ?? [];
@@ -261,13 +322,30 @@ export class NowPage {
 
   constructor() {
     const destroyRef = inject(DestroyRef);
-    // The moment the till says punches came; and every minute, for whoever has become late.
+    // Read whole at first, after the connection was lost, and every minute, for whoever has
+    // become late; each card as the till pushes it.
     effect(() => {
       this.punches.changes();
       untracked(() => void this.load());
     });
+    this.punches.statuses.pipe(takeUntilDestroyed()).subscribe((statuses) => this.apply(statuses));
     const minute = setInterval(() => void this.load(), 60_000);
-    destroyRef.onDestroy(() => clearInterval(minute));
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    this.dim = (ids) => {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        this.fresh.update((lit) => new Set([...lit].filter((id) => !ids.includes(id))));
+      }, 4_000);
+      timers.add(timer);
+    };
+    destroyRef.onDestroy(() => {
+      clearInterval(minute);
+      timers.forEach(clearTimeout);
+    });
+    void firstValueFrom(this.api.deviceConnection()).then(
+      (c) => this.connection.set(c),
+      () => undefined,
+    );
     void firstValueFrom(this.api.departments()).then(
       (d) => this.departments.set(d),
       () => undefined,
@@ -305,8 +383,38 @@ export class NowPage {
     }
   }
 
+  private dim: (ids: string[]) => void = () => undefined;
+
+  // Each pushed card changed in place and lit up. One not on the page (just employed) has the
+  // whole page read again.
+  private apply(statuses: EmployeeStatus[]): void {
+    const report = this.report();
+    if (!report || !statuses.length) {
+      return;
+    }
+    const pushed = new Map(statuses.map((s) => [s.employeeId, s]));
+    if ([...pushed.keys()].some((id) => !report.employees.some((p) => p.employee.id === id))) {
+      void this.load();
+      return;
+    }
+    this.report.set({
+      now: statuses.reduce((latest, s) => (s.at > latest ? s.at : latest), report.now),
+      employees: report.employees.map((p) => {
+        const s = pushed.get(p.employee.id);
+        return s ? { ...p, day: s.day, state: s.state, since: s.since, dueAt: s.dueAt, dayStatus: s.dayStatus, holidayName: s.holidayName } : p;
+      }),
+    });
+    const ids = [...pushed.keys()];
+    this.fresh.update((lit) => new Set([...lit, ...ids]));
+    this.dim(ids);
+  }
+
   private async load(): Promise<void> {
     this.loading.set(true);
+    void firstValueFrom(this.api.devices()).then(
+      (devices) => this.quiet.set(devices.filter((d) => d.isApproved && !d.callingIn)),
+      () => undefined,
+    );
     try {
       this.report.set(await firstValueFrom(this.api.presence()));
       this.error.set(null);
