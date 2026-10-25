@@ -71,12 +71,13 @@ approval module `Custody`), the asset locked until decided. A portal PIN is a ma
 | `POST /api/custody/assets/{id}/check-in` | إذن دخول: into an employee's custody (`employeeId`, `date` today unless given, none after it) |
 | `POST /api/custody/assets/{id}/check-out` | إذن خروج: `reason` (Returned, Maintenance, Breakage, Lost, Discarded) and `quantity`; a consumable's breakage makes a breakage entry, said on the voucher (`routedToWaste`, `wasteEntryId`) |
 | `GET /api/custody/vouchers?from=&to=` | The vouchers of those business days (the last 30 unless said) |
-| `GET /api/hr/employees/{id}/custody` | What is in their custody now, and since when |
+| `GET /api/hr/employees/{id}/custody` | What is in their custody now, since when, and what it cost: for whoever sees HR |
 | `PUT /api/hr/employees/{id}/pin`, `DELETE …/pin` | Their portal PIN set (4 to 6 digits; it signs them out and unlocks them) or taken off: a manager's. `EmployeeDto` says `hasPin` and `pinSetAtUtc`, never the PIN |
 | `GET /api/costing/breakage?days=` | Costing → Waste's breakage, beside `…/spoilage` |
 | `PUT /api/inventory/expense-items/{id}/asset-category` | An expense bought as an asset of a custody category, or (none) a plain expense: apart from the item's own form, so an edit there never clears it |
 | `POST /api/auth/employee-login` | `mobileNumber` and `pinCode` → a token with the role `Employee` and their id; one answer, "Wrong mobile number or PIN.", whether or not the number is anyone's |
 | `GET /api/portal/me`, `…/id-photo`, `…/payslip-months`, `…/payslip?month=`, `…/custody` | The portal, read-only, only ever the signed-in employee's own, from their token |
+| `GET /api/portal/custody` | Their custody as `EmployeeCustodyDto`: `name`, `category` and `quantity` alone, those of one name and category (handed over apart) on one line, added up. No cost, id or date: what an asset cost never reaches the employee's phone |
 
 **Bought assets:** posting an invoice (alone or in the daily batch) makes, for each line of an
 expense marked as an asset, an asset in the store of its category: its quantity at the line's
@@ -110,8 +111,9 @@ expense when it was bought, and counting its breaking too would count it twice.
 - **The employee profile**: an Assigned custody card, and a Portal card where a manager sets,
   changes or takes off the PIN and sees the portal's Wi-Fi address.
 - **The portal** (`/portal`, then `/my-profile`): the employee's details and ID card, their
-  payslip (this month's draft, or one before), and their custody; read-only, and nothing of the
-  till's navigation. On a phone: details, custody, then the payslip.
+  payslip (this month's draft, or one before), and their custody as Asset | Category | Quantity,
+  with nothing of what it cost; read-only, and nothing of the till's navigation. On a phone:
+  details, custody, then the payslip.
 
 ## Not decided yet
 

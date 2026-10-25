@@ -1,7 +1,6 @@
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using OtantikPos.Inventory.Application.Custody;
 using OtantikPos.Inventory.Application.Hr;
 using OtantikPos.Node.Api.Auth;
 
@@ -47,7 +46,9 @@ public sealed class PortalController(ISender sender) : ControllerBase
         return await sender.Send(new GetPortalPayslipQuery(Me, asked.Value), cancellationToken) is { } slip ? slip : NotFound();
     }
 
+    // Name, category and how many, never what it cost: the profile's custody, with its costs, is
+    // the managers' (HrController).
     [HttpGet("custody")]
-    public Task<IReadOnlyList<CustodyItemDto>> GetCustody(CancellationToken cancellationToken) =>
-        sender.Send(new GetEmployeeCustodyQuery(Me), cancellationToken);
+    public Task<IReadOnlyList<EmployeeCustodyDto>> GetCustody(CancellationToken cancellationToken) =>
+        sender.Send(new GetPortalCustodyQuery(Me), cancellationToken);
 }

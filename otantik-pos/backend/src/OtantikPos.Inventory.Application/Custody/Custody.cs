@@ -214,7 +214,8 @@ internal sealed class GetAssetHandler(
     }
 }
 
-// What is in an employee's custody now: their profile's, and their portal's.
+// What is in an employee's custody now, with what it cost: their profile's, for whoever sees HR.
+// The portal has its own, without the costs (GetPortalCustodyQuery).
 public sealed record GetEmployeeCustodyQuery(Guid EmployeeId) : IRequest<IReadOnlyList<CustodyItemDto>>;
 
 internal sealed class GetEmployeeCustodyHandler(

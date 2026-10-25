@@ -268,10 +268,30 @@ public class CustodyApiTests
         Assert.Equal(months[2], (await Json(await phone.GetAsync($"/api/portal/payslip?month={months[2]}", Cancel))).GetProperty("month").GetString());
         Assert.Equal(HttpStatusCode.NotFound, (await phone.GetAsync("/api/portal/payslip?month=2020-01-01", Cancel)).StatusCode);
         Assert.Empty((await Json(await phone.GetAsync("/api/portal/custody", Cancel))).EnumerateArray());
-        var plates = Guid.NewGuid();
-        await Json(await manager.PutAsJsonAsync($"/api/custody/assets/{plates}", Asset("Dinner plates", null, 35, 10), Cancel));
-        await Json(await manager.PostAsJsonAsync($"/api/custody/assets/{plates}/check-in", In(hassan), Cancel));
-        Assert.Equal("Dinner plates", (await Json(await phone.GetAsync("/api/portal/custody", Cancel))).EnumerateArray().Single().GetProperty("asset").GetProperty("name").GetString());
+        // Their custody: what each thing is and how many, those of one name and category handed
+        // over apart on one line, and nothing of what any of it cost.
+        var tableware = Guid.NewGuid();
+        await Json(await manager.PutAsJsonAsync($"/api/custody/categories/{tableware}", new { name = "Tableware", isConsumable = true }, Cancel));
+        async Task HandOverAsync(string name, Guid? category, decimal cost, int quantity, Guid to)
+        {
+            var asset = Guid.NewGuid();
+            await Json(await manager.PutAsJsonAsync($"/api/custody/assets/{asset}", Asset(name, category, cost, quantity), Cancel));
+            await Json(await manager.PostAsJsonAsync($"/api/custody/assets/{asset}/check-in", In(to), Cancel));
+        }
+        await HandOverAsync("Dinner plates", tableware, 35, 10, hassan);
+        await HandOverAsync("dinner plates", tableware, 40, 5, hassan);
+        await HandOverAsync("Dinner plates", null, 35, 2, hassan);
+        await HandOverAsync("Knife set", null, 1_250, 1, hassan);
+        await HandOverAsync("Dinner plates", tableware, 35, 7, mona);
+        var custody = await (await phone.GetAsync("/api/portal/custody", Cancel)).Content.ReadAsStringAsync(Cancel);
+        var lines = JsonDocument.Parse(custody).RootElement.EnumerateArray().ToList();
+        (string?, string?, int)[] expected = [("Dinner plates", null, 2), ("Dinner plates", "Tableware", 15), ("Knife set", null, 1)];
+        Assert.Equal(expected, lines.Select(c => (c.GetProperty("name").GetString(), c.GetProperty("category").GetString(), c.GetProperty("quantity").GetInt32())));
+        Assert.All(lines, c => Assert.Equal(["name", "category", "quantity"], c.EnumerateObject().Select(p => p.Name)));
+        Assert.DoesNotContain("cost", custody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("1250", custody);
+        // A manager sees them with their costs, on the profile.
+        Assert.Contains("totalCost", await (await manager.GetAsync($"/api/hr/employees/{hassan}/custody", Cancel)).Content.ReadAsStringAsync(Cancel));
         // Their ID card, once a manager has uploaded it.
         Assert.Equal(HttpStatusCode.NotFound, (await phone.GetAsync("/api/portal/id-photo", Cancel)).StatusCode);
         byte[] jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4];

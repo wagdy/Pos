@@ -193,10 +193,8 @@ describe('an employee’s own profile in the portal', () => {
     months.mockReset().mockReturnValue(of(['2026-10-01', '2026-09-01']));
     payslip.mockReset().mockImplementation((month: string) => of(slip(month, month === '2026-10-01' ? 'Draft' : 'Finalized')));
     custody.mockReset().mockReturnValue(of([
-      {
-        since: '2026-10-20',
-        asset: { id: 'plates', name: 'Dinner plates', categoryName: 'Tableware', quantity: 37, totalCost: 1_295 },
-      },
+      { name: 'Dinner plates', category: 'Tableware', quantity: 37 },
+      { name: 'Knife set', category: null, quantity: 1 },
     ]));
     signOut.mockReset();
   });
@@ -218,7 +216,20 @@ describe('an employee’s own profile in the portal', () => {
     expect(el.querySelector('app-payslip-sheet .total')).not.toBeNull();
     // Read-only: no button on the slip.
     expect(el.querySelectorAll('app-payslip-sheet button').length).toBe(0);
-    expect([...el.querySelectorAll('.custody .held')].map(cell)).toEqual(['Dinner plates × 37 Tableware · since 20 Oct 2026 L.E 1,295.00']);
+    // Name, category and how many: nothing of what it cost.
+    expect(cell(el.querySelector('.custody thead')!)).toBe('Asset الصنف Category الفئة Quantity العدد');
+    expect([...el.querySelectorAll('.custody .held')].map((r) => [...r.querySelectorAll('td')].map(cell))).toEqual([
+      ['Dinner plates', 'Tableware', '37'],
+      ['Knife set', '—', '1'],
+    ]);
+    expect(text(el.querySelector('.custody')!)).not.toContain('L.E');
+  });
+
+  it('says when nothing is in their custody', async () => {
+    custody.mockReturnValue(of([]));
+    const { el } = await render();
+    expect(el.querySelector('.custody table')).toBeNull();
+    expect(text(el.querySelector('.custody p')!)).toBe('Nothing is in your custody.');
   });
 
   it('reads a month before when chosen, and says when there is none', async () => {

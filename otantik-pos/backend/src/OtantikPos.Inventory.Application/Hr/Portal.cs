@@ -153,6 +153,32 @@ internal sealed class GetPortalPayslipHandler(IEmployeeRepository employees, Pay
     }
 }
 
+// What the portal shows of their custody: each thing's name, its category and how many, nothing
+// more. What it cost stays with the managers (the profile's GET /api/hr/employees/{id}/custody):
+// none of it reaches the employee's phone. Assets of the same name and category, handed over at
+// different times, are one line, their quantities added up, under the name the first was given.
+public sealed record EmployeeCustodyDto(string Name, string? Category, int Quantity);
+
+public sealed record GetPortalCustodyQuery(Guid EmployeeId) : IRequest<IReadOnlyList<EmployeeCustodyDto>>;
+
+internal sealed class GetPortalCustodyHandler(IAssetItemRepository assets, IAssetCategoryRepository categories)
+    : IRequestHandler<GetPortalCustodyQuery, IReadOnlyList<EmployeeCustodyDto>>
+{
+    public async Task<IReadOnlyList<EmployeeCustodyDto>> Handle(GetPortalCustodyQuery request, CancellationToken cancellationToken)
+    {
+        var categoryNames = (await categories.GetAllAsync(cancellationToken)).ToDictionary(c => c.Id, c => c.Name);
+        return (await assets.GetInCustodyOfAsync(request.EmployeeId, cancellationToken))
+            .GroupBy(a => (a.CategoryId, Name: a.Name.ToUpperInvariant()))
+            .Select(held => new EmployeeCustodyDto(
+                held.OrderBy(a => a.CreatedAtUtc).First().Name,
+                held.Key.CategoryId is { } id ? categoryNames.GetValueOrDefault(id) : null,
+                held.Sum(a => a.Quantity)))
+            .OrderBy(c => c.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(c => c.Category, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+    }
+}
+
 internal static class Portal
 {
     public const int MonthsShown = 24;

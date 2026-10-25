@@ -7,12 +7,10 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { firstValueFrom } from 'rxjs';
-import { CustodyItem } from '../../core/custody/custody.api';
 import { PayrollSlip, weekDays } from '../../core/hr/hr.api';
 import { errorMessage } from '../../core/http/error-message';
 import { PortalAuth } from '../../core/portal/portal-auth';
-import { PortalApi, PortalProfile } from '../../core/portal/portal.api';
-import { MoneyPipe } from '../../core/ui/money.pipe';
+import { EmployeeCustody, PortalApi, PortalProfile } from '../../core/portal/portal.api';
 import { PaperPreview } from '../costing/invoice-paper';
 import { PayslipSheet } from '../hr/payslip-sheet';
 
@@ -21,7 +19,7 @@ import { PayslipSheet } from '../hr/payslip-sheet';
 // from the list), and what is in their custody.
 @Component({
   selector: 'app-my-profile-page',
-  imports: [DatePipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatProgressBarModule, MatSelectModule, MoneyPipe, PaperPreview, PayslipSheet],
+  imports: [DatePipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatProgressBarModule, MatSelectModule, PaperPreview, PayslipSheet],
   template: `
     <header class="bar">
       <mat-icon>badge</mat-icon>
@@ -91,21 +89,28 @@ import { PayslipSheet } from '../hr/payslip-sheet';
 
         <section class="card custody" aria-label="My custody">
           <h2>My custody <span class="ar">عهدتي</span></h2>
-          @for (c of custody(); track c.asset.id) {
-            <div class="held">
-              <span>
-                <strong>{{ c.asset.name }}</strong> × {{ c.asset.quantity }}
-                <div class="muted small">{{ c.asset.categoryName ?? '' }}@if (c.since) { · since {{ c.since | date: 'd MMM y' }} }</div>
-              </span>
-              @if (c.asset.totalCost !== null) {
-                <span class="amount">{{ c.asset.totalCost | money }}</span>
-              }
-            </div>
-          } @empty {
-            <p class="muted">Nothing is in your custody.</p>
-          }
           @if (custody().length) {
+            <table>
+              <thead>
+                <tr>
+                  <th>Asset<span class="ar">الصنف</span></th>
+                  <th>Category<span class="ar">الفئة</span></th>
+                  <th class="count">Quantity<span class="ar">العدد</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (c of custody(); track c.name + '|' + c.category) {
+                  <tr class="held">
+                    <td>{{ c.name }}</td>
+                    <td [class.muted]="!c.category">{{ c.category ?? '—' }}</td>
+                    <td class="count">{{ c.quantity }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
             <p class="muted small">Keep them safe: what breaks or is lost is checked out by your manager.</p>
+          } @else {
+            <p class="muted">Nothing is in your custody.</p>
           }
         </section>
       }
@@ -209,17 +214,29 @@ import { PayslipSheet } from '../hr/payslip-sheet';
       --paper-height: 220px;
       --paper-min-width: 0;
     }
-    .held {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      padding: 6px 0;
-      border-bottom: 1px solid var(--mat-sys-outline-variant);
+    .custody table {
+      width: 100%;
+      border-collapse: collapse;
 
-      .amount {
-        margin-left: auto;
+      th {
+        text-align: left;
+        font: var(--mat-sys-label-small);
+        color: var(--mat-sys-on-surface-variant);
+        padding: 0 8px 6px 0;
+      }
+      td {
+        padding: 8px 8px 8px 0;
+        border-top: 1px solid var(--mat-sys-outline-variant);
+        overflow-wrap: anywhere;
+      }
+      .count {
+        text-align: right;
+        padding-right: 0;
         white-space: nowrap;
         font-variant-numeric: tabular-nums;
+      }
+      td.count {
+        font-weight: 500;
       }
     }
     .ar {
@@ -256,7 +273,7 @@ export class MyProfilePage {
   protected readonly auth = inject(PortalAuth);
 
   protected readonly profile = signal<PortalProfile | null>(null);
-  protected readonly custody = signal<CustodyItem[]>([]);
+  protected readonly custody = signal<EmployeeCustody[]>([]);
   protected readonly months = signal<string[]>([]);
   protected readonly month = signal('');
   protected readonly slip = signal<PayrollSlip | null>(null);
