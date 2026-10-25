@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCheckboxModule } from '@angular/material/checkbox';
@@ -12,7 +12,7 @@ import { firstValueFrom } from 'rxjs';
 import { AssetCategory, CustodyApi } from '../../core/custody/custody.api';
 import { errorMessage } from '../../core/http/error-message';
 import { NotifyService } from '../../core/ui/notify.service';
-import { Approvals } from '../costing/approvals';
+import { HrAccess } from '../../core/hr/hr-access';
 
 export interface CategoryDialogData {
   category?: AssetCategory;
@@ -153,7 +153,9 @@ export class CategoriesPage {
   private readonly api = inject(CustodyApi);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
-  protected readonly canChange = inject(Approvals).canApprove;
+  private readonly access = inject(HrAccess);
+  // A manager's, or an employee's holding the tab in the portal.
+  protected readonly canChange = computed(() => this.access.canDecide('Custody'));
 
   protected readonly categories = signal<AssetCategory[]>([]);
   protected readonly loading = signal(false);

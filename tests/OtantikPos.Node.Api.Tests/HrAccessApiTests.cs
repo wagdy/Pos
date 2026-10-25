@@ -34,13 +34,13 @@ public class HrAccessApiTests
     private static async Task<DateOnly> TodayAsync(HttpClient client) =>
         DateOnly.Parse((await Json(await client.GetAsync("/api/hr/today", Cancel))).GetProperty("today").GetString()!, CultureInfo.InvariantCulture);
 
-    private static async Task<Guid> HireAsync(HttpClient manager, string name, string mobile)
+    private static async Task<Guid> HireAsync(HttpClient manager, string name, string mobile, string nationalId = "29001010123456")
     {
         var id = Guid.NewGuid();
         await Json(await manager.PutAsJsonAsync($"/api/hr/employees/{id}", new
         {
             requestId = Guid.NewGuid(), name, jobTitle = "Supervisor", monthlySalary = 9_000, shiftStartsAt = "10:00:00", daysOff = Array.Empty<string>(),
-            hiredOn = "2026-01-05", mobileNumber = mobile, nationalId = "29001010123456",
+            hiredOn = "2026-01-05", mobileNumber = mobile, nationalId,
         }, Cancel));
         await Json(await manager.PutAsJsonAsync($"/api/hr/employees/{id}/pin", new { pin = "2468" }, Cancel));
         return id;
@@ -109,11 +109,15 @@ public class HrAccessApiTests
         var departments = (await Json(await phone.GetAsync("/api/hr/departments", Cancel))).EnumerateArray().Single();
         Assert.Equal(JsonValueKind.Null, departments.GetProperty("monthlyCost").ValueKind);
 
-        // What only a manager does stays a manager's.
-        Assert.Equal(HttpStatusCode.Forbidden, (await phone.PostAsJsonAsync("/api/hr/punches", new
+        // What only a manager does otherwise they do at once in their tabs, and in no other: a punch
+        // put right on Attendance, not a holiday. Who holds which tab stays a manager's.
+        var punch = await Json(await phone.PostAsJsonAsync("/api/hr/punches", new
         {
             punchId = Guid.NewGuid(), employeeId = hassan, punchedAt = $"{Iso(today)}T10:00:00", reason = "Forgot",
-        }, Cancel)).StatusCode);
+        }, Cancel));
+        Assert.Equal("Hassan", punch.GetProperty("recordedBy").GetString());
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await phone.PutAsJsonAsync($"/api/hr/holidays/{Guid.NewGuid()}", new { name = "Eid", firstDay = Iso(today), lastDay = Iso(today) }, Cancel)).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await GiveAsync(phone, hassan, "Payroll")).StatusCode);
 
         // With Employees: their pay shows, and a change they make is asked of a manager.
@@ -207,11 +211,13 @@ public class HrAccessApiTests
         Assert.Equal(HttpStatusCode.Forbidden, (await replayed.PostAsJsonAsync("/api/hr/devices/sync", new { address = "192.168.1.106" }, Cancel)).StatusCode);
     }
 
-    // Every HR endpoint says its tabs, so none is open to whoever sees HR at all by being forgotten.
+    // Every HR and Custody endpoint says its tabs, so none is open to whoever sees HR at all by
+    // being forgotten; the PINs and who holds which tab stay a manager's alone.
     [Fact]
     public void Every_hr_endpoint_says_its_tabs()
     {
-        var actions = typeof(HrController).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+        var actions = new[] { typeof(HrController), typeof(CustodyController) }
+            .SelectMany(c => c.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
             .Where(m => m.GetCustomAttributes<Microsoft.AspNetCore.Mvc.Routing.HttpMethodAttribute>().Any())
             .ToList();
         Assert.NotEmpty(actions);
@@ -219,5 +225,91 @@ public class HrAccessApiTests
         // And none of them still asks HrView or HrManage alone, which an accountant would pass whatever their tabs.
         Assert.Empty(actions.Where(m => m.GetCustomAttributes<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>()
             .Any(a => a.Policy is Otantik.SharedKernel.Authorization.Permissions.HrView or Otantik.SharedKernel.Authorization.Permissions.HrManage)).Select(m => m.Name));
+        var managers = actions.Where(m => m.GetCustomAttributes<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>()
+            .Any(a => a.Policy == Otantik.SharedKernel.Authorization.Permissions.ApprovalDecide)).Select(m => m.Name).Order().ToList();
+        Assert.Equal(["GetAccess", "RemovePin", "SetEmployeeAccess", "SetPin", "SetStaffAccess"], managers);
+    }
+
+    [Fact]
+    public async Task In_their_tabs_an_employee_does_at_once_what_only_a_manager_did_and_never_more()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var hassan = await HireAsync(manager, "Hassan", "01012345678");
+        var mona = await HireAsync(manager, "Mona", "01087654321", "29001010654321");
+        var today = await TodayAsync(manager);
+        await Json(await GiveAsync(manager, hassan, "Departments", "Holidays", "Employees"));
+        var (phone, _) = await PortalAsync(api, "01012345678");
+
+        // A department and its role, and a holiday: made at once.
+        var bar = Guid.NewGuid();
+        Assert.Equal("Bar", (await Json(await phone.PutAsJsonAsync($"/api/hr/departments/{bar}", new { name = "Bar" }, Cancel))).GetProperty("name").GetString());
+        await Json(await phone.PutAsJsonAsync($"/api/hr/departments/{bar}/roles/{Guid.NewGuid()}", new { name = "Barista" }, Cancel));
+        var eid = Guid.NewGuid();
+        await Json(await phone.PutAsJsonAsync($"/api/hr/holidays/{eid}", new { name = "Eid", firstDay = Iso(today), lastDay = Iso(today) }, Cancel));
+        Assert.Equal(HttpStatusCode.NoContent, (await phone.DeleteAsync($"/api/hr/holidays/{eid}", Cancel)).StatusCode);
+        Assert.Contains("Bar", await (await manager.GetAsync("/api/hr/departments", Cancel)).Content.ReadAsStringAsync(Cancel));
+
+        // An employee's record still waits for a manager; their portal PIN is a manager's alone.
+        Assert.Equal(HttpStatusCode.Accepted, (await phone.PostAsJsonAsync($"/api/hr/employees/{mona}/leave", new { requestId = Guid.NewGuid(), lastDay = Iso(today) }, Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await phone.PutAsJsonAsync($"/api/hr/employees/{mona}/pin", new { pin = "1111" }, Cancel)).StatusCode);
+        // Not their tabs: refused.
+        Assert.Equal(HttpStatusCode.Forbidden, (await phone.PostAsJsonAsync("/api/hr/punches", new
+        {
+            punchId = Guid.NewGuid(), employeeId = mona, punchedAt = $"{Iso(today)}T10:00:00", reason = "Forgot",
+        }, Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await phone.PostAsync($"/api/hr/payroll/{mona}/finalize?month={Iso(new DateOnly(today.Year, today.Month, 1))}", null, Cancel)).StatusCode);
+
+        // An accountant, holding every tab, is as before: none of a manager's.
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.PutAsJsonAsync($"/api/hr/departments/{Guid.NewGuid()}", new { name = "Grill" }, Cancel)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await accountant.PutAsJsonAsync($"/api/hr/holidays/{Guid.NewGuid()}", new { name = "Eid", firstDay = Iso(today), lastDay = Iso(today) }, Cancel)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Custody_is_a_tab_and_an_employee_holding_it_never_sees_or_loses_what_an_asset_cost()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var hassan = await HireAsync(manager, "Hassan", "01012345678");
+        var tableware = Guid.NewGuid();
+        await Json(await manager.PutAsJsonAsync($"/api/custody/categories/{tableware}", new { name = "Tableware", isConsumable = true }, Cancel));
+        var plates = Guid.NewGuid();
+        await Json(await manager.PutAsJsonAsync($"/api/custody/assets/{plates}", new { requestId = Guid.NewGuid(), name = "Dinner plates", categoryId = tableware, unitCost = 35, quantity = 40 }, Cancel));
+
+        // Without the tab: nothing of it.
+        await Json(await GiveAsync(manager, hassan, "Now"));
+        var (phone, _) = await PortalAsync(api, "01012345678");
+        Assert.Equal(HttpStatusCode.Forbidden, (await phone.GetAsync("/api/custody/assets", Cancel)).StatusCode);
+
+        await Json(await GiveAsync(manager, hassan, "Custody"));
+        (phone, _) = await PortalAsync(api, "01012345678");
+        var listed = await (await phone.GetAsync("/api/custody/assets", Cancel)).Content.ReadAsStringAsync(Cancel);
+        var asset = JsonDocument.Parse(listed).RootElement.EnumerateArray().Single();
+        Assert.Equal(("Dinner plates", 40), (asset.GetProperty("name").GetString(), asset.GetProperty("quantity").GetInt32()));
+        Assert.Equal((JsonValueKind.Null, JsonValueKind.Null), (asset.GetProperty("unitCost").ValueKind, asset.GetProperty("totalCost").ValueKind));
+        Assert.DoesNotContain("1400", listed);
+        // The check-in's list of who to hand it to, without what anyone earns.
+        var roster = JsonDocument.Parse(await (await phone.GetAsync("/api/hr/employees", Cancel)).Content.ReadAsStringAsync(Cancel)).RootElement.EnumerateArray().Single();
+        Assert.Equal(JsonValueKind.Null, roster.GetProperty("monthlySalary").ValueKind);
+
+        // A category at once; an asset's change asked of a manager, and approved it keeps its cost.
+        await Json(await phone.PutAsJsonAsync($"/api/custody/categories/{Guid.NewGuid()}", new { name = "Uniforms", isConsumable = false }, Cancel));
+        var renamed = await phone.PutAsJsonAsync($"/api/custody/assets/{plates}", new
+        {
+            requestId = Guid.NewGuid(), name = "Dinner plates (white)", categoryId = tableware, unitCost = (decimal?)null, quantity = 40, requestReason = "Their colour",
+        }, Cancel);
+        Assert.Equal(HttpStatusCode.Accepted, renamed.StatusCode);
+        var asked = (await Json(renamed)).GetProperty("request").GetProperty("id").GetGuid();
+        await Json(await manager.PostAsJsonAsync($"/api/inventory/approval-requests/{asked}/approve", new { }, Cancel));
+        var kept = (await Json(await manager.GetAsync($"/api/custody/assets/{plates}", Cancel))).GetProperty("asset");
+        Assert.Equal(("Dinner plates (white)", 35m), (kept.GetProperty("name").GetString(), kept.GetProperty("unitCost").GetDecimal()));
+
+        // An accountant has it until a manager ticks their tabs without it.
+        Assert.Equal(HttpStatusCode.OK, (await accountant.GetAsync("/api/custody/assets", Cancel)).StatusCode);
+        await Json(await manager.PutAsJsonAsync($"/api/hr/access/staff/{TestApi.AccountantId}", new { tabs = new[] { "Payroll" } }, Cancel));
+        Assert.Equal(HttpStatusCode.Forbidden, (await accountant.GetAsync("/api/custody/assets", Cancel)).StatusCode);
     }
 }

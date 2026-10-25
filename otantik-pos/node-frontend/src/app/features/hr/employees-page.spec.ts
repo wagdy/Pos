@@ -16,6 +16,7 @@ import { EmployeeDialog } from './employee-dialog';
 import { EmployeeImportDialog } from './employee-import-dialog';
 import { EmployeesPage, LinkDeviceUserDialog } from './employees-page';
 import { EmploymentDialog } from './employment-dialog';
+import { HrAccess } from '../../core/hr/hr-access';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 // A cell's text node by node: the template leaves no space between its elements.
@@ -78,6 +79,7 @@ describe('the employees', () => {
         },
         { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: (p: string) => manage || p !== Permissions.HrManage } },
         { provide: Approvals, useValue: approvals },
+        { provide: HrAccess, useValue: { has: () => true, canDecide: () => approvals.canApprove() } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
         { provide: BusinessDay, useValue: { today: () => Promise.resolve('2026-10-20') } },

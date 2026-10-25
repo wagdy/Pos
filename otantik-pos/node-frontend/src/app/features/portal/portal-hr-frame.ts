@@ -2,11 +2,13 @@ import { Component, inject } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { HrAccess } from '../../core/hr/hr-access';
 import { PortalAuth } from '../../core/portal/portal-auth';
 
-// The HR tabs a manager gave an employee (صلاحيات الموظفين), in the portal: the portal's bar, back
-// to their own profile, and HR & Payroll's own screens under it, only their tabs, nothing else of
-// the till. They work them as an accountant does: what they change waits for a manager.
+// The tabs a manager gave an employee (صلاحيات الموظفين), in the portal: the portal's bar, back to
+// their own profile, and HR & Payroll's or Custody & Assets' own screens under it, only their
+// tabs, nothing else of the till. A change to someone's record, an advance or an asset waits for
+// a manager; the rest of what they change in their tabs is made at once.
 @Component({
   selector: 'app-portal-hr-frame',
   imports: [MatButtonModule, MatIconModule, RouterLink, RouterLinkActive, RouterOutlet],
@@ -15,14 +17,22 @@ import { PortalAuth } from '../../core/portal/portal-auth';
       <mat-icon>badge</mat-icon>
       <nav aria-label="Portal">
         <a mat-button routerLink="/my-profile">My profile <span class="ar">ملفي</span></a>
-        <a mat-button routerLink="/hr" routerLinkActive="active">HR &amp; Payroll <span class="ar">الموارد البشرية</span></a>
+        @if (access.any()) {
+          <a mat-button routerLink="/hr" routerLinkActive="active">HR &amp; Payroll <span class="ar">الموارد البشرية</span></a>
+        }
+        @if (access.has('Custody')) {
+          <a mat-button routerLink="/custody" routerLinkActive="active">Custody <span class="ar">العهدة</span></a>
+        }
       </nav>
       <span class="spacer"></span>
       <span class="who">{{ auth.session()?.name }}</span>
       <button mat-button (click)="auth.signOut()"><mat-icon>logout</mat-icon> Sign out</button>
     </header>
     <main class="page">
-      <p class="muted small note">What you change here goes to a manager to approve. <span class="ar">ما تغيّره هنا يُرسل للمدير للموافقة</span></p>
+      <p class="muted small note">
+        A change to an employee's record, an advance or an asset goes to a manager to approve; the rest of what you change here is made at once.
+        <span class="ar">تعديل بيانات موظف أو سلفة أو أصل يُرسل للمدير للموافقة، وباقي التعديلات تُنفّذ فورًا</span>
+      </p>
       <router-outlet />
     </main>
   `,
@@ -85,4 +95,5 @@ import { PortalAuth } from '../../core/portal/portal-auth';
 })
 export class PortalHrFrame {
   protected readonly auth = inject(PortalAuth);
+  protected readonly access = inject(HrAccess);
 }

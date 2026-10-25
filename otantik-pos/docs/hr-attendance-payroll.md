@@ -396,7 +396,8 @@ migration `PublicHolidays`); leave allowances entered by a manager are for anyth
 ## Employee permissions (صلاحيات الموظفين, built)
 
 Each tab of HR & Payroll is given on its own: Now, Employees, Departments, Attendance,
-Corrections, Payroll, Advances, Holidays and Devices (`HrTabs`, a bit each).
+Corrections, Payroll, Advances, Holidays and Devices, and Custody & Assets beside them
+(`HrTabs`, a bit each).
 
 - **Who holds which.** A manager holds every tab, always, and alone gives them (the
   Permissions tab, `GET /api/hr/access`, `PUT …/access/employees/{id}`,
@@ -406,20 +407,29 @@ Corrections, Payroll, Advances, Holidays and Devices (`HrTabs`, a bit each).
     tabs, under the portal's bar.
   - An accountant holds every tab until a manager ticks theirs (`hr.StaffHrAccess`, by the till
     account's id; the account itself is the delivery system's).
-- **What a tab lets them do.** Whoever holds a tab works it as an accountant does: what they
-  change is asked of a manager (approval). What only a manager does (correcting attendance,
-  finalizing and paying, the devices, the departments, the holidays, PINs) stays a manager's.
+- **What a tab lets them do.**
+  - Someone's record, an advance or an asset: a change goes to a manager to approve, from an
+    employee as from an accountant.
+  - What only a manager does otherwise (punches put right, days marked, suspended days,
+    penalties, departments and roles, holidays, the devices and their settings, incentives
+    and allowances, finalizing a month, giving out and voiding advances, custody categories):
+    an employee holding the tab does it at once, as a manager would (`[HrTab(..., Decide =
+    true)]`). An accountant does not: that stays a manager's for them.
+  - PINs, and who holds which tab, stay a manager's alone. Paying a salary is a safe entry,
+    Financials', which an employee never reaches.
 - **The token.** An employee's portal token names their tabs (`hr_tabs`), which the portal reads
   for its tabs. Every request checks them against the ones they have now, as it checks their
   PIN: a change of tabs signs them out, and they sign in again to see the new ones.
-- **The API.** Each HR endpoint says its tabs (`[HrTab(...)]`; a test keeps every one saying
-  so). The portal's port answers `/api/hr` and `/hr` too, and only an employee's token holds a
-  tab there: a till account's, carried over the Wi-Fi, holds none.
+- **The API.** Each HR and Custody endpoint says its tabs (`[HrTab(...)]`; a test keeps every
+  one saying so). The portal's port answers `/hr`, `/custody`, `/api/hr` and `/api/custody`
+  too, and only an employee's token holds a tab there: a till account's, carried over the
+  Wi-Fi, holds none.
 - **What is never sent.** These come back as null to whoever lacks the tab that shows them:
   - what anyone earns, their national ID, mobile and ID card, without the Employees or Payroll
     tab (Attendance has the names and shifts, not the pay);
   - a department's costs, without Departments, Employees or Payroll;
-  - what an asset cost, to an employee, always.
+  - what an asset cost, to an employee, always: Custody's screens show them none, and an asset
+    they change keeps its cost when they send none.
 - **The screens.** Only the tabs held show, and a typed address opens only those (the first one
   held otherwise). A link to another tab (an employee's month from Corrections, the timesheet
   from a payslip) shows only to whoever holds that tab; the profile's payslip is the Payroll

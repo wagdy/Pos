@@ -10,6 +10,7 @@ import { Approvals } from '../costing/approvals';
 import { BusinessDay, SafeVoucherDialog } from '../costing/financials';
 import { DistributeAdvanceDialog } from './distribute-advance-dialog';
 import { HrAdvancesPage } from './hr-advances-page';
+import { HrAccess } from '../../core/hr/hr-access';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
@@ -61,6 +62,7 @@ describe('HR’s advances', () => {
           },
         },
         { provide: Approvals, useValue: approvals },
+        { provide: HrAccess, useValue: { has: () => true, canDecide: () => approvals.canApprove() } },
         { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: () => true } },
         { provide: BusinessDay, useValue: { today: () => Promise.resolve('2026-10-22') } },
         { provide: NotifyService, useValue: notify },

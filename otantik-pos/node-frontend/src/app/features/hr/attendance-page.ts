@@ -28,7 +28,6 @@ import {
   shift,
 } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
-import { Approvals } from '../costing/approvals';
 import { BusinessDay, isoDay } from '../costing/financials';
 import {
   AddPunchData,
@@ -43,6 +42,7 @@ import {
   ResolveDayDialog,
 } from './attendance-dialogs';
 import { CorrectionsCount } from './corrections-count';
+import { HrAccess } from '../../core/hr/hr-access';
 
 type Mode = 'day' | 'employee';
 
@@ -443,9 +443,9 @@ interface Row {
 })
 export class AttendancePage {
   private readonly api = inject(HrApi);
+  protected readonly access = inject(HrAccess);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
-  private readonly approvals = inject(Approvals);
   private readonly businessDay = inject(BusinessDay);
   private readonly correctionsCount = inject(CorrectionsCount);
 
@@ -463,7 +463,8 @@ export class AttendancePage {
   protected readonly clock = clock;
   protected readonly duration = duration;
   protected readonly shift = shift;
-  protected readonly canCorrect = this.approvals.canApprove;
+  // A manager's, or an employee's holding the tab in the portal.
+  protected readonly canCorrect = computed(() => this.access.canDecide('Attendance'));
 
   protected readonly mode = signal<Mode>('day');
   protected readonly day = signal(isoDay(new Date()));

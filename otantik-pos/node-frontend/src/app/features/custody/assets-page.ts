@@ -65,7 +65,7 @@ function readWithFinancial(): boolean {
       </mat-form-field>
       <mat-slide-toggle [ngModel]="showGone()" (ngModelChange)="showGone.set($event)">Show what is gone · عرض المستبعد</mat-slide-toggle>
       <span class="spacer"></span>
-      <span class="muted">{{ shown().length }} {{ shown().length === 1 ? 'asset' : 'assets' }} · {{ worth() | money }}</span>
+      <span class="muted">{{ shown().length }} {{ shown().length === 1 ? 'asset' : 'assets' }}@if (costsShown()) { · {{ worth() | money }}}</span>
       @if (canManage()) {
         <button mat-flat-button (click)="add()"><mat-icon>add</mat-icon> Add an asset <span class="inline-ar">إضافة أصل</span></button>
       }
@@ -89,8 +89,10 @@ function readWithFinancial(): boolean {
             <tr>
               <th>Asset<span class="ar">الأصل</span></th>
               <th class="num">How many<span class="ar">العدد</span></th>
-              <th class="num">Cost a piece<span class="ar">تكلفة القطعة</span></th>
-              <th class="num">Total<span class="ar">الإجمالي</span></th>
+              @if (costsShown()) {
+                <th class="num">Cost a piece<span class="ar">تكلفة القطعة</span></th>
+                <th class="num">Total<span class="ar">الإجمالي</span></th>
+              }
               <th>Custody<span class="ar">العهدة</span></th>
               <th class="num"><span class="visually-hidden">Actions</span></th>
             </tr>
@@ -112,8 +114,10 @@ function readWithFinancial(): boolean {
                   }
                 </td>
                 <td class="num">{{ a.quantity }}</td>
-                <td class="num">{{ a.unitCost === null ? '—' : (a.unitCost | money) }}</td>
-                <td class="num">{{ a.totalCost === null ? '—' : (a.totalCost | money) }}</td>
+                @if (costsShown()) {
+                  <td class="num">{{ a.unitCost === null ? '—' : (a.unitCost | money) }}</td>
+                  <td class="num">{{ a.totalCost === null ? '—' : (a.totalCost | money) }}</td>
+                }
                 <td>
                   @if (a.employeeName) {
                     <strong>{{ a.employeeName }}</strong>
@@ -137,7 +141,7 @@ function readWithFinancial(): boolean {
               </tr>
             } @empty {
               <tr>
-                <td colspan="6" class="muted">
+                <td [attr.colspan]="costsShown() ? 6 : 4" class="muted">
                   @if (assets().length) {
                     Nothing to show here: try another category, or show what is gone.
                   } @else {
@@ -201,6 +205,8 @@ export class AssetsPage {
   private readonly api = inject(CustodyApi);
   private readonly hr = inject(HrApi);
   private readonly auth = inject(AuthService);
+  // An employee working the tab in the portal is never sent what an asset cost.
+  protected readonly costsShown = computed(() => !this.auth.employeeActing());
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
   private readonly businessDay = inject(BusinessDay);
@@ -243,7 +249,11 @@ export class AssetsPage {
   }
 
   protected async edit(asset: AssetItem): Promise<void> {
-    await this.open(AssetDialog, { asset, categories: this.categories(), canApprove: this.approvals.canApprove() } satisfies AssetDialogData, `${asset.name} saved.`);
+    await this.open(
+      AssetDialog,
+      { asset, categories: this.categories(), canApprove: this.approvals.canApprove(), costHidden: !this.costsShown() } satisfies AssetDialogData,
+      `${asset.name} saved.`,
+    );
   }
 
   protected async checkIn(asset: AssetItem): Promise<void> {

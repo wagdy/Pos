@@ -304,7 +304,8 @@ export class HrAdvancesPage {
   protected readonly access = inject(HrAccess);
   private readonly businessDay = inject(BusinessDay);
 
-  protected readonly canDistribute = this.approvals.canApprove;
+  // A manager's, or an employee's holding the tab in the portal.
+  protected readonly canDistribute = computed(() => this.access.canDecide('Advances'));
   // Whoever manages HR records one; anyone but a manager, for a manager to approve.
   protected readonly canRecord = computed(() => this.auth.can(Permissions.HrManage));
   protected readonly asked = computed(() => this.approvals.waitingToBeMade('Advance'));

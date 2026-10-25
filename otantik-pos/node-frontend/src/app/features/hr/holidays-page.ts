@@ -8,9 +8,9 @@ import { Observable, firstValueFrom } from 'rxjs';
 import { errorMessage } from '../../core/http/error-message';
 import { HrApi, PublicHoliday, dayName, egyptFixedHolidays } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
-import { Approvals } from '../costing/approvals';
 import { BusinessDay } from '../costing/financials';
 import { HolidayAnswer, HolidayData, HolidayDialog } from './holiday-dialog';
+import { HrAccess } from '../../core/hr/hr-access';
 
 // Public holidays (العطلات الرسمية), a year at a time: everyone's paid day off, entered by a
 // manager as the government announces them. Egypt's fixed-date holidays not entered yet are
@@ -141,13 +141,14 @@ import { HolidayAnswer, HolidayData, HolidayDialog } from './holiday-dialog';
 })
 export class HolidaysPage {
   private readonly api = inject(HrApi);
+  protected readonly access = inject(HrAccess);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
-  private readonly approvals = inject(Approvals);
   private readonly businessDay = inject(BusinessDay);
 
   protected readonly dayName = dayName;
-  protected readonly canChange = this.approvals.canApprove;
+  // A manager's, or an employee's holding the tab in the portal.
+  protected readonly canChange = computed(() => this.access.canDecide('Holidays'));
   protected readonly year = signal(new Date().getFullYear());
   protected readonly holidays = signal<PublicHoliday[]>([]);
   protected readonly loading = signal(false);

@@ -449,7 +449,8 @@ export class DevicesPage {
   private readonly destroyRef = inject(DestroyRef);
   private poll: ReturnType<typeof setInterval> | null = null;
 
-  protected readonly canApprove = this.approvals.canApprove;
+  // A manager's, or an employee's holding the tab in the portal.
+  protected readonly canApprove = computed(() => this.access.canDecide('Devices'));
   protected readonly ahead = aheadBy;
   protected readonly devices = signal<AttendanceDevice[]>([]);
   protected readonly loading = signal(true);

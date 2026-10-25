@@ -16,53 +16,74 @@ namespace OtantikPos.Node.Api.Auth;
 // An HR & Payroll endpoint's tabs (صلاحيات الموظفين): whoever holds any of them may call it.
 //   [HrTab(HrTabs.Attendance)]                  seen on the Attendance tab
 //   [HrTab(HrTabs.Employees, Manage = true)]    a change made on the Employees tab
+//   [HrTab(HrTabs.Attendance, Decide = true)]   a change only a manager makes, or an employee
+//                                               holding the tab
 // On the controller, HrTabs.All: someone holding a tab at all.
 //
 // A manager holds every tab. An accountant (HrView) holds those a manager ticked for them, every
-// one until then; a change needs HrManage too. An employee holds those in their portal token,
-// checked against the ones they have now on every request (AuthenticationSetup); they change
-// things as an accountant does, so Manage passes them and the use case asks a manager. What only
-// a manager does keeps its ApprovalDecide policy beside the tab. On the portal's own port only an
-// employee holds any.
+// one until then; a change needs HrManage too, and what only a manager does stays a manager's.
+// An employee holds those in their portal token, checked against the ones they have now on
+// every request (AuthenticationSetup). In their tabs they change what an accountant changes, the
+// use case asking a manager where it asks one (an employee's record, an advance, an asset), and
+// make at once what only a manager makes otherwise (Decide): a punch put right, a department, a
+// holiday. Their PINs and who holds which tab stay a manager's (ApprovalDecide). On the portal's
+// own port only an employee holds any.
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method)]
 public sealed class HrTabAttribute : AuthorizeAttribute
 {
+    private bool manage;
+    private bool decide;
+
     public HrTabAttribute(HrTabs tabs)
     {
         Tabs = tabs;
-        Policy = HrTabPolicy.Name(tabs, manage: false);
+        Policy = HrTabPolicy.Name(new HrTabRequirement(tabs, false, false));
     }
 
     public HrTabs Tabs { get; }
 
     public bool Manage
     {
-        get => HrTabPolicy.IsManage(Policy);
-        set => Policy = HrTabPolicy.Name(Tabs, value);
+        get => manage;
+        set
+        {
+            manage = value;
+            Policy = HrTabPolicy.Name(new HrTabRequirement(Tabs, manage, decide));
+        }
+    }
+
+    public bool Decide
+    {
+        get => decide;
+        set
+        {
+            decide = value;
+            Policy = HrTabPolicy.Name(new HrTabRequirement(Tabs, manage, decide));
+        }
     }
 }
 
-public sealed record HrTabRequirement(HrTabs Tabs, bool Manage) : IAuthorizationRequirement;
+public sealed record HrTabRequirement(HrTabs Tabs, bool Manage, bool Decide = false) : IAuthorizationRequirement;
 
+// "hr-tab:8", "hr-tab:8:manage", "hr-tab:8:decide": the tabs as their number, and what is asked.
 public static class HrTabPolicy
 {
     private const string Prefix = "hr-tab:";
-    private const string ManageSuffix = ":manage";
 
-    public static string Name(HrTabs tabs, bool manage) =>
-        Prefix + ((int)tabs).ToString(CultureInfo.InvariantCulture) + (manage ? ManageSuffix : string.Empty);
-
-    public static bool IsManage(string? name) => name?.EndsWith(ManageSuffix, StringComparison.Ordinal) == true;
+    public static string Name(HrTabRequirement r) =>
+        Prefix + ((int)r.Tabs).ToString(CultureInfo.InvariantCulture) + (r.Manage ? ":manage" : string.Empty) + (r.Decide ? ":decide" : string.Empty);
 
     public static HrTabRequirement? Parse(string name)
     {
         if (!name.StartsWith(Prefix, StringComparison.Ordinal))
             return null;
-        var manage = IsManage(name);
-        var number = name[Prefix.Length..(manage ? name.Length - ManageSuffix.Length : name.Length)];
-        return int.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out var tabs) && tabs != 0
-            ? new HrTabRequirement((HrTabs)tabs & HrTabs.All, manage)
-            : null;
+        var parts = name[Prefix.Length..].Split(':');
+        if (!int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var tabs) || tabs == 0)
+            return null;
+        var asked = parts.Skip(1).ToHashSet(StringComparer.Ordinal);
+        if (asked.Except(["manage", "decide"]).Any())
+            return null;
+        return new HrTabRequirement((HrTabs)tabs & HrTabs.All, asked.Contains("manage"), asked.Contains("decide"));
     }
 }
 
@@ -79,7 +100,7 @@ internal sealed class HrTabHandler(HrCaller caller) : AuthorizationHandler<HrTab
 {
     protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, HrTabRequirement requirement)
     {
-        if (requirement.Manage && !caller.CanManage)
+        if ((requirement.Manage && !caller.CanManage) || (requirement.Decide && !caller.CanDecide))
             return;
         if ((await caller.TabsAsync()).HasAny(requirement.Tabs))
             context.Succeed(requirement);
@@ -97,6 +118,9 @@ public sealed class HrCaller(IHttpContextAccessor accessor, IStaffHrAccessReposi
 
     // An employee changes things as an accountant does; staff need HrManage.
     public bool CanManage => IsEmployee || (StaffClaims.RoleOf(User) is { } role && RolePermissions.Has(role, Permissions.HrManage));
+
+    // What only a manager does, in the tabs: a manager, or an employee in a tab of theirs.
+    public bool CanDecide => IsEmployee || (StaffClaims.RoleOf(User) is { } role && RolePermissions.Has(role, Permissions.ApprovalDecide));
 
     public async Task<HrTabs> TabsAsync(CancellationToken cancellationToken = default) => tabs ??= await ReadAsync(cancellationToken);
 
@@ -128,8 +152,8 @@ internal sealed class HrPrivacyFilter(HrCaller caller, IOptions<JsonOptions> jso
     // A department's or a role's (DepartmentDto, JobRoleDto).
     private static readonly string[] Costs = ["monthlyCost", "dailyCost"];
 
-    // An asset's (AssetItemDto).
-    private static readonly string[] AssetCosts = ["unitCost", "totalCost"];
+    // An asset's (AssetItemDto), and a voucher's (AssetTransactionDto).
+    private static readonly string[] AssetCosts = ["unitCost", "totalCost", "cost"];
 
     public async Task OnResultExecutionAsync(ResultExecutingContext context, ResultExecutionDelegate next)
     {

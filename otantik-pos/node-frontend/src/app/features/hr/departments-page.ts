@@ -13,7 +13,7 @@ import { errorMessage } from '../../core/http/error-message';
 import { Department, HrApi, JobRole } from '../../core/hr/hr.api';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
-import { Approvals } from '../costing/approvals';
+import { HrAccess } from '../../core/hr/hr-access';
 
 const dialogStyles = `
   .wide {
@@ -337,12 +337,13 @@ export class DeleteDepartmentDialog {
 })
 export class DepartmentsPage {
   private readonly api = inject(HrApi);
+  protected readonly access = inject(HrAccess);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
-  private readonly approvals = inject(Approvals);
   private readonly money = new MoneyPipe();
 
-  protected readonly canChange = this.approvals.canApprove;
+  // A manager's, or an employee's holding the tab in the portal.
+  protected readonly canChange = computed(() => this.access.canDecide('Departments'));
   protected readonly departments = signal<Department[]>([]);
   protected readonly loading = signal(false);
   protected readonly error = signal<string | null>(null);

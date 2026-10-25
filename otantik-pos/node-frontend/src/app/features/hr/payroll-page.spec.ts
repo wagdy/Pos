@@ -203,7 +203,7 @@ describe('a payslip', () => {
         { provide: HrApi, useValue: { payroll, finalizeSlip, addAdjustment, voidAdjustment } },
         { provide: MatDialog, useValue: { open } },
         { provide: Treasury, useValue: { enter } },
-        { provide: HrAccess, useValue: { has: () => true } },
+        { provide: HrAccess, useValue: { has: () => true, canDecide: () => canApprove() } },
         { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: () => true } },
         { provide: Approvals, useValue: { canApprove } },
         { provide: NotifyService, useValue: notify },

@@ -1,6 +1,7 @@
-// The tabs of HR & Payroll, as the API names them (صلاحيات الموظفين): what a manager gives an
-// employee, who works them in the portal, or an accountant, on the till. A manager has them all.
-export type HrTab = 'Now' | 'Employees' | 'Departments' | 'Attendance' | 'Corrections' | 'Payroll' | 'Advances' | 'Holidays' | 'Devices';
+// The tabs of HR & Payroll, and Custody & Assets beside them, as the API names them (صلاحيات
+// الموظفين): what a manager gives an employee, who works them in the portal, or an accountant, on
+// the till. A manager has them all.
+export type HrTab = 'Now' | 'Employees' | 'Departments' | 'Attendance' | 'Corrections' | 'Payroll' | 'Advances' | 'Holidays' | 'Devices' | 'Custody';
 
 export interface HrTabInfo {
   tab: HrTab;
@@ -10,7 +11,7 @@ export interface HrTabInfo {
   ar: string;
 }
 
-// In the order they are shown.
+// HR & Payroll's own tabs, in the order they are shown.
 export const hrTabs: readonly HrTabInfo[] = [
   { tab: 'Now', path: 'now', en: 'Now', ar: 'الآن' },
   { tab: 'Employees', path: 'employees', en: 'Employees', ar: 'الموظفين' },
@@ -23,7 +24,13 @@ export const hrTabs: readonly HrTabInfo[] = [
   { tab: 'Devices', path: 'devices', en: 'Attendance devices', ar: 'أجهزة البصمة' },
 ];
 
-export const allHrTabs: readonly HrTab[] = hrTabs.map((t) => t.tab);
+// Custody & Assets, a section of its own (/custody), given as a tab is.
+export const custodyTab: HrTabInfo = { tab: 'Custody', path: '/custody', en: 'Custody & Assets', ar: 'العهدة والأصول' };
+
+// Every tab a manager gives, in the order the Permissions tab shows them.
+export const givenTabs: readonly HrTabInfo[] = [...hrTabs, custodyTab];
+
+export const allHrTabs: readonly HrTab[] = givenTabs.map((t) => t.tab);
 
 // The tabs a list names, in the order shown; anything that is not a tab left out.
 export function hrTabsOf(names: readonly unknown[] | null | undefined): HrTab[] {

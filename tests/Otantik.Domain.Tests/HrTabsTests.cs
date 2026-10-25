@@ -11,7 +11,7 @@ public class HrTabsTests
     [Fact]
     public void Tabs_are_named_one_by_one_in_the_order_shown_and_only_tabs_are_kept()
     {
-        Assert.Equal(9, HrTabSet.Each.Count);
+        Assert.Equal(10, HrTabSet.Each.Count);
         Assert.Equal(HrTabs.All, HrTabSet.Join(HrTabSet.Each));
         Assert.Equal([HrTabs.Now, HrTabs.Attendance, HrTabs.Payroll], HrTabSet.Split(HrTabs.Payroll | HrTabs.Now | HrTabs.Attendance));
         Assert.Empty(HrTabSet.Split(HrTabs.None));

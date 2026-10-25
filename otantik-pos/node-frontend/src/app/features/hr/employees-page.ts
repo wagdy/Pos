@@ -139,7 +139,7 @@ export class LinkDeviceUserDialog {
       </mat-menu>
       <input #picker type="file" hidden accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         (change)="importFile(picker)" aria-label="Excel file to import" />
-      @if (approvals.canApprove()) {
+      @if (access.canDecide('Employees')) {
         <button mat-stroked-button (click)="sync()" [disabled]="syncing()">
           <mat-icon>sync</mat-icon> {{ syncing() ? 'Syncing…' : 'Sync device' }} <span class="inline-ar">مزامنة الجهاز</span>
         </button>

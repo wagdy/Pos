@@ -105,9 +105,12 @@ expense when it was bought, and counting its breaking too would count it twice.
 
 ## The screens
 
-- **Custody & Assets** (HR's view to see it, HR's manage to change it; an accountant's changes go
-  to a manager): Categories, Assets (the Link with Financials toggle adds those bought on
-  invoices, and is remembered), and Vouchers (a breakage that went to Waste says so).
+- **Custody & Assets** (its own tab, the Custody tab: a manager's, an accountant's unless a
+  manager ticked theirs without it, and an employee's given it, in the portal; a change to an
+  asset by anyone but a manager goes to a manager, and an employee holding the tab makes the
+  categories at once): Categories, Assets (the Link with Financials toggle adds those bought on
+  invoices, and is remembered), and Vouchers (a breakage that went to Waste says so). An
+  employee is shown no cost, and an asset they change keeps its own.
 - **Costing → Waste** lists the breakage beside the spoilage; **Costing → Expense items** marks
   an item's purchases as assets of a category.
 - **The employee profile**: an Assigned custody card, and a Portal card where a manager sets,

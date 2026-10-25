@@ -58,6 +58,8 @@ export interface AssetDialogData {
   asset?: AssetItem;
   categories: AssetCategory[];
   canApprove: boolean;
+  // Its cost not known here (an employee in the portal): not asked, and kept as it is.
+  costHidden?: boolean;
 }
 
 // An asset added in HR, or changed: its name, category, a piece's cost and notes. How many there
@@ -89,12 +91,14 @@ export interface AssetDialogData {
             }
           </mat-select>
         </mat-form-field>
-        <mat-form-field>
-          <mat-label>Cost a piece · تكلفة القطعة</mat-label>
-          <input matInput type="number" min="0" step="any" [(ngModel)]="unitCost" [disabled]="bought" aria-label="Cost a piece" />
-          <span matTextSuffix>&nbsp;L.E</span>
-          <mat-hint>{{ bought ? 'As its invoice says' : 'Leave empty when not known' }}</mat-hint>
-        </mat-form-field>
+        @if (!(data.costHidden && data.asset)) {
+          <mat-form-field>
+            <mat-label>Cost a piece · تكلفة القطعة</mat-label>
+            <input matInput type="number" min="0" step="any" [(ngModel)]="unitCost" [disabled]="bought" aria-label="Cost a piece" />
+            <span matTextSuffix>&nbsp;L.E</span>
+            <mat-hint>{{ bought ? 'As its invoice says' : 'Leave empty when not known' }}</mat-hint>
+          </mat-form-field>
+        }
         <mat-form-field>
           <mat-label>How many · العدد</mat-label>
           <input matInput type="number" min="1" step="1" [(ngModel)]="quantity" [disabled]="!!data.asset" aria-label="How many" />
@@ -341,7 +345,9 @@ export interface CheckOutDialogData {
       </div>
       @if (why() === 'Breakage') {
         @if (data.asset.isConsumable) {
-          <p class="waste"><mat-icon>delete_sweep</mat-icon> Goes to Costing → Waste as breakage, at {{ breakageCost() | money }}.</p>
+          <p class="waste">
+            <mat-icon>delete_sweep</mat-icon> Goes to Costing → Waste as breakage@if (data.asset.unitCost !== null) {, at {{ breakageCost() | money }}}.
+          </p>
         } @else {
           <p class="muted small">A fixed asset: broken, it is not the day's waste.</p>
         }

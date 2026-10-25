@@ -80,6 +80,23 @@ const hrChildren: Routes = [
   },
 ];
 
+// Custody & Assets' pages, the till's and the portal's alike.
+const custodyChildren: Routes = [
+  { path: '', pathMatch: 'full', redirectTo: 'assets' },
+  {
+    path: 'categories',
+    loadComponent: () => import('./features/custody/categories-page').then((m) => m.CategoriesPage),
+  },
+  {
+    path: 'assets',
+    loadComponent: () => import('./features/custody/assets-page').then((m) => m.AssetsPage),
+  },
+  {
+    path: 'vouchers',
+    loadComponent: () => import('./features/custody/vouchers-page').then((m) => m.VouchersPage),
+  },
+];
+
 export const routes: Routes = [
   // The employee portal: its own sign-in and the employee's own page, outside the till's shell, so
   // none of the till's navigation is there; the employee's token reaches /api/portal alone.
@@ -103,6 +120,14 @@ export const routes: Routes = [
     canActivate: [portalGuard, hrGuard],
     loadComponent: () => import('./features/portal/portal-hr-frame').then((m) => m.PortalHrFrame),
     children: [{ path: '', loadComponent: () => import('./features/hr/hr-shell').then((m) => m.HrShell), children: hrChildren }],
+  },
+  {
+    // Custody & Assets, given as a tab, in the portal the same way.
+    path: 'custody',
+    canMatch: [portalHrMatch],
+    canActivate: [portalGuard, hrTabGuard('Custody')],
+    loadComponent: () => import('./features/portal/portal-hr-frame').then((m) => m.PortalHrFrame),
+    children: [{ path: '', loadComponent: () => import('./features/custody/custody-shell').then((m) => m.CustodyShell), children: custodyChildren }],
   },
   {
     path: 'sign-in',
@@ -338,25 +363,12 @@ export const routes: Routes = [
         ],
       },
       {
-        // Custody & Assets: what the restaurant owns, and whose custody each thing is in.
+        // Custody & Assets: what the restaurant owns, and whose custody each thing is in; for
+        // whoever holds its tab.
         path: 'custody',
-        canActivate: [permissionGuard(Permissions.HrView)],
+        canActivate: [hrTabGuard('Custody')],
         loadComponent: () => import('./features/custody/custody-shell').then((m) => m.CustodyShell),
-        children: [
-          { path: '', pathMatch: 'full', redirectTo: 'assets' },
-          {
-            path: 'categories',
-            loadComponent: () => import('./features/custody/categories-page').then((m) => m.CategoriesPage),
-          },
-          {
-            path: 'assets',
-            loadComponent: () => import('./features/custody/assets-page').then((m) => m.AssetsPage),
-          },
-          {
-            path: 'vouchers',
-            loadComponent: () => import('./features/custody/vouchers-page').then((m) => m.VouchersPage),
-          },
-        ],
+        children: custodyChildren,
       },
       {
         // HR & Payroll (الموارد البشرية والرواتب): employees, their attendance and their pay; each

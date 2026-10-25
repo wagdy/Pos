@@ -83,6 +83,26 @@ describe('the custody dialogs', () => {
     expect(checkIn.mock.lastCall![1]).toMatchObject({ employeeId: 'mona', date: '2026-10-24', notes: 'New shift' });
   });
 
+  it('asks no cost of one who is not shown it, for an asset there already, and keeps its cost', async () => {
+    const { el, page } = await render(AssetDialog, { asset: asset({ unitCost: null, totalCost: null }), categories: [], canApprove: false, costHidden: true });
+    expect(el.querySelector('input[aria-label="Cost a piece"]')).toBeNull();
+    Object.assign(page, { name: 'Dinner plates (white)', reason: 'Their colour' });
+    await page['save']();
+    expect(saveAsset.mock.lastCall![1]).toMatchObject({ name: 'Dinner plates (white)', unitCost: null });
+
+    TestBed.resetTestingModule();
+    const added = await render(AssetDialog, { categories: [], canApprove: false, costHidden: true });
+    expect(added.el.querySelector('input[aria-label="Cost a piece"]')).not.toBeNull();
+  });
+
+  it('says a breakage goes to Waste without an amount when the cost is not known here', async () => {
+    const { el, page, refresh } = await render(CheckOutDialog, { asset: asset({ unitCost: null, totalCost: null }), today: '2026-10-25', canApprove: false });
+    page['choose']('Breakage');
+    page['quantity'].set(2);
+    await refresh();
+    expect(text(el.querySelector('.waste')!)).toBe('delete_sweep Goes to Costing → Waste as breakage.');
+  });
+
   it('checks out all of it handed back, some of it broken, and says a consumable’s breakage goes to Waste', async () => {
     const { el, page, refresh } = await render(CheckOutDialog, { asset: asset(), today: '2026-10-25', canApprove: true });
     // With someone: handed back to start with, all 40, fixed.

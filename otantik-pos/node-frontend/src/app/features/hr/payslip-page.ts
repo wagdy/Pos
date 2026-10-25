@@ -191,7 +191,8 @@ export class PayslipPage {
   // In an employee's profile, not a page of its own.
   readonly embedded = input(false);
 
-  protected readonly canDecide = this.approvals.canApprove;
+  // A manager's, or an employee's holding the Payroll tab in the portal.
+  protected readonly canDecide = computed(() => this.access.canDecide('Payroll'));
   // Paying is a safe entry, Financials': whoever keeps the books.
   protected readonly canPay = computed(() => this.auth.can(Permissions.InventoryManage));
   protected readonly month = signal(isoDay(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));

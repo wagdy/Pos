@@ -25,8 +25,11 @@ import { PayslipSheet } from '../hr/payslip-sheet';
     <header class="bar">
       <mat-icon>badge</mat-icon>
       <span class="title">My profile <span class="ar">ملفي</span></span>
-      @if (auth.hrTabs().length) {
+      @if (hasHr()) {
         <a mat-button routerLink="/hr" class="hr-link">HR &amp; Payroll <span class="ar">الموارد البشرية</span></a>
+      }
+      @if (auth.hrTabs().includes('Custody')) {
+        <a mat-button routerLink="/custody" class="custody-link">Custody <span class="ar">العهدة</span></a>
       }
       <span class="spacer"></span>
       <span class="who">{{ auth.session()?.name }}</span>
@@ -276,6 +279,8 @@ import { PayslipSheet } from '../hr/payslip-sheet';
 export class MyProfilePage {
   private readonly api = inject(PortalApi);
   protected readonly auth = inject(PortalAuth);
+  // A tab of HR & Payroll's own given them (Custody is a section of its own).
+  protected readonly hasHr = computed(() => this.auth.hrTabs().some((t) => t !== 'Custody'));
 
   protected readonly profile = signal<PortalProfile | null>(null);
   protected readonly custody = signal<EmployeeCustody[]>([]);

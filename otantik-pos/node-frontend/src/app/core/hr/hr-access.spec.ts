@@ -23,7 +23,7 @@ function portalSession(hrTabs: unknown): void {
   );
 }
 
-const all = ['Now', 'Employees', 'Departments', 'Attendance', 'Corrections', 'Payroll', 'Advances', 'Holidays', 'Devices'];
+const all = ['Now', 'Employees', 'Departments', 'Attendance', 'Corrections', 'Payroll', 'Advances', 'Holidays', 'Devices', 'Custody'];
 
 describe('who holds which HR tab', () => {
   beforeEach(() => localStorage.clear());
@@ -43,6 +43,7 @@ describe('who holds which HR tab', () => {
     const access = staff({ hrTabs: all }, () => true);
     expect([...access.tabs()]).toEqual(all);
     expect(access.canGive()).toBe(true);
+    expect(access.canDecide('Holidays')).toBe(true);
     expect(access.first()).toBe('now');
     expect(url(guard(hrGiveGuard))).toBe(true);
   });
@@ -51,6 +52,8 @@ describe('who holds which HR tab', () => {
     const access = staff({ hrTabs: ['Payroll', 'Advances'] }, (p) => p !== Permissions.ApprovalDecide && p !== Permissions.OrderViewOwn);
     expect([...access.tabs()]).toEqual(['Payroll', 'Advances']);
     expect(access.canGive()).toBe(false);
+    // What only a manager does stays a manager's, even in an accountant's own tab.
+    expect(access.canDecide('Payroll')).toBe(false);
     expect(url(guard(hrTabGuard('Payroll')))).toBe(true);
     expect(url(guard(hrTabGuard('Attendance')))).toBe('/hr/payroll');
     expect(url(guard(hrGiveGuard))).toBe('/hr/payroll');
@@ -88,13 +91,15 @@ describe('an employee working their HR tabs in the portal', () => {
     expect(setUp().portal.hrTabs()).toEqual([]);
   });
 
-  it('acts with no one of the till signed in: their tabs, an accountant’s rights in them, and nothing to give', () => {
-    portalSession(['Now', 'Attendance']);
+  it('acts with no one of the till signed in: their tabs, an accountant’s rights in them, a manager’s work in them alone, and nothing to give', () => {
+    portalSession(['Now', 'Attendance', 'Custody']);
     const { auth, access } = setUp();
     expect(auth.employeeActing()).toBe(true);
     expect(TestBed.runInInjectionContext(() => portalHrMatch({}, []))).toBe(true);
-    expect([...access.tabs()]).toEqual(['Now', 'Attendance']);
+    expect([...access.tabs()]).toEqual(['Now', 'Attendance', 'Custody']);
+    expect(access.any()).toBe(true);
     expect(access.canGive()).toBe(false);
+    expect([access.canDecide('Attendance'), access.canDecide('Custody'), access.canDecide('Holidays')]).toEqual([true, true, false]);
     expect(access.outside()).toBe('/my-profile');
     expect([Permissions.HrView, Permissions.HrManage, Permissions.ApprovalDecide, Permissions.InventoryManage, Permissions.OrderCreate].map((p) => auth.can(p))).toEqual([
       true, true, false, false, false,
@@ -131,5 +136,13 @@ describe('an employee working their HR tabs in the portal', () => {
     });
     expect(TestBed.runInInjectionContext(() => portalHrMatch({}, []))).toBe(false);
     expect(TestBed.inject(HrAccess).canGive()).toBe(true);
+  });
+
+  it('counts Custody alone as no tab of HR’s own: HR & Payroll is closed, Custody open', () => {
+    portalSession(['Custody']);
+    const { access } = setUp();
+    expect(access.has('Custody')).toBe(true);
+    expect(access.any()).toBe(false);
+    expect(access.first()).toBeNull();
   });
 });

@@ -1,8 +1,8 @@
 namespace OtantikPos.Hr.Domain.Access;
 
-// The tabs of HR & Payroll (صلاحيات الموظفين), one bit each: what a manager gives an employee, or
-// an accountant, to see and work. A manager has them all, always. Kept as a number, the bits
-// together; sent and read as their names, ["Now", "Attendance"].
+// The tabs of HR & Payroll (صلاحيات الموظفين), one bit each, and Custody & Assets beside them:
+// what a manager gives an employee, or an accountant, to see and work. A manager has them all,
+// always. Kept by name, "Now, Attendance"; sent and read as a list of names, ["Now", "Attendance"].
 [Flags]
 public enum HrTabs
 {
@@ -16,7 +16,8 @@ public enum HrTabs
     Advances = 1 << 6,
     Holidays = 1 << 7,
     Devices = 1 << 8,
-    All = Now | Employees | Departments | Attendance | Corrections | Payroll | Advances | Holidays | Devices,
+    Custody = 1 << 9,
+    All = Now | Employees | Departments | Attendance | Corrections | Payroll | Advances | Holidays | Devices | Custody,
 }
 
 public static class HrTabSet
@@ -25,7 +26,7 @@ public static class HrTabSet
     public static readonly IReadOnlyList<HrTabs> Each =
     [
         HrTabs.Now, HrTabs.Employees, HrTabs.Departments, HrTabs.Attendance, HrTabs.Corrections, HrTabs.Payroll, HrTabs.Advances,
-        HrTabs.Holidays, HrTabs.Devices,
+        HrTabs.Holidays, HrTabs.Devices, HrTabs.Custody,
     ];
 
     // Each tab on its own, for the API: ["Now", "Attendance"].

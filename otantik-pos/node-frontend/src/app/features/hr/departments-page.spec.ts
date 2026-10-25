@@ -6,6 +6,7 @@ import { Department, HrApi } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { DeleteDepartmentDialog, DeleteRoleDialog, DepartmentDialog, DepartmentsPage } from './departments-page';
+import { HrAccess } from '../../core/hr/hr-access';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 // Element by element: the template leaves no space between them.
@@ -34,6 +35,7 @@ describe('the departments', () => {
       providers: [
         { provide: HrApi, useValue: { departments, saveDepartment, deleteDepartment, saveRole, deleteRole } },
         { provide: Approvals, useValue: { canApprove } },
+        { provide: HrAccess, useValue: { has: () => true, canDecide: () => canApprove() } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
       ],

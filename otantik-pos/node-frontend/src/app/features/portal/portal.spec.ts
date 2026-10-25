@@ -12,6 +12,7 @@ import { PayrollSlip } from '../../core/hr/hr.api';
 import { MyProfilePage } from './my-profile-page';
 import { PortalLoginPage } from './portal-login-page';
 import { PortalHrFrame } from './portal-hr-frame';
+import { HrAccess } from '../../core/hr/hr-access';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 // Element by element: the template leaves no space between them.
@@ -268,15 +269,19 @@ describe('the portal around an employee’s HR tabs', () => {
   it('has the portal’s bar, back to their profile, says their changes wait for a manager, and signs out', async () => {
     const signOut = vi.fn();
     TestBed.configureTestingModule({
-      providers: [provideRouter([]), { provide: PortalAuth, useValue: { session: signal({ name: 'Hassan' }), signOut } }],
+      providers: [
+        provideRouter([]),
+        { provide: PortalAuth, useValue: { session: signal({ name: 'Hassan' }), signOut } },
+        { provide: HrAccess, useValue: { any: () => true, has: (t: string) => t === 'Custody' } },
+      ],
     });
     const fixture = TestBed.createComponent(PortalHrFrame);
     fixture.detectChanges();
     await fixture.whenStable();
     const el = fixture.nativeElement as HTMLElement;
-    expect([...el.querySelectorAll('.bar nav a')].map((a) => a.getAttribute('href'))).toEqual(['/my-profile', '/hr']);
+    expect([...el.querySelectorAll('.bar nav a')].map((a) => a.getAttribute('href'))).toEqual(['/my-profile', '/hr', '/custody']);
     expect(text(el.querySelector('.who')!)).toBe('Hassan');
-    expect(text(el.querySelector('.note')!)).toContain('goes to a manager to approve');
+    expect(text(el.querySelector('.note')!)).toContain('goes to a manager to approve; the rest of what you change here is made at once');
     expect(el.querySelector('app-shell, mat-toolbar')).toBeNull();
     (el.querySelector('.bar button') as HTMLElement).click();
     expect(signOut).toHaveBeenCalled();

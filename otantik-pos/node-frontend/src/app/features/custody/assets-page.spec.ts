@@ -49,12 +49,12 @@ describe('the assets', () => {
     pendingFor: (id: string) => pending().find((r) => r.recordId === id),
   };
 
-  async function render(manage = true) {
+  async function render(manage = true, employee = false) {
     TestBed.configureTestingModule({
       providers: [
         { provide: CustodyApi, useValue: { assets, categories: () => of([tableware, devices]) } },
         { provide: HrApi, useValue: { employees } },
-        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: (p: string) => manage || p !== Permissions.HrManage } },
+        { provide: AuthService, useValue: { employeeActing: () => employee, me: () => null, can: (p: string) => manage || p !== Permissions.HrManage } },
         { provide: Approvals, useValue: approvals },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
@@ -152,7 +152,7 @@ describe('the assets', () => {
     open.mockReturnValue({ afterClosed: () => of(undefined) });
     await page['edit'](plates);
     expect(open.mock.lastCall![0]).toBe(AssetDialog);
-    expect(open.mock.lastCall![1].data).toEqual({ asset: plates, categories: [tableware, devices], canApprove: true });
+    expect(open.mock.lastCall![1].data).toEqual({ asset: plates, categories: [tableware, devices], canApprove: true, costHidden: false });
     expect(assets.mock.calls.length).toBe(reads);
 
     page['history'](plates);
@@ -172,5 +172,17 @@ describe('the assets', () => {
     const viewer = await render(false);
     expect([...viewer.el.querySelectorAll('tbody button')].map(text)).toEqual(['history', 'history']);
     expect([...viewer.el.querySelectorAll('.toolbar button')].map(text).some((t) => t.includes('Add an asset'))).toBe(false);
+  });
+
+  it('shows an employee working the tab in the portal no costs, and asks none of them for an asset they change', async () => {
+    assets.mockReturnValue(of([{ ...plates, unitCost: null, totalCost: null }, { ...glasses, unitCost: null, totalCost: null }]));
+    const { el, page } = await render(true, true);
+    expect([...el.querySelectorAll('thead th')].map((th) => th.childNodes[0].textContent!.trim())).toEqual(['Asset', 'How many', 'Custody', 'Actions']);
+    expect(text(el.querySelector('.toolbar .muted')!)).toBe('2 assets');
+    expect(el.textContent).not.toContain('L.E');
+
+    open.mockReturnValue({ afterClosed: () => of(undefined) });
+    await page['edit'](plates);
+    expect(open.mock.lastCall![1].data.costHidden).toBe(true);
   });
 });

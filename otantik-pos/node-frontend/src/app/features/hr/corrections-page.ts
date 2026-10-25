@@ -15,7 +15,6 @@ import { AdministrativePenalty, AttendanceDay, Employee, EmployeeDay, HrApi, Lat
 import { HrAccess } from '../../core/hr/hr-access';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
-import { Approvals } from '../costing/approvals';
 import { BusinessDay, isoDay } from '../costing/financials';
 import { IgnorePunchDialog, PenaltyAnswer, PenaltyData, PenaltyDialog, ResolveDayData, ResolveDayDialog } from './attendance-dialogs';
 import { CorrectionsCount } from './corrections-count';
@@ -333,14 +332,14 @@ export class CorrectionsPage {
   protected readonly access = inject(HrAccess);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
-  private readonly approvals = inject(Approvals);
   private readonly businessDay = inject(BusinessDay);
   private readonly correctionsCount = inject(CorrectionsCount);
 
   protected readonly clock = clock;
   protected readonly dayName = dayName;
   protected readonly shift = shift;
-  protected readonly canCorrect = this.approvals.canApprove;
+  // A manager's, or an employee's holding the tab in the portal.
+  protected readonly canCorrect = computed(() => this.access.canDecide('Corrections'));
 
   // Since the first of last month, as the count on the tab.
   protected readonly from = signal(isoDay(new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1)));

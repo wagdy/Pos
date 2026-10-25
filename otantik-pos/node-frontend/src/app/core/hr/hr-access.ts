@@ -24,13 +24,20 @@ export class HrAccess {
     return new Set(me?.hrTabs ? hrTabsOf(me.hrTabs) : this.auth.can(Permissions.HrView) ? allHrTabs : []);
   });
 
-  readonly any = computed(() => this.tabs().size > 0);
+  // A tab of HR & Payroll's own held (Custody & Assets is a section of its own).
+  readonly any = computed(() => hrTabs.some((t) => this.tabs().has(t.tab)));
 
   // Who gives the tabs: a manager of the till.
   readonly canGive = computed(() => !this.auth.employeeActing() && this.auth.can(Permissions.ApprovalDecide));
 
   has(tab: HrTab): boolean {
     return this.tabs().has(tab);
+  }
+
+  // What only a manager does otherwise, in a tab: a manager, or an employee holding it in the
+  // portal, who does it at once as the manager would. An accountant does not.
+  canDecide(tab: HrTab): boolean {
+    return this.auth.employeeActing() ? this.has(tab) : this.auth.can(Permissions.ApprovalDecide);
   }
 
   // The first tab held, under /hr: where HR opens.

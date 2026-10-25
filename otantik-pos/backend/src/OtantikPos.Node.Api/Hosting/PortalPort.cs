@@ -1,8 +1,9 @@
 namespace OtantikPos.Node.Api.Hosting;
 
 // The employee portal's own port (Portal:Port), the one the restaurant's Wi-Fi reaches: phones
-// sign in there and read their own portal, and work the HR tabs a manager gave them (/hr,
-// /api/hr: only an employee's token holds a tab there, HrCaller). Nothing else of the till
+// sign in there and read their own portal, and work the HR tabs a manager gave them (/hr and
+// /custody, /api/hr and /api/custody: only an employee's token holds a tab there, HrCaller).
+// Nothing else of the till
 // answers. The rest of the API, the hub, the attendance device's paths and the health checks are
 // not found there; the app's files are, for the portal's screens, and any other screen of the app
 // opens the portal's sign-in instead.
@@ -10,7 +11,7 @@ internal static class PortalPort
 {
     public const string Setting = "Portal:Port";
 
-    private static readonly string[] Screens = ["/portal", "/my-profile", "/hr"];
+    private static readonly string[] Screens = ["/portal", "/my-profile", "/hr", "/custody"];
 
     public static int? Of(IConfiguration configuration) => configuration.GetValue<int?>(Setting);
 
@@ -18,7 +19,7 @@ internal static class PortalPort
     {
         var path = request.Path;
         if (path.StartsWithSegments("/api"))
-            return path.StartsWithSegments("/api/portal") || path.StartsWithSegments("/api/hr")
+            return path.StartsWithSegments("/api/portal") || path.StartsWithSegments("/api/hr") || path.StartsWithSegments("/api/custody")
                 || path.Equals("/api/auth/employee-login", StringComparison.OrdinalIgnoreCase);
         if (path.StartsWithSegments("/hubs") || path.StartsWithSegments("/iclock") || path.StartsWithSegments("/health") || path.StartsWithSegments("/openapi"))
             return false;

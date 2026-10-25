@@ -23,7 +23,8 @@ namespace OtantikPos.Node.Api.Controllers;
 // Employees are entered by whoever manages HR: a manager's change at once (200), anyone else's
 // asked of a manager (202) and made only when approved.
 // Correcting attendance, the devices and their settings, incentives and allowances, and
-// finalizing pay are a manager's. Advances and salaries are safe entries
+// finalizing pay are a manager's, or an employee's holding that tab in the portal (Decide).
+// Their PINs and who holds which tab are a manager's alone. Advances and salaries are safe entries
 // (POST /api/financials/vouchers, kinds EmployeeAdvance and SalaryPayment).
 //
 // Times of day are the restaurant's wall clock, sent without a zone: 2026-10-12T10:00:00.
@@ -76,7 +77,7 @@ public sealed class HrController(ISender sender) : ControllerBase
     // ---- Employees ----
 
     [HttpGet("employees")]
-    [HrTab(HrTabs.Employees | HrTabs.Attendance | HrTabs.Corrections | HrTabs.Payroll | HrTabs.Advances)]
+    [HrTab(HrTabs.Employees | HrTabs.Attendance | HrTabs.Corrections | HrTabs.Payroll | HrTabs.Advances | HrTabs.Custody)]
     public Task<IReadOnlyList<EmployeeDto>> GetEmployees(CancellationToken cancellationToken) => sender.Send(new GetEmployeesQuery(), cancellationToken);
 
     // One employee, left or not: their profile.
@@ -145,22 +146,19 @@ public sealed class HrController(ISender sender) : ControllerBase
 
     // Added under this id, or renamed: a manager's.
     [HttpPut("departments/{departmentId:guid}")]
-    [HrTab(HrTabs.Departments)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Departments, Decide = true)]
     public Task<DepartmentDto> SaveDepartment(Guid departmentId, DepartmentRequest request, CancellationToken cancellationToken) =>
         sender.Send(new SaveDepartmentCommand(departmentId, request.Name), cancellationToken);
 
     // A role added to a department under this id, or renamed for everyone holding it: a manager's.
     [HttpPut("departments/{departmentId:guid}/roles/{roleId:guid}")]
-    [HrTab(HrTabs.Departments)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Departments, Decide = true)]
     public Task<JobRoleDto> SaveRole(Guid departmentId, Guid roleId, DepartmentRequest request, CancellationToken cancellationToken) =>
         sender.Send(new SaveJobRoleCommand(roleId, departmentId, request.Name), cancellationToken);
 
     // Deleted, whoever holds it taking ?moveTo= first, another of the department's roles: a manager's.
     [HttpDelete("roles/{roleId:guid}")]
-    [HrTab(HrTabs.Departments)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Departments, Decide = true)]
     public async Task<IActionResult> DeleteRole(Guid roleId, [FromQuery] Guid? moveTo, CancellationToken cancellationToken)
     {
         await sender.Send(new DeleteJobRoleCommand(roleId, moveTo), cancellationToken);
@@ -169,8 +167,7 @@ public sealed class HrController(ISender sender) : ControllerBase
 
     // Deleted, its employees moved first to ?moveTo= when it has any: a manager's.
     [HttpDelete("departments/{departmentId:guid}")]
-    [HrTab(HrTabs.Departments)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Departments, Decide = true)]
     public async Task<IActionResult> DeleteDepartment(Guid departmentId, [FromQuery] Guid? moveTo, CancellationToken cancellationToken)
     {
         await sender.Send(new DeleteDepartmentCommand(departmentId, moveTo), cancellationToken);
@@ -261,27 +258,23 @@ public sealed class HrController(ISender sender) : ControllerBase
         sender.Send(new GetTimesheetQuery(employeeId, month), cancellationToken);
 
     [HttpPost("punches")]
-    [HrTab(HrTabs.Attendance | HrTabs.Corrections)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Attendance | HrTabs.Corrections, Decide = true)]
     public Task<PunchDto> AddPunch(ManualPunchRequest request, CancellationToken cancellationToken) =>
         sender.Send(new AddManualPunchCommand(request.PunchId, request.EmployeeId, request.PunchedAt, request.Reason, StaffName), cancellationToken);
 
     [HttpPost("punches/{punchId:guid}/ignore")]
-    [HrTab(HrTabs.Attendance | HrTabs.Corrections)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Attendance | HrTabs.Corrections, Decide = true)]
     public Task<PunchDto> IgnorePunch(Guid punchId, IgnorePunchRequest request, CancellationToken cancellationToken) =>
         sender.Send(new IgnorePunchCommand(punchId, true, request.Reason, StaffName), cancellationToken);
 
     [HttpPost("punches/{punchId:guid}/restore")]
-    [HrTab(HrTabs.Attendance | HrTabs.Corrections)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Attendance | HrTabs.Corrections, Decide = true)]
     public Task<PunchDto> RestorePunch(Guid punchId, CancellationToken cancellationToken) =>
         sender.Send(new IgnorePunchCommand(punchId, false, null, StaffName), cancellationToken);
 
     // A day marked as leave or a day off; with no kind, the mark taken off.
     [HttpPut("employees/{employeeId:guid}/days/{date}")]
-    [HrTab(HrTabs.Attendance | HrTabs.Corrections)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Attendance | HrTabs.Corrections, Decide = true)]
     public async Task<IActionResult> MarkDay(Guid employeeId, DateOnly date, DayMarkRequest request, CancellationToken cancellationToken)
     {
         await sender.Send(new SetDayMarkCommand(employeeId, date, request.Kind, request.Notes, StaffName), cancellationToken);
@@ -305,8 +298,7 @@ public sealed class HrController(ISender sender) : ControllerBase
 
     // A suspended day resolved by the manager's punch-out: the day worked out again from it.
     [HttpPost("attendance/resolve")]
-    [HrTab(HrTabs.Attendance | HrTabs.Corrections)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Attendance | HrTabs.Corrections, Decide = true)]
     public Task<AttendanceDayDto> Resolve(ResolveDayRequest request, CancellationToken cancellationToken) =>
         sender.Send(new ResolveSuspendedDayCommand(
             request.PunchId, request.EmployeeId, request.Date, request.PunchedOutAt, request.Reason, StaffName), cancellationToken);
@@ -317,15 +309,13 @@ public sealed class HrController(ISender sender) : ControllerBase
     public Task<IReadOnlyList<LatePunchDto>> GetLatePunches(CancellationToken cancellationToken) => sender.Send(new GetLatePunchesQuery(), cancellationToken);
 
     [HttpPost("attendance/late-punches/settle")]
-    [HrTab(HrTabs.Corrections)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Corrections, Decide = true)]
     public async Task<object> SettleLatePunches(SettleRequest request, CancellationToken cancellationToken) =>
         new { Settled = await sender.Send(new SettleLatePunchesCommand(request.PunchIds ?? [], StaffName), cancellationToken) };
 
     // A manager's administrative penalty on a day, in hours, with the reason; with no hours, taken off.
     [HttpPut("employees/{employeeId:guid}/days/{date}/penalty")]
-    [HrTab(HrTabs.Attendance | HrTabs.Corrections)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Attendance | HrTabs.Corrections, Decide = true)]
     public async Task<IActionResult> SetPenalty(Guid employeeId, DateOnly date, PenaltyRequest request, CancellationToken cancellationToken)
     {
         await sender.Send(new SetAdministrativePenaltyCommand(employeeId, date, request.Hours, request.Reason, StaffName), cancellationToken);
@@ -346,14 +336,12 @@ public sealed class HrController(ISender sender) : ControllerBase
 
     // A public holiday added under this id, or changed: a manager's.
     [HttpPut("holidays/{holidayId:guid}")]
-    [HrTab(HrTabs.Holidays)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Holidays, Decide = true)]
     public Task<PublicHolidayDto> SaveHoliday(Guid holidayId, HolidayRequest request, CancellationToken cancellationToken) =>
         sender.Send(new SavePublicHolidayCommand(holidayId, request.Name, request.FirstDay, request.LastDay, StaffName), cancellationToken);
 
     [HttpDelete("holidays/{holidayId:guid}")]
-    [HrTab(HrTabs.Holidays)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Holidays, Decide = true)]
     public async Task<IActionResult> DeleteHoliday(Guid holidayId, CancellationToken cancellationToken)
     {
         await sender.Send(new DeletePublicHolidayCommand(holidayId), cancellationToken);
@@ -371,29 +359,25 @@ public sealed class HrController(ISender sender) : ControllerBase
     // The device reached by the till over its own port (ZKTeco's, 4370), beside ADMS: whether it
     // answers, and what it is. A manager's, as the till reaches out for it.
     [HttpPost("devices/test")]
-    [HrTab(HrTabs.Employees | HrTabs.Devices)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Employees | HrTabs.Devices, Decide = true)]
     public Task<DeviceProbe> TestDevice(DeviceAddressRequest request, CancellationToken cancellationToken) =>
         sender.Send(new TestDeviceConnectionQuery(request.Address, request.Port ?? 4370, request.CommKey ?? 0), cancellationToken);
 
     // Its users and attendance log read now and kept; the device approved when it was not.
     [HttpPost("devices/sync")]
-    [HrTab(HrTabs.Employees | HrTabs.Devices)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Employees | HrTabs.Devices, Decide = true)]
     public Task<DeviceSyncResult> SyncDevice(DeviceAddressRequest request, CancellationToken cancellationToken) =>
         sender.Send(new SyncDeviceCommand(request.Address, request.Port ?? 4370, request.CommKey ?? 0, StaffName), cancellationToken);
 
     // A command left for a device: its users read, or its attendance from a day read again. The
     // device takes it the next time it asks, within seconds.
     [HttpPost("devices/{deviceId:guid}/read-users")]
-    [HrTab(HrTabs.Employees | HrTabs.Devices)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Employees | HrTabs.Devices, Decide = true)]
     public Task<DeviceCommandDto> ReadDeviceUsers(Guid deviceId, CancellationToken cancellationToken) =>
         sender.Send(new QueueDeviceCommandCommand(deviceId, DeviceCommandKind.ReadUsers, null, null, StaffName), cancellationToken);
 
     [HttpPost("devices/{deviceId:guid}/read-attendance")]
-    [HrTab(HrTabs.Devices)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Devices, Decide = true)]
     public Task<DeviceCommandDto> ReadDeviceAttendance(Guid deviceId, ReadAttendanceRequest request, CancellationToken cancellationToken) =>
         sender.Send(new QueueDeviceCommandCommand(deviceId, DeviceCommandKind.ReadAttendance, request.From, request.To, StaffName), cancellationToken);
 
@@ -407,8 +391,7 @@ public sealed class HrController(ISender sender) : ControllerBase
     public Task<AttendancePolicyDto> GetSettings(CancellationToken cancellationToken) => sender.Send(new GetAttendanceSettingsQuery(), cancellationToken);
 
     [HttpPut("settings")]
-    [HrTab(HrTabs.Devices)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Devices, Decide = true)]
     public Task<AttendancePolicyDto> SaveSettings(AttendancePolicyDto request, CancellationToken cancellationToken) =>
         sender.Send(new SaveAttendanceSettingsCommand(request.GraceMinutes, request.DoubleScanMinutes), cancellationToken);
 
@@ -419,15 +402,13 @@ public sealed class HrController(ISender sender) : ControllerBase
 
     // Approved by name, or renamed.
     [HttpPost("devices/{deviceId:guid}/approve")]
-    [HrTab(HrTabs.Devices)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Devices, Decide = true)]
     public Task<AttendanceDeviceDto> ApproveDevice(Guid deviceId, ApproveDeviceRequest request, CancellationToken cancellationToken) =>
         sender.Send(new ApproveAttendanceDeviceCommand(deviceId, request.Name ?? string.Empty, StaffName), cancellationToken);
 
     // Refused again: nothing more it sends is taken.
     [HttpPost("devices/{deviceId:guid}/revoke")]
-    [HrTab(HrTabs.Devices)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Devices, Decide = true)]
     public Task<AttendanceDeviceDto> RevokeDevice(Guid deviceId, CancellationToken cancellationToken) =>
         sender.Send(new ApproveAttendanceDeviceCommand(deviceId, null, StaffName), cancellationToken);
 
@@ -442,8 +423,7 @@ public sealed class HrController(ISender sender) : ControllerBase
 
     // Advances handed out with no one named, given out: a share each, in part or the rest of them.
     [HttpPost("advances/{advanceId:guid}/distribute")]
-    [HrTab(HrTabs.Advances)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Advances, Decide = true)]
     public Task<PendingAdvanceDto> DistributeAdvance(Guid advanceId, DistributeAdvanceRequest request, CancellationToken cancellationToken) =>
         sender.Send(new DistributeAdvanceCommand(advanceId, request.Shares ?? [], StaffName), cancellationToken);
 
@@ -461,15 +441,13 @@ public sealed class HrController(ISender sender) : ControllerBase
     }
 
     [HttpPost("advances/{advanceId:guid}/void")]
-    [HrTab(HrTabs.Advances)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Advances, Decide = true)]
     public Task<HrAdvanceDto> VoidHrAdvance(Guid advanceId, CancellationToken cancellationToken) =>
         sender.Send(new VoidHrAdvanceCommand(advanceId, StaffName), cancellationToken);
 
     // A share taken back, for its advances to be given out again.
     [HttpPost("advance-shares/{shareId:guid}/take-back")]
-    [HrTab(HrTabs.Advances)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Advances, Decide = true)]
     public Task<PendingAdvanceDto> TakeBackAdvanceShare(Guid shareId, CancellationToken cancellationToken) =>
         sender.Send(new TakeBackAdvanceShareCommand(shareId, StaffName), cancellationToken);
 
@@ -495,21 +473,18 @@ public sealed class HrController(ISender sender) : ControllerBase
         sender.Send(new CalculatePayrollCommand(month), cancellationToken);
 
     [HttpPost("payroll/{employeeId:guid}/finalize")]
-    [HrTab(HrTabs.Payroll)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Payroll, Decide = true)]
     public Task<PayrollSlipDto> FinalizeSlip(Guid employeeId, [FromQuery] DateOnly month, CancellationToken cancellationToken) =>
         sender.Send(new FinalizePayrollSlipCommand(month, employeeId, StaffName), cancellationToken);
 
     [HttpPost("payroll/adjustments")]
-    [HrTab(HrTabs.Payroll)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Payroll, Decide = true)]
     public Task<PayrollAdjustmentDto> AddAdjustment(AdjustmentRequest request, CancellationToken cancellationToken) =>
         sender.Send(new AddPayrollAdjustmentCommand(
             request.AdjustmentId, request.EmployeeId, request.Month, request.Kind, request.Amount, request.Reason, request.ForDay, StaffName), cancellationToken);
 
     [HttpPost("payroll/adjustments/{adjustmentId:guid}/void")]
-    [HrTab(HrTabs.Payroll)]
-    [Authorize(Policy = Permissions.ApprovalDecide)]
+    [HrTab(HrTabs.Payroll, Decide = true)]
     public Task<PayrollAdjustmentDto> VoidAdjustment(Guid adjustmentId, CancellationToken cancellationToken) =>
         sender.Send(new VoidPayrollAdjustmentCommand(adjustmentId, StaffName), cancellationToken);
 

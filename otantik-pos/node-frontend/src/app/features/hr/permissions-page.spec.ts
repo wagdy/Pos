@@ -115,7 +115,7 @@ describe('the tabs dialog', () => {
     const { page, el } = render({ name: 'Hassan', tabs: ['Attendance'], employee: { hasMobile: true, hasPin: true } });
     expect(text(el.querySelector('h2')!)).toBe('Hassan’s HR tabs الصلاحيات');
     expect([...el.querySelectorAll('.tabs mat-checkbox')].map((c) => c.getAttribute('data-tab'))).toEqual([
-      'Now', 'Employees', 'Departments', 'Attendance', 'Corrections', 'Payroll', 'Advances', 'Holidays', 'Devices',
+      'Now', 'Employees', 'Departments', 'Attendance', 'Corrections', 'Payroll', 'Advances', 'Holidays', 'Devices', 'Custody',
     ]);
     expect(el.querySelector('.warn')).toBeNull();
     expect(page['some']()).toBe(true);

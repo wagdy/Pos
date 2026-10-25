@@ -92,7 +92,7 @@ describe('the corrections', () => {
         { provide: MatDialog, useValue: { open } },
         { provide: BusinessDay, useValue: { today: () => Promise.resolve('2026-10-21') } },
         { provide: CorrectionsCount, useValue: count },
-        { provide: HrAccess, useValue: { has: () => true } },
+        { provide: HrAccess, useValue: { has: () => true, canDecide: () => canApprove() } },
       ],
     });
     const fixture = TestBed.createComponent(CorrectionsPage);

@@ -8,6 +8,7 @@ import { Approvals } from '../costing/approvals';
 import { BusinessDay } from '../costing/financials';
 import { HolidayData, HolidayDialog } from './holiday-dialog';
 import { HolidaysPage } from './holidays-page';
+import { HrAccess } from '../../core/hr/hr-access';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
@@ -44,6 +45,7 @@ describe('the holidays', () => {
       providers: [
         { provide: HrApi, useValue: { holidays, saveHoliday, deleteHoliday } },
         { provide: Approvals, useValue: { canApprove } },
+        { provide: HrAccess, useValue: { has: () => true, canDecide: () => canApprove() } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
         { provide: BusinessDay, useValue: { today: () => Promise.resolve('2026-10-21') } },

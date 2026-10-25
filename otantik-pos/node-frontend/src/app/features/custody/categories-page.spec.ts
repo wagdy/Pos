@@ -8,6 +8,7 @@ import { Approvals } from '../costing/approvals';
 import { BusinessDay } from '../costing/financials';
 import { CategoriesPage, CategoryDialog } from './categories-page';
 import { VouchersPage } from './vouchers-page';
+import { HrAccess } from '../../core/hr/hr-access';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 // Element by element: the template leaves no space between them.
@@ -33,6 +34,7 @@ describe('the custody categories', () => {
       providers: [
         { provide: CustodyApi, useValue: { categories, saveCategory, deleteCategory } },
         { provide: Approvals, useValue: { canApprove } },
+        { provide: HrAccess, useValue: { has: () => true, canDecide: () => canApprove() } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
       ],

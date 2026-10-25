@@ -10,6 +10,7 @@ import { MAT_DIALOG_DATA } from '@angular/material/dialog';
 import { AddPunchDialog, IgnorePunchDialog, MarkDayData, MarkDayDialog, PenaltyDialog, ResolveDayDialog } from './attendance-dialogs';
 import { AttendancePage } from './attendance-page';
 import { CorrectionsCount } from './corrections-count';
+import { HrAccess } from '../../core/hr/hr-access';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
@@ -75,6 +76,7 @@ describe('the attendance', () => {
         },
         { provide: CorrectionsCount, useValue: suspended },
         { provide: Approvals, useValue: { canApprove } },
+        { provide: HrAccess, useValue: { has: () => true, canDecide: () => canApprove() } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
         { provide: BusinessDay, useValue: { today: () => Promise.resolve('2026-09-21') } },

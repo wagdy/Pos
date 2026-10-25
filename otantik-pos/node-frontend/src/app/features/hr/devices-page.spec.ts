@@ -49,7 +49,7 @@ describe('the attendance devices', () => {
         provideRouter([]),
         { provide: HrApi, useValue: { devices, settings, approveDevice, revokeDevice, saveSettings, readDeviceUsers, readDeviceAttendance, deviceConnection, testDevice, syncDevice } },
         { provide: Approvals, useValue: { canApprove } },
-        { provide: HrAccess, useValue: { has: () => true } },
+        { provide: HrAccess, useValue: { has: () => true, canDecide: () => canApprove() } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
       ],

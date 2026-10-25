@@ -13,7 +13,7 @@ import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { errorMessage } from '../../core/http/error-message';
 import { EmployeeHrAccess, HrApi, StaffHrAccess } from '../../core/hr/hr.api';
-import { HrTab, allHrTabs, hrTabs, hrTabsOf } from '../../core/hr/hr-tabs';
+import { HrTab, allHrTabs, givenTabs, hrTabsOf } from '../../core/hr/hr-tabs';
 import { NotifyService } from '../../core/ui/notify.service';
 
 // Whose tabs, as the dialog shows them. An employee's say whether they can sign in to the portal.
@@ -40,7 +40,8 @@ export interface TabsDialogData {
         }
       </div>
       <p class="muted small">
-        They see only these tabs. What they change there waits for a manager; correcting attendance, finalizing pay and the devices stay a manager’s.
+        They see only these tabs. A change to someone’s record, an advance or an asset waits for a manager; an employee does the rest of a tab’s
+        work at once, as a manager would. Their PINs and these tabs stay a manager’s.
       </p>
       @if (data.employee; as e) {
         @if (!e.hasMobile || !e.hasPin) {
@@ -91,7 +92,7 @@ export interface TabsDialogData {
 })
 export class TabsDialog {
   protected readonly data = inject<TabsDialogData>(MAT_DIALOG_DATA);
-  protected readonly tabs = hrTabs;
+  protected readonly tabs = givenTabs;
   protected readonly chosen = signal<ReadonlySet<HrTab>>(new Set(this.data.tabs));
   protected readonly picked = computed(() => hrTabsOf([...this.chosen()]));
   protected readonly every = computed(() => this.chosen().size === allHrTabs.length);
@@ -122,8 +123,9 @@ export class TabsDialog {
   imports: [DatePipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatInputModule, MatProgressBarModule, MatTooltipModule, RouterLink],
   template: `
     <p class="note">
-      Give each the tabs of HR &amp; Payroll they work. An employee uses theirs in the portal on their phone, signing in with their mobile number and
-      PIN; an accountant, here on the till. They see only those tabs, and what they change there waits for a manager. A manager has every tab.
+      Give each the tabs of HR &amp; Payroll, and Custody &amp; Assets, they work. An employee uses theirs in the portal on their phone, signing in
+      with their mobile number and PIN, and does a tab’s work as a manager would, a change to someone’s record, an advance or an asset waiting for
+      a manager; an accountant uses theirs here on the till, as always. A manager has every tab.
     </p>
     <div class="toolbar">
       <mat-form-field subscriptSizing="dynamic" class="find">
@@ -269,7 +271,7 @@ export class PermissionsPage {
   }
 
   protected label(tab: HrTab): string {
-    return hrTabs.find((t) => t.tab === tab)?.en ?? tab;
+    return givenTabs.find((t) => t.tab === tab)?.en ?? tab;
   }
 
   protected async changeEmployee(e: EmployeeHrAccess): Promise<void> {
