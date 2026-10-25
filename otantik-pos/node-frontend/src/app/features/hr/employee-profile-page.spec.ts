@@ -31,8 +31,8 @@ const hassan: Employee = {
   employmentType: 'Monthly', dailyWage: 0, departmentId: 'kitchen', jobRoleId: 'chef',
 };
 const departments: Department[] = [
-  { id: 'general', name: 'General', isGeneral: true, employed: 0, everyone: 0, roles: [] },
-  { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 1, everyone: 1, roles: [{ id: 'chef', departmentId: 'kitchen', name: 'Chef', employed: 1 }] },
+  { id: 'general', name: 'General', isGeneral: true, employed: 0, everyone: 0, roles: [], monthlyCost: 0, dailyCost: 0 },
+  { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 1, everyone: 1, roles: [{ id: 'chef', departmentId: 'kitchen', name: 'Chef', employed: 1, monthlyCost: 0, dailyCost: 0 }], monthlyCost: 0, dailyCost: 0 },
 ];
 
 function slip(employee: Employee, month: string): PayrollSlip {
@@ -115,7 +115,7 @@ describe('an employee’s profile', () => {
     const { el, details } = await render();
 
     expect(employee).toHaveBeenCalledWith('hassan');
-    expect(cell(el.querySelector('.profile header')!)).toBe('HM Hassan Mahmoud Ali Chef · Kitchen Employed على رأس العمل');
+    expect(cell(el.querySelector('.profile-head')!)).toBe('HM Hassan Mahmoud Ali Chef · Kitchen Employed على رأس العمل');
     expect(details()).toEqual({
       'Full name الاسم بالكامل': 'Hassan Mahmoud Ali',
       'National ID رقم البطاقة': '29001010123456',
@@ -186,7 +186,7 @@ describe('an employee’s profile', () => {
     expect(open.mock.lastCall![0]).toBe(EmploymentDialog);
     expect(open.mock.lastCall![1].data).toMatchObject({ employee: hassan, mode: 'leave', today: '2026-10-22' });
     await refresh();
-    expect(text(el.querySelector('.profile header .status')!)).toBe('Leftترك العمل');
+    expect(text(el.querySelector('.profile-head .status')!)).toBe('Leftترك العمل');
     expect([...el.querySelectorAll('.profile-toolbar > button')].map(text)).toEqual(['edit Edit تعديل', 'person_add_alt Bring back إعادة التعيين']);
   });
 

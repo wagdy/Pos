@@ -23,11 +23,15 @@ export const weekDays: { day: WeekDay; en: string; ar: string }[] = [
 export type EmploymentType = 'Monthly' | 'Daily';
 
 // A job role in a department (الوظيفة), and how many employed hold it.
+// What its holders employed now cost: their monthly salaries, and apart, the daily wages of those
+// paid by the day.
 export interface JobRole {
   id: string;
   departmentId: string;
   name: string;
   employed: number;
+  monthlyCost: number;
+  dailyCost: number;
 }
 
 // A department of the restaurant (الأقسام), how many are in it (employed, and everyone including
@@ -39,6 +43,9 @@ export interface Department {
   employed: number;
   everyone: number;
   roles: JobRole[];
+  // Everyone employed in it, those with no role too: as a role's are.
+  monthlyCost: number;
+  dailyCost: number;
 }
 
 // Someone on the payroll. A nine-hour shift from shiftStartsAt, or flexible hours with none. Paid
@@ -171,6 +178,8 @@ export interface AttendanceDay {
   holidayName: string | null;
   // When the day ends, and the next one's punches start.
   dayEndsAt: string;
+  // A punch-in with no punch-out once the shift is over (نسي تسجيل الانصراف).
+  forgotToCheckOut: boolean;
 }
 
 // A device's punch that came after its month's pay was finalized, for a manager to see to.
@@ -196,7 +205,15 @@ export interface EmployeeDay {
 export interface AttendanceDayReport {
   date: string;
   policy: AttendancePolicy;
-  totals: { present: number; late: number; absent: number; missingPunch: number; offOrOnLeave: number; overtimeMinutes: number };
+  totals: {
+    present: number;
+    late: number;
+    absent: number;
+    missingPunch: number;
+    offOrOnLeave: number;
+    overtimeMinutes: number;
+    forgotToCheckOut: number;
+  };
   employees: EmployeeDay[];
   unassigned: Punch[];
 }
@@ -548,8 +565,39 @@ export interface PayrollMonth {
     salaryPaid: number;
     daysOffWorkedPay: number;
     holidaysWorkedPay: number;
+    // The month's salaries before anything is deducted (إجمالي الرواتب).
+    gross: number;
+    administrativePenalties: number;
   };
   slips: PayrollSlip[];
+}
+
+// A day's labour cost (تكلفة يوم): who punched in, each at their day's rate, by department; that
+// day's overtime pay beside it, not in cost.
+export interface DailyLabourCost {
+  date: string;
+  employed: number;
+  worked: number;
+  cost: number;
+  overtimePay: number;
+  departments: { departmentId: string; name: string; worked: number; cost: number; overtimePay: number }[];
+  employees: EmployeeDayCost[];
+}
+
+export interface EmployeeDayCost {
+  employeeId: string;
+  name: string;
+  jobTitle: string;
+  departmentId: string;
+  employmentType: EmploymentType;
+  status: DayStatus;
+  firstIn: string | null;
+  lastOut: string | null;
+  workedMinutes: number;
+  overtimeMinutes: number;
+  dayRate: number;
+  overtimePay: number;
+  forgotToCheckOut: boolean;
 }
 
 // A public holiday (عطلة رسمية): everyone's paid day off, from its first day to its last.
@@ -826,6 +874,10 @@ export class HrApi {
 
   payroll(month: string): Observable<PayrollMonth> {
     return this.http.get<PayrollMonth>('/api/hr/payroll', { params: { month } });
+  }
+
+  dailyCost(date: string): Observable<DailyLabourCost> {
+    return this.http.get<DailyLabourCost>('/api/hr/payroll/daily-cost', { params: { date } });
   }
 
   calculatePayroll(month: string): Observable<PayrollMonth> {

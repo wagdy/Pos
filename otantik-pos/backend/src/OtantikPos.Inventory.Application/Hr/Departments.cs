@@ -12,9 +12,14 @@ namespace OtantikPos.Inventory.Application.Hr;
 // its roles going with them. A role is renamed for everyone holding it, and deleted once they hold
 // another of the department's.
 
-public sealed record JobRoleDto(Guid Id, Guid DepartmentId, string Name, int Employed);
+// What a role's or a department's people employed now cost: MonthlyCost their monthly salaries,
+// DailyCost the daily wages of those paid by the day, apart, since their month is the days they
+// work.
+public sealed record JobRoleDto(Guid Id, Guid DepartmentId, string Name, int Employed, decimal MonthlyCost = 0, decimal DailyCost = 0);
 
-public sealed record DepartmentDto(Guid Id, string Name, bool IsGeneral, int Employed, int Everyone, IReadOnlyList<JobRoleDto> Roles);
+// Its costs are everyone employed in it, those holding no role too.
+public sealed record DepartmentDto(
+    Guid Id, string Name, bool IsGeneral, int Employed, int Everyone, IReadOnlyList<JobRoleDto> Roles, decimal MonthlyCost = 0, decimal DailyCost = 0);
 
 public sealed record GetDepartmentsQuery : IRequest<IReadOnlyList<DepartmentDto>>;
 
@@ -26,17 +31,35 @@ internal sealed class GetDepartmentsHandler(IDepartmentRepository departments, I
         var people = await employees.GetAllAsync(cancellationToken);
         var allRoles = await roles.GetAllAsync(cancellationToken);
         return (await departments.GetAllAsync(cancellationToken))
-            .Select(d => new DepartmentDto(
-                d.Id, d.Name, d.IsGeneral, people.Count(e => e.DepartmentId == d.Id && e.IsActive), people.Count(e => e.DepartmentId == d.Id),
-                allRoles.Where(r => r.DepartmentId == d.Id).Select(r => Departments.Role(r, people)).ToList()))
+            .Select(d => Departments.Dto(d, people.Where(e => e.DepartmentId == d.Id).ToList(), allRoles.Where(r => r.DepartmentId == d.Id)))
             .ToList();
     }
 }
 
 internal static class Departments
 {
-    public static JobRoleDto Role(JobRole role, IEnumerable<Employee> people) =>
-        new(role.Id, role.DepartmentId, role.Name, people.Count(e => e.JobRoleId == role.Id && e.IsActive));
+    // `people`: the department's, those who left too.
+    public static DepartmentDto Dto(Department department, IReadOnlyList<Employee> people, IEnumerable<JobRole> roles)
+    {
+        var (monthly, daily) = Cost(people);
+        return new DepartmentDto(
+            department.Id, department.Name, department.IsGeneral, people.Count(e => e.IsActive), people.Count,
+            roles.OrderBy(r => r.Name).Select(r => Role(r, people)).ToList(), monthly, daily);
+    }
+
+    public static JobRoleDto Role(JobRole role, IEnumerable<Employee> people)
+    {
+        var holders = people.Where(e => e.JobRoleId == role.Id).ToList();
+        var (monthly, daily) = Cost(holders);
+        return new(role.Id, role.DepartmentId, role.Name, holders.Count(e => e.IsActive), monthly, daily);
+    }
+
+    // Of those employed now: the monthly salaries, and the daily wages.
+    private static (decimal Monthly, decimal Daily) Cost(IEnumerable<Employee> people)
+    {
+        var employed = people.Where(e => e.IsActive).ToList();
+        return (employed.Where(e => !e.IsDaily).Sum(e => e.MonthlySalary), employed.Where(e => e.IsDaily).Sum(e => e.DailyWage));
+    }
 }
 
 // Added under this id, or renamed. Two departments are not named alike.
@@ -65,10 +88,7 @@ internal sealed class SaveDepartmentHandler(IDepartmentRepository departments, I
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
         var people = await employees.GetInDepartmentAsync(department.Id, cancellationToken);
-        var itsRoles = await roles.GetInDepartmentAsync(department.Id, cancellationToken);
-        return new DepartmentDto(
-            department.Id, department.Name, department.IsGeneral, people.Count(e => e.IsActive), people.Count,
-            itsRoles.OrderBy(r => r.Name).Select(r => Departments.Role(r, people)).ToList());
+        return Departments.Dto(department, people, await roles.GetInDepartmentAsync(department.Id, cancellationToken));
     }
 }
 

@@ -311,7 +311,7 @@ ClosedXML, as the raw materials and prep items imports use, in `Node.Infrastruct
 | `POST /api/hr/employees/import` | A filled-in sheet (multipart `file`, 5 MB at most): each good row an employee, a manager's at once and anyone else's a request; the rows skipped and why, and the departments added |
 | `GET /api/hr/employees/export` | Everyone employed now as a styled Excel table, in the template's columns plus their day and hour rates |
 | `GET /api/hr/payroll/export?month=` | The month's payroll as an Excel sheet: each slip's columns as the Payroll tab shows them, its status and what is paid, with the totals |
-| `GET /api/hr/attendance?date=` | Everyone's day, plus punches under numbers nobody has |
+| `GET /api/hr/attendance?date=` | Everyone's day, plus punches under numbers nobody has; each day says whether they forgot to check out, and the totals count them |
 | `GET /api/hr/employees/{id}/timesheet?month=` | One employee's month, day by day, with totals |
 | `POST /api/hr/punches`, `…/{id}/ignore`, `…/{id}/restore` | A manual punch with its reason; ignoring or restoring one |
 | `PUT /api/hr/employees/{id}/days/{date}` | Leave, day off or working day (a swap); with no kind, the mark taken off |
@@ -319,7 +319,7 @@ ClosedXML, as the raw materials and prep items imports use, in `Node.Infrastruct
 | `POST /api/hr/attendance/resolve` | A suspended day's punch-out, from a manager: the day worked out again |
 | `PUT /api/hr/employees/{id}/days/{date}/penalty` | An administrative penalty in hours, with the reason; with no hours, taken off |
 | `GET /api/hr/penalties?month=` | The month's administrative penalties, everyone's, each with what it takes off the pay |
-| `GET /api/hr/departments`, `PUT …/{id}`, `DELETE …/{id}?moveTo=` | The departments with how many are in each and their roles; added or renamed, or deleted with its employees moved first: a manager's |
+| `GET /api/hr/departments`, `PUT …/{id}`, `DELETE …/{id}?moveTo=` | The departments with how many are in each and their roles, and what each costs (monthly salaries and daily wages apart, of those employed now); added or renamed, or deleted with its employees moved first: a manager's |
 | `PUT /api/hr/departments/{id}/roles/{roleId}`, `DELETE /api/hr/roles/{roleId}?moveTo=` | A department's role added or renamed, or deleted with its holders moved to another: a manager's |
 | `GET /api/hr/devices/connection` | Where a device reaches the till: the device's own port, when set, and the machine's addresses |
 | `POST /api/hr/devices/test`, `…/sync` | The till reaching the device at `{ address, port = 4370, commKey = 0 }`: whether it answers and what it holds, or its users and whole log read and kept (approved if new): a manager's |
@@ -334,7 +334,8 @@ ClosedXML, as the raw materials and prep items imports use, in `Node.Infrastruct
 | `GET /api/hr/advances?month=` | The month's advances, each deducted from whose pay (paid to them, or their share of a lump sum); and the advances handed out with no one named, every one not all given out: how much, given out, left, and the shares |
 | `POST /api/hr/advances`, `POST /api/hr/advances/{id}/void` | An advance paid outside the till, recorded in HR only (`{ advanceId, amount, date, employeeId?, notes }`): a manager's at once, anyone else's a request (module `Advance`); voided by a manager while its pay is not finalized, a lump sum once no share of it stands |
 | `POST /api/hr/advances/{id}/distribute`, `POST /api/hr/advance-shares/{id}/take-back` | A lump sum given out, a share each (`{ shares: [{ employeeId, amount, notes }] }`), in parts and never more than is left; a share taken back while its pay is not finalized: a manager's |
-| `GET /api/hr/payroll?month=` | Every slip as it stands |
+| `GET /api/hr/payroll?month=` | Every slip as it stands, with the month's totals: its total salaries (gross) and administrative penalties among them |
+| `GET /api/hr/payroll/daily-cost?date=` | A day's labour cost: who punched in, each at their day's rate, by department, the day's overtime pay beside it |
 | `POST /api/hr/payroll/calculate?month=` | Saves the drafts |
 | `POST /api/hr/payroll/{employeeId}/finalize?month=` | Finalizes one slip |
 | `POST /api/hr/payroll/adjustments`, `…/{id}/void` | Incentives and leave allowances |
@@ -413,8 +414,9 @@ migration `PublicHolidays`); leave allowances entered by a manager are for anyth
     ID, mobile, start), their work and pay, and their ID card shown (a photo as it is, a PDF in
     the browser's viewer, larger on View larger) with Upload, Replace and Take off; Edit opens
     the Employees form, Deactivate their leaving, Bring back their return, all locked while a
-    change waits for a manager; below, their payslip for the business month, a month back at a
-    time, as Payroll has it (incentives, finalizing and paying included), printing alone;
+    change waits for a manager; beside them (below on a narrow screen), their payslip for the
+    business month, a month back at a time, as Payroll has it (incentives, finalizing and paying
+    included), printing alone;
   - Device users: add each as an employee, or link their number to one already here;
     the form takes the department, a role of it (picked, or a new one typed), monthly or daily
     pay, and flexible hours (no start time); the list shows each one's department, filters by
@@ -425,8 +427,11 @@ migration `PublicHolidays`); leave allowances entered by a manager are for anyth
     for its users over ADMS instead, and the list read again as they come;
   - Employees' Excel menu: Download template (تحميل القالب), Import Excel (رفع إكسيل) and
     Export employees (تصدير الموظفين); what an import did shown row by row;
-  - Departments: each with how many are in it and its roles, added, renamed, and deleted with
-    its employees (or a role's holders) moved first; General kept;
+  - Departments, as a table of what they cost: each department, its roles a row each (and one
+    for those holding none) with how many hold it and what they cost, then the department's
+    total and its share of the salaries, and all of them at the foot; monthly salaries and daily
+    wages said apart, a daily worker's month being the days they work; added, renamed, and
+    deleted with its employees (or a role's holders) moved first; General kept;
   - Attendance devices: where to point the K40, approve or refuse it, have it list its users or
     send its attendance again (the command's progress shown as it goes), and the grace and
     double-scan settings. Connection settings (إعدادات التوصيل) above the list: the device's IP
@@ -437,11 +442,23 @@ migration `PublicHolidays`); leave allowances entered by a manager are for anyth
   - Corrections also lists the punches that came after their month's pay was finalized, a day at
     a time, until a manager marks them seen to.
 - Payroll's Export Excel (تصدير إكسيل): the month as a sheet for the accounts.
+- Payroll in two views (`?view=daily` for the second): the month's, its Total salaries (إجمالي
+  الرواتب, before anything is deducted) first among the figures, and lateness, absence and
+  administrative penalties together as Deductions & penalties (خصومات وجزاءات) just before Net
+  payable, each slip's parts under its amount; and Daily cost (تكلفة يوم): a day chosen (today so
+  far, or one before it), who came in at their day's rate (a monthly salary over 30, or the
+  daily wage), the total and each department's with its share, and the day's overtime beside it,
+  not in the total.
 - Financials → Advances (السلفيات): the month's advances, each employee's total, a new advance
   from the safe or a day's takings, and voids.
 - The daily batch: an employee advance block beside the supplier payments.
 
-- Attendance: everyone's day, or one employee's month.
+- Attendance: the day's review (مراجعة يوم), everyone's in, out and status on a day, or one
+  employee's month.
+  - Forgot to check out (نسي تسجيل الانصراف): a punch-in with no punch-out once the shift is over
+    (flexible hours, or a day off: once the day is), its row lit and its Out said so, counted
+    at the top, where a click shows only them. A suspended day is one too; the 18-hour rule for
+    the pay stays.
   - Each day opens to its punches.
   - A manager adds a missed punch with its reason, ignores one that should not count, marks
     a day as leave or a day off, enters a suspended day's punch-out, or gives the day an

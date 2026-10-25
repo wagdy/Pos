@@ -15,10 +15,11 @@ const hassan: Employee = {
 };
 
 const departments: Department[] = [
-  { id: 'general', name: 'General', isGeneral: true, employed: 1, everyone: 1, roles: [] },
+  { id: 'general', name: 'General', isGeneral: true, employed: 1, everyone: 1, roles: [], monthlyCost: 0, dailyCost: 0 },
   {
     id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 0, everyone: 0,
-    roles: [{ id: 'chef', departmentId: 'kitchen', name: 'Chef', employed: 1 }, { id: 'helper', departmentId: 'kitchen', name: 'Kitchen helper', employed: 0 }],
+    roles: [{ id: 'chef', departmentId: 'kitchen', name: 'Chef', employed: 1, monthlyCost: 0, dailyCost: 0 }, { id: 'helper', departmentId: 'kitchen', name: 'Kitchen helper', employed: 0, monthlyCost: 0, dailyCost: 0 }],
+    monthlyCost: 0, dailyCost: 0,
   },
 ];
 

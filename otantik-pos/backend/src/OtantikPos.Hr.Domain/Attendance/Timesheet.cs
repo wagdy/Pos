@@ -138,8 +138,7 @@ public static class Timesheet
         var (from, to) = Window(employee, day);
         var over = now >= to;
         var times = Scans(punches.Where(p => p >= from && p < to), policy.DoubleScanMinutes);
-        // A weekly day off marked as a working day is one: a swap.
-        var off = mark is DayMarkKind.Leave or DayMarkKind.DayOff || (mark != DayMarkKind.WorkingDay && employee.IsDayOff(day));
+        var off = IsOff(employee, day, mark);
         if (times.Count == 0)
             return Nothing(
                 day, holiday ? DayStatus.Holiday : mark == DayMarkKind.Leave ? DayStatus.Leave : off ? DayStatus.DayOff : over ? DayStatus.Absent : DayStatus.Open);
@@ -173,6 +172,25 @@ public static class Timesheet
         var overtime = Math.Max(0, Math.Min(afterShift, worked - Employee.ShiftHours * 60));
         return new DayEvaluation(day, status, first, lastOut, times.Count, worked, Minutes(late), Minutes(early), Minutes(away), overtime);
     }
+
+    // A punch-in with no punch-out once the shift is over: they forgot to check out (نسي تسجيل
+    // الانصراف). With no shift (flexible hours, or a day off or on leave), once the day is over;
+    // suspended, 18 hours on, too. Only said: the day is worked out as Evaluate says.
+    public static bool ForgotToCheckOut(Employee employee, DayEvaluation day, DayMarkKind? mark, DateTime now)
+    {
+        if (day.Punches == 0 || day.LastOut is not null)
+            return false;
+        if (day.Status == DayStatus.Suspended)
+            return true;
+        var ends = employee.ShiftStartsAt is { } start && !IsOff(employee, day.Day, mark)
+            ? day.Day.ToDateTime(start) + Employee.ShiftLength
+            : Window(employee, day.Day).To;
+        return now >= ends;
+    }
+
+    // A day off or on leave: a weekly day off marked as a working day is one, a swap.
+    private static bool IsOff(Employee employee, DateOnly day, DayMarkKind? mark) =>
+        mark is DayMarkKind.Leave or DayMarkKind.DayOff || (mark != DayMarkKind.WorkingDay && employee.IsDayOff(day));
 
     // In order, a scan within that many minutes of the one before it dropped.
     private static List<DateTime> Scans(IEnumerable<DateTime> punches, int doubleScanMinutes)

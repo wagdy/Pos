@@ -1,14 +1,14 @@
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { MatDialog } from '@angular/material/dialog';
-import { provideRouter } from '@angular/router';
+import { Router, provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
 import { Employee, HrApi, PayrollFigures, PayrollMonth, PayrollSlip } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
-import { Treasury } from '../costing/financials';
+import { BusinessDay, Treasury } from '../costing/financials';
 import { AdjustmentDialog, FinalizeDialog, PayslipPage } from './payslip-page';
 import { PayrollPage } from './payroll-page';
 
@@ -60,6 +60,8 @@ function month(slips: PayrollSlip[]): PayrollMonth {
       carriedForward: sum((f) => f.carriedForward), wagesCost: sum((f) => f.wagesCost), salaryPaid: slips.reduce((s, x) => s + x.salaryPaid, 0),
       daysOffWorkedPay: sum((f) => f.daysOffWorkedPay),
       holidaysWorkedPay: sum((f) => f.holidaysWorkedPay),
+      gross: sum((f) => f.gross),
+      administrativePenalties: sum((f) => f.administrativePenalty),
     },
     slips,
   };
@@ -69,19 +71,24 @@ describe('the monthly payroll', () => {
   const payroll = vi.fn();
   const calculatePayroll = vi.fn();
   const exportPayroll = vi.fn();
+  const dailyCost = vi.fn(() => of({ date: '2026-09-21', employed: 2, worked: 0, cost: 0, overtimePay: 0, departments: [], employees: [] }));
   const notify = { info: vi.fn(), error: vi.fn() };
 
-  async function render(manage = true) {
+  async function render(manage = true, view?: string) {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: HrApi, useValue: { payroll, calculatePayroll, exportPayroll } },
+        { provide: HrApi, useValue: { payroll, calculatePayroll, exportPayroll, dailyCost } },
+        { provide: BusinessDay, useValue: { today: () => Promise.resolve('2026-09-21') } },
         { provide: AuthService, useValue: { can: (p: string) => manage || p !== Permissions.HrManage } },
         { provide: NotifyService, useValue: notify },
       ],
     });
     const fixture = TestBed.createComponent(PayrollPage);
     fixture.componentRef.setInput('month', '2026-09-20');
+    if (view) {
+      fixture.componentRef.setInput('view', view);
+    }
     await fixture.whenStable();
     fixture.detectChanges();
     return { el: fixture.nativeElement as HTMLElement, page: fixture.componentInstance as unknown as Record<string, any> };
@@ -101,15 +108,40 @@ describe('the monthly payroll', () => {
     expect(payroll).toHaveBeenCalledWith('2026-09-01');
     const rows = [...el.querySelectorAll('tbody tr')].map((r) => [...r.querySelectorAll('td')].map(cell));
     expect(rows[0]).toEqual([
-      'Hassan Chef', 'L.E 5,400.00', 'L.E 500.00', 'L.E 0.00', 'L.E 40.00', 'L.E 200.00', 'L.E 33.67', 'L.E 180.00', 'L.E 40.00', 'L.E 0.00',
-      'L.E 5,486.33', 'Finalized نهائي L.E 5,000.00 to pay',
+      'Hassan Chef', 'L.E 5,400.00', 'L.E 500.00', 'L.E 0.00', 'L.E 40.00', 'L.E 200.00', 'L.E 0.00',
+      'L.E 253.67 Late L.E 33.67 Absent L.E 180.00 Penalties L.E 40.00', 'L.E 5,486.33', 'Finalized نهائي L.E 5,000.00 to pay',
     ]);
+    // Deductions and penalties together, just before what is payable.
+    const heads = [...el.querySelectorAll('thead th')].map(cell);
+    expect(heads.slice(-3)).toEqual(['− Deductions & penalties خصومات وجزاءات', '= Net payable صافي المستحق', 'Status الحالة']);
     // More owed than paid: nothing is paid, and the rest goes to next month.
     expect(rows[1][0]).toBe('Mona Waiter · 16 of 30 days');
-    expect(rows[1][10]).toBe('L.E 0.00 L.E 840.00 to next month');
-    expect(rows[1][11]).toBe('Not calculated لم يُحتسب 2 days suspended');
+    expect(rows[1][7]).toBe('L.E 0.00');
+    expect(rows[1][8]).toBe('L.E 0.00 L.E 840.00 to next month');
+    expect(rows[1][9]).toBe('Not calculated لم يُحتسب 2 days suspended');
+    expect(cell(el.querySelectorAll('tfoot td')[7])).toBe('L.E 253.67');
     expect(text(el.querySelector('tfoot tr')!)).toContain('L.E 5,486.33');
     expect(el.querySelector('tbody a')!.getAttribute('href')).toBe('/hassan?month=2026-09-01');
+  });
+
+  it('puts the month’s total salaries first, before anything is deducted', async () => {
+    const { el } = await render();
+
+    const tiles = [...el.querySelectorAll('.tile')].map(cell);
+    // 5,400 + 500 + 40 overtime for Hassan, and Mona's 2,160.
+    expect(tiles[0]).toBe('Total salaries · إجمالي الرواتب L.E 8,100.00 earned before anything is deducted');
+    expect(tiles[1]).toMatch(/^Net payable · صافي المستحق/);
+  });
+
+  it('shows a day’s labour cost instead of the month when asked, without working the month out', async () => {
+    const { el, page } = await render(true, 'daily');
+
+    expect(el.querySelector('app-daily-cost-page')).not.toBeNull();
+    expect(el.textContent).not.toContain('Base salary');
+    expect(payroll).not.toHaveBeenCalled();
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    page['showView']('month');
+    expect(navigate).toHaveBeenCalledWith([], { queryParams: { view: null }, queryParamsHandling: 'merge', replaceUrl: true });
   });
 
   it('counts the days off and holidays worked with the leave allowances entered', async () => {

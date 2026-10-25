@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
@@ -11,6 +11,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { Observable, firstValueFrom } from 'rxjs';
 import { errorMessage } from '../../core/http/error-message';
 import { Department, HrApi, JobRole } from '../../core/hr/hr.api';
+import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 
@@ -136,8 +137,11 @@ export class DeleteDepartmentDialog {
   protected moveTo = '';
 }
 
-// HR's departments (الأقسام): the kitchen, service, management, each employee in one, how many are in
-// each, and their job roles (الوظائف). A manager's to add, rename and delete; deleting a department
+// HR's departments (الأقسام), as a table of what they cost: the kitchen, service, management, each
+// employee in one, and their job roles (الوظائف), a row each with how many hold it and what they
+// cost; then the department's total and its share of the salaries. Monthly salaries and daily
+// wages are said apart, a daily worker's month being the days they work; those who left are not
+// counted. A manager's to add, rename and delete; deleting a department
 // moves its employees and its roles to another first, and deleting a role has its holders take
 // another of the department's. General is always there, where new employees start: renamed,
 // never deleted.
@@ -159,59 +163,123 @@ export class DeleteDepartmentDialog {
       <p class="error">{{ error() }}</p>
     } @else {
       <div class="table-wrap">
-        <table class="grid">
+        <table class="grid costs" aria-label="Departments, their roles and what they cost">
           <thead>
             <tr>
               <th>Department<span class="ar">القسم</span></th>
+              <th>Roles<span class="ar">الأدوار</span></th>
               <th class="num">Employed<span class="ar">على رأس العمل</span></th>
-              <th class="num">With those who left<span class="ar">مع من ترك العمل</span></th>
+              <th class="num">Cost per role<span class="ar">تكلفة الدور</span></th>
+              <th class="num">Total cost per department<span class="ar">إجمالي تكلفة القسم</span></th>
               @if (canChange()) {
                 <th class="num"><span class="visually-hidden">Change</span></th>
               }
             </tr>
           </thead>
-          <tbody>
-            @for (d of departments(); track d.id) {
-              <tr>
-                <td>
-                  <strong>{{ d.name }}</strong>
-                  @if (d.isGeneral) {
-                    <div class="muted small">Where new employees start · always there</div>
+          @for (d of departments(); track d.id) {
+            @let rows = rowsOf(d);
+            <tbody class="department" [attr.aria-label]="d.name">
+              @for (r of rows; track r.key; let first = $first) {
+                <tr>
+                  @if (first) {
+                    <td class="name" [attr.rowspan]="rows.length">
+                      <strong>{{ d.name }}</strong>
+                      @if (d.isGeneral) {
+                        <div class="muted small">Where new employees start · always there</div>
+                      }
+                      @if (d.everyone > d.employed) {
+                        <div class="muted small">{{ d.everyone }} with those who left</div>
+                      }
+                      @if (canChange()) {
+                        <div><button mat-button class="add-role" (click)="addRole(d)"><mat-icon>add</mat-icon> Role</button></div>
+                      }
+                    </td>
                   }
-                  <div class="roles" [attr.aria-label]="d.name + '’s roles'">
-                    @for (r of d.roles; track r.id) {
+                  <td class="role-cell">
+                    @if (r.role; as role) {
                       <span class="role">
-                        {{ r.name }}<span class="muted"> · {{ r.employed }}</span>
+                        {{ role.name }}
                         @if (canChange()) {
-                          <button mat-icon-button class="mini" (click)="renameRole(d, r)" [attr.aria-label]="'Rename the ' + r.name + ' role'"><mat-icon>edit</mat-icon></button>
-                          <button mat-icon-button class="mini danger" (click)="removeRole(d, r)" [attr.aria-label]="'Delete the ' + r.name + ' role'"><mat-icon>close</mat-icon></button>
+                          <button mat-icon-button class="mini" (click)="renameRole(d, role)" [attr.aria-label]="'Rename the ' + role.name + ' role'"><mat-icon>edit</mat-icon></button>
+                          <button mat-icon-button class="mini danger" (click)="removeRole(d, role)" [attr.aria-label]="'Delete the ' + role.name + ' role'"><mat-icon>close</mat-icon></button>
                         }
                       </span>
-                    } @empty {
-                      <span class="muted small">No roles yet</span>
-                    }
-                    @if (canChange()) {
-                      <button mat-button class="add-role" (click)="addRole(d)"><mat-icon>add</mat-icon> Role</button>
-                    }
-                  </div>
-                </td>
-                <td class="num">{{ d.employed }}</td>
-                <td class="num">{{ d.everyone }}</td>
-                @if (canChange()) {
-                  <td class="num nowrap">
-                    <button mat-icon-button (click)="rename(d)" matTooltip="Rename" [attr.aria-label]="'Rename ' + d.name"><mat-icon>edit</mat-icon></button>
-                    @if (!d.isGeneral) {
-                      <button mat-icon-button class="danger" (click)="remove(d)" matTooltip="Delete" [attr.aria-label]="'Delete ' + d.name">
-                        <mat-icon>delete</mat-icon>
-                      </button>
+                    } @else {
+                      <span class="muted small">{{ r.label }}</span>
                     }
                   </td>
+                  <td class="num">{{ r.employed }}</td>
+                  <td class="num">
+                    @let c = cost(r.monthly, r.daily);
+                    @if (c.month) {
+                      <div>{{ c.month }}</div>
+                    }
+                    @if (c.day) {
+                      <div [class.small]="!!c.month">{{ c.day }}</div>
+                    }
+                    @if (!c.month && !c.day) {
+                      <span class="muted">—</span>
+                    }
+                  </td>
+                  @if (first) {
+                    <td class="num total" [attr.rowspan]="rows.length">
+                      @let t = cost(d.monthlyCost, d.dailyCost);
+                      @if (t.month) {
+                        <strong>{{ t.month }}</strong>
+                      }
+                      @if (t.day) {
+                        <div [class.small]="!!t.month">{{ t.day }}</div>
+                      }
+                      @if (!t.month && !t.day) {
+                        <span class="muted">—</span>
+                      }
+                      @if (d.monthlyCost && totals().monthly) {
+                        <div class="muted small">{{ share(d.monthlyCost) }} of the salaries</div>
+                      }
+                    </td>
+                    @if (canChange()) {
+                      <td class="num nowrap" [attr.rowspan]="rows.length">
+                        <button mat-icon-button (click)="rename(d)" matTooltip="Rename" [attr.aria-label]="'Rename ' + d.name"><mat-icon>edit</mat-icon></button>
+                        @if (!d.isGeneral) {
+                          <button mat-icon-button class="danger" (click)="remove(d)" matTooltip="Delete" [attr.aria-label]="'Delete ' + d.name">
+                            <mat-icon>delete</mat-icon>
+                          </button>
+                        }
+                      </td>
+                    }
+                  }
+                </tr>
+              }
+            </tbody>
+          }
+          @if (departments().length) {
+            <tfoot>
+              <tr>
+                <td>All departments · الإجمالي</td>
+                <td></td>
+                <td class="num">{{ totals().employed }}</td>
+                <td></td>
+                <td class="num">
+                  @let all = cost(totals().monthly, totals().daily);
+                  @if (all.month) {
+                    <div>{{ all.month }}</div>
+                  }
+                  @if (all.day) {
+                    <div [class.small]="!!all.month">{{ all.day }}</div>
+                  }
+                </td>
+                @if (canChange()) {
+                  <td></td>
                 }
               </tr>
-            }
-          </tbody>
+            </tfoot>
+          }
         </table>
       </div>
+      <p class="note">
+        What those employed now cost: monthly salaries a month, and apart, the daily wages of those paid by the day, whose month is the
+        days they work. Those who left are not counted.
+      </p>
     }
   `,
   styleUrl: '../costing/costing.scss',
@@ -228,12 +296,23 @@ export class DeleteDepartmentDialog {
     .danger {
       color: var(--mat-sys-error);
     }
-    .roles {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 4px 8px;
-      margin-top: 6px;
+    .costs {
+      tbody.department {
+        border-top: 2px solid var(--mat-sys-outline-variant);
+      }
+      td {
+        vertical-align: top;
+      }
+      td.name,
+      td.total {
+        background: var(--mat-sys-surface-container-low);
+      }
+      td.total strong {
+        font: var(--mat-sys-title-medium);
+      }
+      .add-role {
+        margin-top: 4px;
+      }
     }
     .role {
       display: inline-flex;
@@ -261,14 +340,49 @@ export class DepartmentsPage {
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
   private readonly approvals = inject(Approvals);
+  private readonly money = new MoneyPipe();
 
   protected readonly canChange = this.approvals.canApprove;
   protected readonly departments = signal<Department[]>([]);
   protected readonly loading = signal(false);
   protected readonly error = signal<string | null>(null);
 
+  // Everyone employed in all of them, and what they cost.
+  protected readonly totals = computed(() =>
+    this.departments().reduce(
+      (sum, d) => ({ employed: sum.employed + d.employed, monthly: sum.monthly + d.monthlyCost, daily: sum.daily + d.dailyCost }),
+      { employed: 0, monthly: 0, daily: 0 },
+    ),
+  );
+
   constructor() {
     void this.load();
+  }
+
+  // A row each role, and one for those employed in it with no role, when there are any; one row
+  // saying so when it has no roles.
+  protected rowsOf(d: Department): CostRow[] {
+    const rows: CostRow[] = d.roles.map((r) => ({ key: r.id, role: r, label: r.name, employed: r.employed, monthly: r.monthlyCost, daily: r.dailyCost }));
+    const employed = d.employed - d.roles.reduce((sum, r) => sum + r.employed, 0);
+    const monthly = round(d.monthlyCost - d.roles.reduce((sum, r) => sum + r.monthlyCost, 0));
+    const daily = round(d.dailyCost - d.roles.reduce((sum, r) => sum + r.dailyCost, 0));
+    if (employed > 0 || monthly > 0 || daily > 0) {
+      rows.push({ key: 'none', role: null, label: 'No role yet', employed, monthly, daily });
+    }
+    return rows.length ? rows : [{ key: 'none', role: null, label: 'No roles yet', employed: 0, monthly: 0, daily: 0 }];
+  }
+
+  // "L.E 5,400.00 a month", and "+ L.E 270.00 a day" beside it, as there are.
+  protected cost(monthly: number, daily: number): { month: string | null; day: string | null } {
+    return {
+      month: monthly > 0 ? `${this.money.transform(monthly)} a month` : null,
+      day: daily > 0 ? `${monthly > 0 ? '+ ' : ''}${this.money.transform(daily)} a day` : null,
+    };
+  }
+
+  // A department's share of the salaries: "38%".
+  protected share(monthly: number): string {
+    return `${Math.round((monthly / this.totals().monthly) * 100)}%`;
   }
 
   protected async add(): Promise<void> {
@@ -355,4 +469,18 @@ export class DepartmentsPage {
       this.loading.set(false);
     }
   }
+}
+
+interface CostRow {
+  key: string;
+  // None for those with no role, or a department with none.
+  role: JobRole | null;
+  label: string;
+  employed: number;
+  monthly: number;
+  daily: number;
+}
+
+function round(amount: number): number {
+  return Math.round(amount * 100) / 100;
 }

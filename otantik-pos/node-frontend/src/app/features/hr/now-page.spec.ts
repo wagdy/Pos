@@ -23,8 +23,8 @@ function presence(e: Employee, extra: Partial<Presence>): Presence {
 }
 
 const departments: Department[] = [
-  { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 3, everyone: 3, roles: [] },
-  { id: 'service', name: 'Service', isGeneral: false, employed: 2, everyone: 2, roles: [] },
+  { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 3, everyone: 3, roles: [], monthlyCost: 0, dailyCost: 0 },
+  { id: 'service', name: 'Service', isGeneral: false, employed: 2, everyone: 2, roles: [], monthlyCost: 0, dailyCost: 0 },
 ];
 
 const everyone: Presence[] = [

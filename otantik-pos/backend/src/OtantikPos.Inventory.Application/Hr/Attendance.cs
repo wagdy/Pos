@@ -78,7 +78,9 @@ public sealed record AttendanceDayDto(
     // The public holiday the day is, by its name.
     string? HolidayName = null,
     // When the day ends, and the next one's punches start.
-    DateTime? DayEndsAt = null)
+    DateTime? DayEndsAt = null,
+    // A punch-in with no punch-out once the shift is over (نسي تسجيل الانصراف).
+    bool ForgotToCheckOut = false)
 {
     public static AttendanceDayDto From(Employee employee, TimesheetDay day)
     {
@@ -87,16 +89,16 @@ public sealed record AttendanceDayDto(
         return new AttendanceDayDto(
             e.Day, e.Status, start, start + Employee.ShiftLength, e.FirstIn, e.LastOut, e.WorkedMinutes, e.LateMinutes, e.EarlyLeaveMinutes, e.AwayMinutes,
             e.OvertimeMinutes, e.ShortMinutes, employee.IsDayOff(e.Day), day.Mark?.Kind, day.Mark?.Notes, day.Punches.Select(PunchDto.From).ToList(),
-            e.PenaltyHours, day.Penalty?.Reason, day.Penalty?.SetBy, day.Holiday?.Name, Timesheet.Window(employee, e.Day).To);
+            e.PenaltyHours, day.Penalty?.Reason, day.Penalty?.SetBy, day.Holiday?.Name, Timesheet.Window(employee, e.Day).To, day.ForgotToCheckOut);
     }
 }
 
 public sealed record EmployeeDayDto(EmployeeDto Employee, AttendanceDayDto Day);
 
-public sealed record AttendanceTotals(int Present, int Late, int Absent, int MissingPunch, int OffOrOnLeave, int OvertimeMinutes);
+public sealed record AttendanceTotals(int Present, int Late, int Absent, int MissingPunch, int OffOrOnLeave, int OvertimeMinutes, int ForgotToCheckOut = 0);
 
-// Everyone's day: who came, who is late, who is missing a punch or absent; and the punches under
-// numbers nobody has yet.
+// Everyone's day: who came, who is late, who forgot to check out, who is missing a punch or absent;
+// and the punches under numbers nobody has yet.
 public sealed record AttendanceDayReport(
     DateOnly Date, AttendancePolicyDto Policy, AttendanceTotals Totals, IReadOnlyList<EmployeeDayDto> Employees, IReadOnlyList<PunchDto> Unassigned);
 
@@ -107,7 +109,8 @@ public sealed record TimesheetTotals(
 public sealed record TimesheetDto(EmployeeDto Employee, DateOnly Month, AttendancePolicyDto Policy, TimesheetTotals Totals, IReadOnlyList<AttendanceDayDto> Days);
 
 public sealed record TimesheetDay(
-    DayEvaluation Evaluation, IReadOnlyList<AttendanceLog> Punches, DayMark? Mark, AdministrativePenalty? Penalty = null, PublicHoliday? Holiday = null);
+    DayEvaluation Evaluation, IReadOnlyList<AttendanceLog> Punches, DayMark? Mark, AdministrativePenalty? Penalty = null, PublicHoliday? Holiday = null,
+    bool ForgotToCheckOut = false);
 
 public sealed record EmployeeSheet(Employee Employee, IReadOnlyList<TimesheetDay> Days);
 
@@ -149,7 +152,7 @@ internal sealed class Timesheets(
                 var evaluation = Timesheet.Evaluate(
                         person, day, inDay.Where(p => !p.IsIgnored).Select(p => p.PunchedAt), mark?.Kind, policy, now, holiday is not null)
                     with { PenaltyHours = penalty is not null && person.IsEmployedOn(day) ? penalty.Hours : 0 };
-                days.Add(new TimesheetDay(evaluation, inDay, mark, penalty, holiday));
+                days.Add(new TimesheetDay(evaluation, inDay, mark, penalty, holiday, Timesheet.ForgotToCheckOut(person, evaluation, mark?.Kind, now)));
             }
 
             sheets.Add(new EmployeeSheet(person, days));
@@ -191,7 +194,8 @@ internal sealed class GetAttendanceDayHandler(IEmployeeRepository employees, IAt
             days.Count(d => d.Status == DayStatus.Absent),
             days.Count(d => d.Status == DayStatus.Suspended),
             days.Count(d => d.Status is DayStatus.DayOff or DayStatus.Leave or DayStatus.Holiday),
-            days.Sum(d => d.OvertimeMinutes));
+            days.Sum(d => d.OvertimeMinutes),
+            sheets.Count(s => s.Days[0].ForgotToCheckOut));
         return new AttendanceDayReport(request.Date, AttendancePolicyDto.From(policy), totals, rows, unassigned);
     }
 }

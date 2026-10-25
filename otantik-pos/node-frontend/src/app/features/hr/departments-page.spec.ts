@@ -8,10 +8,16 @@ import { Approvals } from '../costing/approvals';
 import { DeleteDepartmentDialog, DeleteRoleDialog, DepartmentDialog, DepartmentsPage } from './departments-page';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
+// Element by element: the template leaves no space between them.
+const cell = (el: Element): string =>
+  [...el.childNodes]
+    .map((n) => (n.nodeType === Node.ELEMENT_NODE ? cell(n as Element) : n.nodeType === Node.TEXT_NODE ? (n.textContent ?? '').trim() : ''))
+    .filter(Boolean)
+    .join(' ');
 
-const general: Department = { id: 'general', name: 'General', isGeneral: true, employed: 1, everyone: 1, roles: [] };
-const kitchen: Department = { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 3, everyone: 4, roles: [] };
-const empty: Department = { id: 'empty', name: 'Management', isGeneral: false, employed: 0, everyone: 0, roles: [] };
+const general: Department = { id: 'general', name: 'General', isGeneral: true, employed: 1, everyone: 1, roles: [], monthlyCost: 0, dailyCost: 0 };
+const kitchen: Department = { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 3, everyone: 4, roles: [], monthlyCost: 0, dailyCost: 0 };
+const empty: Department = { id: 'empty', name: 'Management', isGeneral: false, employed: 0, everyone: 0, roles: [], monthlyCost: 0, dailyCost: 0 };
 
 describe('the departments', () => {
   const departments = vi.fn();
@@ -52,11 +58,40 @@ describe('the departments', () => {
   it('lists the departments and how many are in each, General kept', async () => {
     const { el } = await render();
 
-    const rows = [...el.querySelectorAll('tbody tr')];
-    expect(rows.map((r) => [...r.querySelectorAll('td')].slice(1, 3).map(text))).toEqual([['1', '1'], ['3', '4'], ['0', '0']]);
-    expect(text(rows[0].querySelector('td .muted')!)).toBe('Where new employees start · always there');
-    expect(rows[0].querySelector('button[aria-label^="Delete"]')).toBeNull();
-    expect(rows[1].querySelector('button[aria-label="Delete Kitchen"]')).not.toBeNull();
+    const groups = [...el.querySelectorAll('tbody.department')];
+    expect(groups.map((g) => [...g.querySelectorAll('tr')].map((r) => [...r.querySelectorAll('td.role-cell, td:nth-child(3)')].map(text)))).toEqual([
+      [['No role yet', '1']],
+      [['No role yet', '3']],
+      [['No roles yet', '0']],
+    ]);
+    expect(text(groups[0].querySelector('td.name .muted')!)).toBe('Where new employees start · always there');
+    expect(text(groups[1].querySelector('td.name')!)).toContain('4 with those who left');
+    expect(groups[0].querySelector('button[aria-label^="Delete"]')).toBeNull();
+    expect(groups[1].querySelector('button[aria-label="Delete Kitchen"]')).not.toBeNull();
+  });
+
+  it('says what each role and each department costs, monthly salaries and daily wages apart, and its share', async () => {
+    const waiter = { id: 'waiter', departmentId: 'general', name: 'Waiter', employed: 1, monthlyCost: 4_050, dailyCost: 0 };
+    const chef = { id: 'chef', departmentId: 'kitchen', name: 'Chef', employed: 2, monthlyCost: 10_800, dailyCost: 0 };
+    const helper = { id: 'helper', departmentId: 'kitchen', name: 'Helper', employed: 1, monthlyCost: 0, dailyCost: 270 };
+    departments.mockReturnValue(of([
+      { ...general, roles: [waiter], monthlyCost: 4_050 },
+      // One of the kitchen holds no role yet.
+      { ...kitchen, employed: 4, roles: [chef, helper], monthlyCost: 16_800, dailyCost: 270 },
+      empty,
+    ]));
+    const { el } = await render();
+    const [, kitchenRows, management] = [...el.querySelectorAll('tbody.department')];
+    const rows = [...kitchenRows.querySelectorAll('tr')];
+
+    expect(rows.map((r) => text(r.querySelector('td.role-cell')!).replace(/editclose/g, '').trim())).toEqual(['Chef', 'Helper', 'No role yet']);
+    expect(rows.map((r) => cell(r.querySelector('td.role-cell + td + td')!))).toEqual([
+      'L.E 10,800.00 a month', 'L.E 270.00 a day', 'L.E 6,000.00 a month',
+    ]);
+    expect(rows[0].querySelector('td.total')!.getAttribute('rowspan')).toBe('3');
+    expect(cell(rows[0].querySelector('td.total')!)).toBe('L.E 16,800.00 a month + L.E 270.00 a day 81% of the salaries');
+    expect(cell(management.querySelector('td.total')!)).toBe('—');
+    expect(cell(el.querySelector('tfoot tr')!)).toBe('All departments · الإجمالي 5 L.E 20,850.00 a month + L.E 270.00 a day');
   });
 
   it('adds and renames one', async () => {
@@ -75,14 +110,16 @@ describe('the departments', () => {
   });
 
   it('lists each department’s roles, added, renamed and deleted with their holders moved', async () => {
-    const chef = { id: 'chef', departmentId: 'kitchen', name: 'Chef', employed: 2 };
-    const helper = { id: 'helper', departmentId: 'kitchen', name: 'Helper', employed: 1 };
-    const withRoles = { ...kitchen, roles: [chef, helper] };
-    departments.mockReturnValue(of([general, withRoles]));
+    const chef = { id: 'chef', departmentId: 'kitchen', name: 'Chef', employed: 2, monthlyCost: 10_800, dailyCost: 0 };
+    const helper = { id: 'helper', departmentId: 'kitchen', name: 'Helper', employed: 1, monthlyCost: 4_000, dailyCost: 0 };
+    const withRoles = { ...kitchen, roles: [chef, helper], monthlyCost: 14_800 };
+    departments.mockReturnValue(of([empty, withRoles]));
     const { el, page } = await render();
 
-    expect([...el.querySelectorAll('tbody tr')[1].querySelectorAll('.role')].map((r) => text(r).replace(/editclose/g, '').trim())).toEqual(['Chef · 2', 'Helper · 1']);
-    expect(text(el.querySelectorAll('tbody tr')[0].querySelector('.roles')!)).toContain('No roles yet');
+    const [none, kitchenRows] = [...el.querySelectorAll('tbody.department')];
+    expect([...kitchenRows.querySelectorAll('.role')].map((r) => text(r).replace(/editclose/g, '').trim())).toEqual(['Chef', 'Helper']);
+    expect([...kitchenRows.querySelectorAll('tr')].map((r) => text(r.querySelector('td.role-cell + td')!))).toEqual(['2', '1']);
+    expect(text(none.querySelector('td.role-cell')!)).toBe('No roles yet');
 
     open.mockReturnValue({ afterClosed: () => of('Captain') });
     await page['addRole'](withRoles);

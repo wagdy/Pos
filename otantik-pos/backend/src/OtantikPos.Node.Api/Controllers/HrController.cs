@@ -371,6 +371,12 @@ public sealed class HrController(ISender sender) : ControllerBase
     public Task<PayrollMonthDto> GetPayroll([FromQuery] DateOnly month, CancellationToken cancellationToken) =>
         sender.Send(new GetPayrollQuery(month), cancellationToken);
 
+    // A day's labour cost (تكلفة يوم): who punched in, each at their day's rate, by department, the
+    // day's overtime pay beside it.
+    [HttpGet("payroll/daily-cost")]
+    public Task<DailyLabourCostDto> GetDailyCost([FromQuery] DateOnly date, CancellationToken cancellationToken) =>
+        sender.Send(new GetDailyLabourCostQuery(date), cancellationToken);
+
     // The month's drafts saved as they stand.
     [HttpPost("payroll/calculate")]
     [Authorize(Policy = Permissions.HrManage)]

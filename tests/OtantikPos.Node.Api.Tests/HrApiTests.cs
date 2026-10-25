@@ -196,6 +196,88 @@ public class HrApiTests
     }
 
     [Fact]
+    public async Task A_days_labour_cost_each_departments_cost_and_who_forgot_to_check_out()
+    {
+        await using var api = await TestApi.StartAsync();
+        var manager = await api.ManagerAsync();
+        var accountant = await api.AccountantAsync(manager);
+        var cashier = await api.CashierAsync(manager);
+        var today = await TodayAsync(manager);
+        var day = today.AddDays(-2);
+        var month = new DateOnly(day.Year, day.Month, 1);
+        var kitchen = Guid.NewGuid();
+        await Json(await manager.PutAsJsonAsync($"/api/hr/departments/{kitchen}", new { name = "Kitchen" }, Cancel));
+        async Task<Guid> Hire(string name, string role, Guid? department, decimal salary, string type = "Monthly")
+        {
+            var id = Guid.NewGuid();
+            await Json(await manager.PutAsJsonAsync($"/api/hr/employees/{id}", new
+            {
+                requestId = Guid.NewGuid(), name, jobTitle = role, monthlySalary = type == "Monthly" ? salary : 0, dailyWage = type == "Daily" ? salary : 0,
+                employmentType = type, departmentId = department, shiftStartsAt = "10:00:00", daysOff = Array.Empty<string>(), hiredOn = Iso(day.AddDays(-30)),
+            }, Cancel));
+            return id;
+        }
+        var hassan = await Hire("Hassan", "Chef", kitchen, 5_400);
+        var samir = await Hire("Samir", "Helper", kitchen, 270, "Daily");
+        var mona = await Hire("Mona", "Waiter", null, 4_050);
+        var karim = await Hire("Karim", "Chef", kitchen, 6_000);
+        await Json(await manager.PostAsJsonAsync($"/api/hr/employees/{karim}/leave", new { requestId = Guid.NewGuid(), lastDay = Iso(day.AddDays(-10)) }, Cancel));
+        async Task Punch(Guid who, string time) => await Json(await manager.PostAsJsonAsync("/api/hr/punches", new
+        {
+            punchId = Guid.NewGuid(), employeeId = who, punchedAt = $"{Iso(day)}T{time}", reason = "Entered for the test",
+        }, Cancel));
+        // Hassan 10:00 to 21:00, two hours over; Samir in at 10:05 and never out; Mona not in.
+        await Punch(hassan, "10:00:00");
+        await Punch(hassan, "21:00:00");
+        await Punch(samir, "10:05:00");
+
+        // The day's review: Samir forgot to check out.
+        var review = await Json(await accountant.GetAsync($"/api/hr/attendance?date={Iso(day)}", Cancel));
+        Assert.Equal(1, review.GetProperty("totals").GetProperty("forgotToCheckOut").GetInt32());
+        Assert.Equal(
+            [("Hassan", false), ("Mona", false), ("Samir", true)],
+            review.GetProperty("employees").EnumerateArray()
+                .Select(e => (e.GetProperty("employee").GetProperty("name").GetString(), e.GetProperty("day").GetProperty("forgotToCheckOut").GetBoolean())));
+
+        // The day's cost: Hassan at 180 a day and Samir at his 270, Mona not in; Hassan's two hours
+        // over beside it, at 20 an hour.
+        Assert.Equal(HttpStatusCode.Forbidden, (await cashier.GetAsync($"/api/hr/payroll/daily-cost?date={Iso(day)}", Cancel)).StatusCode);
+        var cost = await Json(await accountant.GetAsync($"/api/hr/payroll/daily-cost?date={Iso(day)}", Cancel));
+        Assert.Equal((3, 2, 450m, 40m), (cost.GetProperty("employed").GetInt32(), cost.GetProperty("worked").GetInt32(),
+            cost.GetProperty("cost").GetDecimal(), cost.GetProperty("overtimePay").GetDecimal()));
+        Assert.Equal(
+            [("Hassan", 180m, 40m, false), ("Samir", 270m, 0m, true)],
+            cost.GetProperty("employees").EnumerateArray().Select(e => (e.GetProperty("name").GetString(), e.GetProperty("dayRate").GetDecimal(),
+                e.GetProperty("overtimePay").GetDecimal(), e.GetProperty("forgotToCheckOut").GetBoolean())));
+        var byDepartment = cost.GetProperty("departments").EnumerateArray().Single();
+        Assert.Equal(("Kitchen", 2, 450m), (byDepartment.GetProperty("name").GetString(), byDepartment.GetProperty("worked").GetInt32(),
+            byDepartment.GetProperty("cost").GetDecimal()));
+        var nobody = await Json(await accountant.GetAsync($"/api/hr/payroll/daily-cost?date={Iso(day.AddDays(-1))}", Cancel));
+        Assert.Equal((0, 0m), (nobody.GetProperty("worked").GetInt32(), nobody.GetProperty("cost").GetDecimal()));
+
+        // Each department's cost, and each role's: monthly salaries and daily wages apart, of those
+        // employed now (Karim has left).
+        var departments = (await Json(await accountant.GetAsync("/api/hr/departments", Cancel))).EnumerateArray().ToDictionary(d => d.GetProperty("name").GetString()!);
+        var k = departments["Kitchen"];
+        Assert.Equal((5_400m, 270m), (k.GetProperty("monthlyCost").GetDecimal(), k.GetProperty("dailyCost").GetDecimal()));
+        Assert.Equal(
+            [("Chef", 1, 5_400m, 0m), ("Helper", 1, 0m, 270m)],
+            k.GetProperty("roles").EnumerateArray().Select(r => (r.GetProperty("name").GetString(), r.GetProperty("employed").GetInt32(),
+                r.GetProperty("monthlyCost").GetDecimal(), r.GetProperty("dailyCost").GetDecimal())));
+        Assert.Equal((4_050m, 0m), (departments["General"].GetProperty("monthlyCost").GetDecimal(), departments["General"].GetProperty("dailyCost").GetDecimal()));
+
+        // The month's total salaries, before anything is deducted, and its administrative penalties.
+        Assert.Equal(HttpStatusCode.NoContent, (await manager.PutAsJsonAsync(
+            $"/api/hr/employees/{hassan}/days/{Iso(day)}/penalty", new { hours = 1.5, reason = "Left the walk-in open" }, Cancel)).StatusCode);
+        var payroll = await Json(await accountant.GetAsync($"/api/hr/payroll?month={Iso(month)}", Cancel));
+        var totals = payroll.GetProperty("totals");
+        var slips = payroll.GetProperty("slips").EnumerateArray().Select(s => s.GetProperty("figures")).ToList();
+        Assert.Equal(slips.Sum(f => f.GetProperty("gross").GetDecimal()), totals.GetProperty("gross").GetDecimal());
+        Assert.True(totals.GetProperty("gross").GetDecimal() > 0);
+        Assert.Equal(30m, totals.GetProperty("administrativePenalties").GetDecimal());
+    }
+
+    [Fact]
     public async Task Employees_come_in_from_an_Excel_sheet_and_go_out_to_one_with_the_payroll()
     {
         await using var api = await TestApi.StartAsync();

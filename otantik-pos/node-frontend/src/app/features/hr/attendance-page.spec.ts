@@ -35,7 +35,7 @@ function day(date: string, extra: Partial<AttendanceDay> = {}): AttendanceDay {
     date, status: 'Worked', shiftStartsAt: `${date}T16:00:00`, shiftEndsAt: `${tomorrow}T01:00:00`, firstIn: `${date}T16:12:00`,
     lastOut: `${tomorrow}T01:20:00`, workedMinutes: 548, lateMinutes: 12, earlyLeaveMinutes: 0, awayMinutes: 0, overtimeMinutes: 20, shortMinutes: 12,
     isWeeklyDayOff: false, mark: null, markNotes: null, punches: [punch('p1', `${date}T16:12:00`), punch('p2', `${tomorrow}T01:20:00`)],
-    penaltyHours: 0, penaltyReason: null, penaltySetBy: null, holidayName: null, dayEndsAt: `${tomorrow}T10:00:00`, ...extra,
+    penaltyHours: 0, penaltyReason: null, penaltySetBy: null, holidayName: null, dayEndsAt: `${tomorrow}T10:00:00`, forgotToCheckOut: false, ...extra,
   };
 }
 
@@ -45,7 +45,7 @@ const mona = employee('mona', 'Mona', '10:00:00');
 const report: AttendanceDayReport = {
   date: '2026-09-21',
   policy: { graceMinutes: 0, doubleScanMinutes: 3 },
-  totals: { present: 1, late: 1, absent: 1, missingPunch: 0, offOrOnLeave: 0, overtimeMinutes: 20 },
+  totals: { present: 1, late: 1, absent: 1, missingPunch: 0, offOrOnLeave: 0, overtimeMinutes: 20, forgotToCheckOut: 0 },
   employees: [
     { employee: hassan, day: day('2026-09-21', { penaltyHours: 2, penaltyReason: 'Left the walk-in open', penaltySetBy: 'Omar' }) },
     { employee: mona, day: day('2026-09-21', { status: 'Absent', firstIn: null, lastOut: null, workedMinutes: 0, lateMinutes: 0, overtimeMinutes: 0, punches: [] }) },
@@ -125,13 +125,49 @@ describe('the attendance', () => {
     expect(attendance).toHaveBeenCalledWith('2026-09-21');
     expect([...el.querySelectorAll('.totals .chip')].map(text)).toEqual([
       '1 came in · حضور', '1 late · تأخير', '1 absent · غياب', '0 suspended · موقوف للمراجعة', '0 off, on leave or a holiday · راحة وإجازات', '20m overtime · إضافي',
+      '0 forgot to check out · نسي تسجيل الانصراف',
     ]);
+    expect(el.querySelector<HTMLButtonElement>('.forgot-filter')!.disabled).toBe(true);
     const rows = [...el.querySelectorAll('tbody tr')];
     expect(cells(rows[0])).toEqual(['16:00–01:00 +1', '16:12', '01:20 +1', '9h 08m', '12m', '—', '—', '20m']);
     expect(rows[1].classList).toContain('status-Absent');
     expect(text(rows[0].querySelector('.bad-text')!)).toBe('Penalty 2h: Left the walk-in open');
     expect(text(el.querySelector('.unassigned')!)).toContain('no. 99 at 11:00');
     expect(text(el.querySelector('.note')!)).toContain("Late counts from the shift's start: no grace is set");
+  });
+
+  it('marks who forgot to check out on the day’s review, and shows only them when asked', async () => {
+    const forgot = day('2026-09-21', { status: 'Open', lastOut: null, workedMinutes: 0, overtimeMinutes: 0, forgotToCheckOut: true, punches: [punch('p9', '2026-09-21T10:00:00')] });
+    attendance.mockReturnValue(of({
+      ...report,
+      totals: { ...report.totals, forgotToCheckOut: 1 },
+      employees: [...report.employees, { employee: employee('karim', 'Karim', '10:00:00'), day: forgot }],
+    }));
+    const { el, page, refresh } = await render();
+
+    expect(text(el.querySelector('.toolbar mat-button-toggle')!)).toBe('Day review · مراجعة يوم');
+    const rows = () => [...el.querySelectorAll('tbody tr:not(.detail)')];
+    const karim = rows()[2];
+    expect(karim.classList).toContain('forgot');
+    expect(text(karim.querySelectorAll('td')[3])).toBe('Forgot to check outنسي تسجيل الانصراف');
+    expect(rows()[0].classList).not.toContain('forgot');
+
+    const filter = el.querySelector<HTMLButtonElement>('.forgot-filter')!;
+    expect(filter.disabled).toBe(false);
+    expect(text(filter)).toBe('filter_alt1 forgot to check out · نسي تسجيل الانصراف');
+    filter.click();
+    await refresh();
+    expect(rows().map((r) => text(r.querySelector('td strong')!))).toEqual(['Karim']);
+    expect(filter.getAttribute('aria-pressed')).toBe('true');
+    filter.click();
+    await refresh();
+    expect(rows().length).toBe(3);
+
+    // Another day shows everyone again.
+    filter.click();
+    page['moveDay'](-1);
+    await refresh();
+    expect(page['onlyForgot']()).toBe(false);
   });
 
   it('opens a day to its punches, and lets a manager put it right', async () => {

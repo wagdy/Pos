@@ -36,8 +36,8 @@ const hassan = employee('hassan', 'Hassan', { deviceUserId: '7', daysOff: ['Frid
 const mona = employee('mona', 'Mona', { jobTitle: 'Waiter', monthlySalary: 4_000, dailyRate: 133.33, hourlyRate: 14.81, shiftStartsAt: '16:00:00', shiftEndsAt: '01:00:00', daysOff: [] });
 const gone = employee('gone', 'Gone Already', { isActive: false, leftOn: '2026-09-30' });
 const departments: Department[] = [
-  { id: 'general', name: 'General', isGeneral: true, employed: 2, everyone: 3, roles: [] },
-  { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 0, everyone: 0, roles: [] },
+  { id: 'general', name: 'General', isGeneral: true, employed: 2, everyone: 3, roles: [], monthlyCost: 0, dailyCost: 0 },
+  { id: 'kitchen', name: 'Kitchen', isGeneral: false, employed: 0, everyone: 0, roles: [], monthlyCost: 0, dailyCost: 0 },
 ];
 
 function deviceUser(number: string, name: string, extra: Partial<DeviceUser> = {}): DeviceUser {

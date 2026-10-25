@@ -351,6 +351,38 @@ public class HrTests
     }
 
     [Fact]
+    public void A_punch_in_without_its_punch_out_is_forgetting_to_check_out_once_the_shift_is_over()
+    {
+        var chef = Chef(new TimeOnly(10, 0));
+        bool Forgot(Employee e, DateOnly day, DateTime now, DayMarkKind? mark = null, params DateTime[] punches) =>
+            Timesheet.ForgotToCheckOut(e, Timesheet.Evaluate(e, day, punches, mark, TenMinutesGrace, now), mark, now);
+
+        // In at 10:02, no punch-out: not until the nine hours end at 19:00.
+        Assert.False(Forgot(chef, Monday, At(Monday, 18, 59), null, At(Monday, 10, 2)));
+        Assert.True(Forgot(chef, Monday, At(Monday, 19, 0), null, At(Monday, 10, 2)));
+        // Out again after a break, and not back out: the same.
+        Assert.True(Forgot(chef, Monday, At(Monday, 20, 0), null, At(Monday, 10, 2), At(Monday, 14, 0), At(Monday, 15, 0)));
+        // Checked out, or never in: nothing to forget.
+        Assert.False(Forgot(chef, Monday, Later, null, At(Monday, 10, 2), At(Monday, 19, 0)));
+        Assert.False(Forgot(chef, Monday, Later));
+        // Suspended, 18 hours on: forgot, still.
+        var abandoned = Timesheet.Evaluate(chef, Monday, [At(Monday, 10, 2)], null, TenMinutesGrace, Later);
+        Assert.Equal(DayStatus.Suspended, abandoned.Status);
+        Assert.True(Timesheet.ForgotToCheckOut(chef, abandoned, null, Later));
+
+        // No shift to end: flexible hours, once the day ends at 04:00 the next morning.
+        var flexible = Chef();
+        flexible.SetShift(null);
+        Assert.False(Forgot(flexible, Monday, At(Monday.AddDays(1), 3, 59), null, At(Monday, 12, 0)));
+        Assert.True(Forgot(flexible, Monday, At(Monday.AddDays(1), 4, 0), null, At(Monday, 12, 0)));
+        // A day off worked has no shift either: once the day ends, 18 hours after the shift would start.
+        Assert.False(Forgot(chef, Friday, At(Friday, 19, 0), null, At(Friday, 12, 0)));
+        Assert.True(Forgot(chef, Friday, At(Friday.AddDays(1), 4, 0), null, At(Friday, 12, 0)));
+        // A day off marked a working day (a swap) has its shift.
+        Assert.True(Forgot(chef, Friday, At(Friday, 19, 0), DayMarkKind.WorkingDay, At(Friday, 10, 0)));
+    }
+
+    [Fact]
     public void An_employees_national_id_and_mobile_are_kept_as_digits_however_they_are_typed()
     {
         var chef = Chef();

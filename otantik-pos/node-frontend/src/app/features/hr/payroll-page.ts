@@ -1,24 +1,30 @@
 import { DatePipe } from '@angular/common';
 import { Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
 import { errorMessage } from '../../core/http/error-message';
-import { HrApi, PayrollMonth, PayrollSlip } from '../../core/hr/hr.api';
+import { HrApi, PayrollFigures, PayrollMonth, PayrollSlip } from '../../core/hr/hr.api';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { saveBlob } from '../../core/ui/save-blob';
 import { isoDay } from '../costing/financials';
+import { DailyCostPage } from './daily-cost-page';
 
+// Payroll in two views (?view=daily for the second): the month's, and a day's labour cost
+// (تكلفة يوم, DailyCostPage).
+//
 // The monthly payroll (مسير الرواتب): every employee's pay for the month, each part of it a column,
 // as the formula adds them up:
 //   base salary + incentives + leave allowances + overtime − advances − last month's shortfall
-//   − lateness − absence − administrative penalties = net payable.
+//   − deductions and penalties (lateness, absence, administrative penalties) = net payable.
+// Above it, the month's total salaries before anything is deducted (إجمالي الرواتب).
 // The leave allowances are the ones entered and the days off worked, which earn theirs by
 // themselves.
 // A draft is worked out from the month's attendance as it stands now; calculating saves the
@@ -26,152 +32,167 @@ import { isoDay } from '../costing/financials';
 // the accounts as an Excel sheet, its columns and totals as here.
 @Component({
   selector: 'app-payroll-page',
-  imports: [DatePipe, MatButtonModule, MatIconModule, MatProgressBarModule, MatTooltipModule, MoneyPipe, RouterLink],
+  imports: [DailyCostPage, DatePipe, MatButtonModule, MatButtonToggleModule, MatIconModule, MatProgressBarModule, MatTooltipModule, MoneyPipe, RouterLink],
   template: `
-    <div class="toolbar no-print">
-      <button mat-icon-button (click)="move(-1)" aria-label="The month before"><mat-icon>chevron_left</mat-icon></button>
-      <strong class="month">{{ month() | date: 'MMMM y' }}</strong>
-      <button mat-icon-button (click)="move(1)" aria-label="The month after"><mat-icon>chevron_right</mat-icon></button>
-      <span class="spacer"></span>
-      @if (canCalculate()) {
-        <button mat-stroked-button (click)="calculate()" [disabled]="calculating()" matTooltip="Save every draft as it stands now">
-          <mat-icon>calculate</mat-icon> Calculate drafts <span class="inline-ar">احتساب المسودات</span>
+    <mat-button-toggle-group class="views no-print" [value]="view()" (change)="showView($event.value)" aria-label="Which payroll view" hideSingleSelectionIndicator>
+      <mat-button-toggle value="month">Monthly payroll <span class="inline-ar">مسير الرواتب</span></mat-button-toggle>
+      <mat-button-toggle value="daily">Daily cost <span class="inline-ar">تكلفة يوم</span></mat-button-toggle>
+    </mat-button-toggle-group>
+    @if (view() === 'daily') {
+      <app-daily-cost-page />
+    } @else {
+      <div class="toolbar no-print">
+        <button mat-icon-button (click)="move(-1)" aria-label="The month before"><mat-icon>chevron_left</mat-icon></button>
+        <strong class="month">{{ month() | date: 'MMMM y' }}</strong>
+        <button mat-icon-button (click)="move(1)" aria-label="The month after"><mat-icon>chevron_right</mat-icon></button>
+        <span class="spacer"></span>
+        @if (canCalculate()) {
+          <button mat-stroked-button (click)="calculate()" [disabled]="calculating()" matTooltip="Save every draft as it stands now">
+            <mat-icon>calculate</mat-icon> Calculate drafts <span class="inline-ar">احتساب المسودات</span>
+          </button>
+        }
+        <button mat-button (click)="exportExcel()" [disabled]="!payroll() || exporting()">
+          <mat-icon>file_download</mat-icon> Export Excel <span class="inline-ar">تصدير إكسيل</span>
         </button>
+        <button mat-button (click)="print()" [disabled]="!payroll()"><mat-icon>print</mat-icon> Print</button>
+      </div>
+      @if (loading()) {
+        <mat-progress-bar mode="indeterminate" />
       }
-      <button mat-button (click)="exportExcel()" [disabled]="!payroll() || exporting()">
-        <mat-icon>file_download</mat-icon> Export Excel <span class="inline-ar">تصدير إكسيل</span>
-      </button>
-      <button mat-button (click)="print()" [disabled]="!payroll()"><mat-icon>print</mat-icon> Print</button>
-    </div>
-    @if (loading()) {
-      <mat-progress-bar mode="indeterminate" />
-    }
-    @if (error()) {
-      <p class="error">{{ error() }}</p>
-    } @else if (payroll(); as p) {
-      <header class="report-head">
-        <h2>Payroll · {{ month() | date: 'MMMM y' }} <span class="inline-ar">مسير الرواتب</span></h2>
-        <div class="muted">{{ finalized() }} of {{ p.slips.length }} finalized · drafts are worked out from the attendance as it stands now</div>
-      </header>
-      <div class="tiles">
-        <div class="tile">
-          <span class="label">Net payable · صافي المستحق</span>
-          <strong>{{ p.totals.netPayable | money }}</strong>
+      @if (error()) {
+        <p class="error">{{ error() }}</p>
+      } @else if (payroll(); as p) {
+        <header class="report-head">
+          <h2>Payroll · {{ month() | date: 'MMMM y' }} <span class="inline-ar">مسير الرواتب</span></h2>
+          <div class="muted">{{ finalized() }} of {{ p.slips.length }} finalized · drafts are worked out from the attendance as it stands now</div>
+        </header>
+        <div class="tiles">
+          <div class="tile main">
+            <span class="label">Total salaries · إجمالي الرواتب</span>
+            <strong>{{ p.totals.gross | money }}</strong>
+            <small class="muted">earned before anything is deducted</small>
+          </div>
+          <div class="tile">
+            <span class="label">Net payable · صافي المستحق</span>
+            <strong>{{ p.totals.netPayable | money }}</strong>
+          </div>
+          <div class="tile">
+            <span class="label">Paid so far · المصروف</span>
+            <strong>{{ p.totals.salaryPaid | money }}</strong>
+          </div>
+          <div class="tile">
+            <span class="label">Advances deducted · السلفيات</span>
+            <strong>{{ p.totals.advances | money }}</strong>
+          </div>
+          <div class="tile">
+            <span class="label">Wages cost · تكلفة الأجور</span>
+            <strong>{{ p.totals.wagesCost | money }}</strong>
+            <small class="muted">what the month's work cost: in the KPIs once finalized</small>
+          </div>
         </div>
-        <div class="tile">
-          <span class="label">Paid so far · المصروف</span>
-          <strong>{{ p.totals.salaryPaid | money }}</strong>
-        </div>
-        <div class="tile">
-          <span class="label">Advances deducted · السلفيات</span>
-          <strong>{{ p.totals.advances | money }}</strong>
-        </div>
-        <div class="tile">
-          <span class="label">Wages cost · تكلفة الأجور</span>
-          <strong>{{ p.totals.wagesCost | money }}</strong>
-          <small class="muted">what the month's work cost: in the KPIs once finalized</small>
-        </div>
-      </div>
 
-      <div class="table-wrap">
-        <table class="grid">
-          <thead>
-            <tr>
-              <th>Employee<span class="ar">الموظف</span></th>
-              <th class="num">Base salary<span class="ar">الراتب الأساسي</span></th>
-              <th class="num">+ Incentives<span class="ar">حوافز</span></th>
-              <th class="num">+ Leave allowances<span class="ar">بدل إجازات</span></th>
-              <th class="num">+ Overtime<span class="ar">إضافي</span></th>
-              <th class="num">− Advances<span class="ar">السلفيات</span></th>
-              <th class="num">− Lateness<span class="ar">خصم التأخير</span></th>
-              <th class="num">− Absence<span class="ar">خصم الغياب</span></th>
-              <th class="num">− Penalties<span class="ar">جزاءات إدارية</span></th>
-              <th class="num">− Last month<span class="ar">مرحل</span></th>
-              <th class="num">= Net payable<span class="ar">صافي المستحق</span></th>
-              <th>Status<span class="ar">الحالة</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (s of p.slips; track s.employee.id) {
-              @let f = s.figures;
+        <div class="table-wrap">
+          <table class="grid">
+            <thead>
               <tr>
-                <td>
-                  <a [routerLink]="[s.employee.id]" [queryParams]="{ month: p.month }"><strong>{{ s.employee.name }}</strong></a>
-                  <div class="muted small">{{ s.employee.jobTitle }}@if (f.daysEmployed < f.daysInMonth) { · {{ f.daysEmployed }} of {{ f.daysInMonth }} days}</div>
-                </td>
-                <td class="num">
-                  {{ f.baseSalary | money }}
-                  @if (f.employmentType === 'Daily') {
-                    <div class="muted small">{{ f.daysWorked - f.daysOffWorked }} {{ f.daysWorked - f.daysOffWorked === 1 ? 'day' : 'days' }} at {{ f.dailyWage | money }}</div>
-                  }
-                </td>
-                <td class="num">{{ f.incentives | money }}</td>
-                <td class="num">
-                  {{ f.leaveAllowances + f.daysOffWorkedPay + f.holidaysWorkedPay | money }}
-                  @if (f.daysOffWorked) {
-                    <div class="muted small">{{ f.daysOffWorked }} {{ f.daysOffWorked === 1 ? 'day' : 'days' }} off worked</div>
-                  }
-                  @if (f.holidaysWorked) {
-                    <div class="muted small">{{ f.holidaysWorked }} {{ f.holidaysWorked === 1 ? 'holiday' : 'holidays' }} worked</div>
-                  }
-                </td>
-                <td class="num">{{ f.overtimePay | money }}</td>
-                <td class="num minus">{{ f.advances | money }}</td>
-                <td class="num minus">{{ f.latenessPenalty | money }}</td>
-                <td class="num minus">{{ f.absencePenalty | money }}</td>
-                <td class="num minus">{{ f.administrativePenalty | money }}</td>
-                <td class="num minus">{{ f.broughtForward | money }}</td>
-                <td class="num net">
-                  <strong>{{ f.netPayable | money }}</strong>
-                  @if (f.carriedForward > 0) {
-                    <div class="small bad">{{ f.carriedForward | money }} to next month</div>
-                  }
-                </td>
-                <td>
-                  <span class="status" [class]="s.status ?? 'none'">{{ statusOf(s).en }}<span class="ar">{{ statusOf(s).ar }}</span></span>
-                  @if (s.status === 'Finalized') {
-                    <div class="muted small">{{ s.salaryOwed > 0 ? (s.salaryOwed | money) + ' to pay' : 'Paid' }}</div>
-                  } @else if (f.missingPunchDays) {
-                    <div class="small warn">{{ f.missingPunchDays }} {{ f.missingPunchDays === 1 ? 'day' : 'days' }} suspended</div>
-                  } @else if (f.openDays) {
-                    <div class="muted small">The month is not over</div>
-                  }
-                </td>
+                <th>Employee<span class="ar">الموظف</span></th>
+                <th class="num">Base salary<span class="ar">الراتب الأساسي</span></th>
+                <th class="num">+ Incentives<span class="ar">حوافز</span></th>
+                <th class="num">+ Leave allowances<span class="ar">بدل إجازات</span></th>
+                <th class="num">+ Overtime<span class="ar">إضافي</span></th>
+                <th class="num">− Advances<span class="ar">السلفيات</span></th>
+                <th class="num">− Last month<span class="ar">مرحل</span></th>
+                <th class="num deductions">− Deductions &amp; penalties<span class="ar">خصومات وجزاءات</span></th>
+                <th class="num">= Net payable<span class="ar">صافي المستحق</span></th>
+                <th>Status<span class="ar">الحالة</span></th>
               </tr>
-            } @empty {
-              <tr><td colspan="12" class="muted">No one was employed this month.</td></tr>
+            </thead>
+            <tbody>
+              @for (s of p.slips; track s.employee.id) {
+                @let f = s.figures;
+                <tr>
+                  <td>
+                    <a [routerLink]="[s.employee.id]" [queryParams]="{ month: p.month }"><strong>{{ s.employee.name }}</strong></a>
+                    <div class="muted small">{{ s.employee.jobTitle }}@if (f.daysEmployed < f.daysInMonth) { · {{ f.daysEmployed }} of {{ f.daysInMonth }} days}</div>
+                  </td>
+                  <td class="num">
+                    {{ f.baseSalary | money }}
+                    @if (f.employmentType === 'Daily') {
+                      <div class="muted small">{{ f.daysWorked - f.daysOffWorked }} {{ f.daysWorked - f.daysOffWorked === 1 ? 'day' : 'days' }} at {{ f.dailyWage | money }}</div>
+                    }
+                  </td>
+                  <td class="num">{{ f.incentives | money }}</td>
+                  <td class="num">
+                    {{ f.leaveAllowances + f.daysOffWorkedPay + f.holidaysWorkedPay | money }}
+                    @if (f.daysOffWorked) {
+                      <div class="muted small">{{ f.daysOffWorked }} {{ f.daysOffWorked === 1 ? 'day' : 'days' }} off worked</div>
+                    }
+                    @if (f.holidaysWorked) {
+                      <div class="muted small">{{ f.holidaysWorked }} {{ f.holidaysWorked === 1 ? 'holiday' : 'holidays' }} worked</div>
+                    }
+                  </td>
+                  <td class="num">{{ f.overtimePay | money }}</td>
+                  <td class="num minus">{{ f.advances | money }}</td>
+                  <td class="num minus">{{ f.broughtForward | money }}</td>
+                  <td class="num minus deductions">
+                    {{ f.latenessPenalty + f.absencePenalty + f.administrativePenalty | money }}
+                    @for (part of deductionParts(f); track part.label) {
+                      <div class="muted small">{{ part.label }} {{ part.amount | money }}</div>
+                    }
+                  </td>
+                  <td class="num net">
+                    <strong>{{ f.netPayable | money }}</strong>
+                    @if (f.carriedForward > 0) {
+                      <div class="small bad">{{ f.carriedForward | money }} to next month</div>
+                    }
+                  </td>
+                  <td>
+                    <span class="status" [class]="s.status ?? 'none'">{{ statusOf(s).en }}<span class="ar">{{ statusOf(s).ar }}</span></span>
+                    @if (s.status === 'Finalized') {
+                      <div class="muted small">{{ s.salaryOwed > 0 ? (s.salaryOwed | money) + ' to pay' : 'Paid' }}</div>
+                    } @else if (f.missingPunchDays) {
+                      <div class="small warn">{{ f.missingPunchDays }} {{ f.missingPunchDays === 1 ? 'day' : 'days' }} suspended</div>
+                    } @else if (f.openDays) {
+                      <div class="muted small">The month is not over</div>
+                    }
+                  </td>
+                </tr>
+              } @empty {
+                <tr><td colspan="10" class="muted">No one was employed this month.</td></tr>
+              }
+            </tbody>
+            @if (p.slips.length) {
+              <tfoot>
+                <tr>
+                  <td>Total · الإجمالي</td>
+                  <td class="num">{{ p.totals.baseSalaries | money }}</td>
+                  <td class="num">{{ p.totals.incentives | money }}</td>
+                  <td class="num">{{ p.totals.leaveAllowances + p.totals.daysOffWorkedPay + p.totals.holidaysWorkedPay | money }}</td>
+                  <td class="num">{{ p.totals.overtimePay | money }}</td>
+                  <td class="num">{{ p.totals.advances | money }}</td>
+                  <td class="num">{{ p.totals.broughtForward | money }}</td>
+                  <td class="num deductions">{{ p.totals.latenessPenalties + p.totals.absencePenalties + p.totals.administrativePenalties | money }}</td>
+                  <td class="num">{{ p.totals.netPayable | money }}</td>
+                  <td></td>
+                </tr>
+              </tfoot>
             }
-          </tbody>
-          @if (p.slips.length) {
-            <tfoot>
-              <tr>
-                <td>Total · الإجمالي</td>
-                <td class="num">{{ p.totals.baseSalaries | money }}</td>
-                <td class="num">{{ p.totals.incentives | money }}</td>
-                <td class="num">{{ p.totals.leaveAllowances + p.totals.daysOffWorkedPay + p.totals.holidaysWorkedPay | money }}</td>
-                <td class="num">{{ p.totals.overtimePay | money }}</td>
-                <td class="num">{{ p.totals.advances | money }}</td>
-                <td class="num">{{ p.totals.latenessPenalties | money }}</td>
-                <td class="num">{{ p.totals.absencePenalties | money }}</td>
-                <td class="num">{{ penalties() | money }}</td>
-                <td class="num">{{ p.totals.broughtForward | money }}</td>
-                <td class="num">{{ p.totals.netPayable | money }}</td>
-                <td></td>
-              </tr>
-            </tfoot>
-          }
-        </table>
-      </div>
-      <p class="note">
-        A day costs the salary over 30, an hour a day's over 9: lateness (late, leaving early, away during the shift) and absence are
-        deducted at that rate, and overtime paid at it. A day off worked earns a leave allowance by itself: a day's pay for half a shift
-        or more, its hours for less; a day off swapped for another is marked a working day on the attendance, and earns none. When the deductions are more than the pay, nothing is paid and the rest comes off
-        next month's. Open a payslip to add incentives and leave allowances, finalize it, and pay it.
-      </p>
+          </table>
+        </div>
+        <p class="note">
+          A day costs the salary over 30, an hour a day's over 9: lateness (late, leaving early, away during the shift) and absence are
+          deducted at that rate, and overtime paid at it. A day off worked earns a leave allowance by itself: a day's pay for half a shift
+          or more, its hours for less; a day off swapped for another is marked a working day on the attendance, and earns none. When the deductions are more than the pay, nothing is paid and the rest comes off
+          next month's. Open a payslip to add incentives and leave allowances, finalize it, and pay it.
+        </p>
+      }
     }
   `,
   styleUrl: '../costing/costing.scss',
   styles: `
+    .views {
+      margin: 0 0 12px;
+    }
     .month {
       min-width: 140px;
       text-align: center;
@@ -206,6 +227,12 @@ import { isoDay } from '../costing/financials';
       strong {
         font: var(--mat-sys-headline-small);
       }
+      &.main {
+        background: color-mix(in srgb, var(--mat-sys-primary) 8%, var(--mat-sys-surface));
+      }
+    }
+    .deductions {
+      background: color-mix(in srgb, var(--mat-sys-error) 5%, transparent);
     }
     td.minus {
       color: var(--mat-sys-on-surface-variant);
@@ -240,8 +267,13 @@ export class PayrollPage {
   private readonly auth = inject(AuthService);
   private readonly notify = inject(NotifyService);
 
+  private readonly router = inject(Router);
+
   // ?month= its first day, to open on it.
   readonly startMonth = input<string>(undefined, { alias: 'month' });
+  // ?view=daily for a day's labour cost.
+  readonly startView = input<string | undefined>(undefined, { alias: 'view' });
+  protected readonly view = signal<'month' | 'daily'>('month');
 
   protected readonly month = signal(isoDay(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
   protected readonly payroll = signal<PayrollMonth | null>(null);
@@ -249,19 +281,37 @@ export class PayrollPage {
   protected readonly calculating = signal(false);
   protected readonly error = signal<string | null>(null);
   protected readonly canCalculate = computed(() => this.auth.can(Permissions.HrManage));
-  protected readonly penalties = computed(() => (this.payroll()?.slips ?? []).reduce((sum, s) => sum + s.figures.administrativePenalty, 0));
   protected readonly finalized = computed(() => (this.payroll()?.slips ?? []).filter((s) => s.status === 'Finalized').length);
 
   constructor() {
+    // The month read only while it is the one shown.
     effect(() => {
-      const month = this.startMonth();
+      const [view, month] = [this.startView(), this.startMonth()];
       untracked(() => {
+        this.view.set(view === 'daily' ? 'daily' : 'month');
         if (month && /^\d{4}-\d{2}-\d{2}$/.test(month)) {
           this.month.set(`${month.slice(0, 8)}01`);
         }
-        void this.load();
+        if (this.view() === 'month') {
+          void this.load();
+        }
       });
     });
+  }
+
+  // Kept in the address, so a reload or coming Back shows the same view.
+  protected showView(view: 'month' | 'daily'): void {
+    this.view.set(view);
+    void this.router.navigate([], { queryParams: { view: view === 'daily' ? 'daily' : null }, queryParamsHandling: 'merge', replaceUrl: true });
+  }
+
+  // What the deductions and penalties are made of, those there are: "Late L.E 33.67".
+  protected deductionParts(f: PayrollFigures): { label: string; amount: number }[] {
+    return [
+      { label: 'Late', amount: f.latenessPenalty },
+      { label: 'Absent', amount: f.absencePenalty },
+      { label: 'Penalties', amount: f.administrativePenalty },
+    ].filter((p) => p.amount > 0);
   }
 
   protected statusOf(slip: PayrollSlip): { en: string; ar: string } {

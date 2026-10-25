@@ -89,8 +89,8 @@ export class RemoveIdCardDialog {
 }
 
 // An employee's profile (ملف الموظف), opened from their row on Employees: who they are (their full
-// name, national ID, mobile, and their ID card's photo), their work and pay, and their payslip for
-// the month, as the Payroll tab has it. Edited with the Employees tab's own form; deactivated by
+// name, national ID, mobile, and their ID card's photo) and their work and pay, beside their payslip
+// for the month as the Payroll tab has it (one under the other on a narrow screen). Edited with the Employees tab's own form; deactivated by
 // leaving, paid to their last day with nothing erased, and brought back the same way. A manager's
 // change at once, anyone else's waiting for a manager, the profile locked until then. The ID card
 // is uploaded, replaced or taken off by whoever manages HR, at once.
@@ -124,8 +124,7 @@ export class RemoveIdCardDialog {
     @if (error(); as problem) {
       <p class="error">{{ problem }}</p>
     } @else if (employee(); as e) {
-      <section class="profile no-print" aria-label="Personal details">
-        <header>
+      <header class="profile-head no-print">
           <div class="avatar" aria-hidden="true">{{ initials() }}</div>
           <div class="who">
             <h2>{{ e.name }}</h2>
@@ -136,125 +135,128 @@ export class RemoveIdCardDialog {
           } @else {
             <span class="status">Left<span class="ar">ترك العمل</span></span>
           }
-        </header>
-        @if (asked(); as a) {
-          <p class="waiting">
-            <span class="pending-badge">{{ pendingLabel(a).en }}<span class="ar">{{ pendingLabel(a).ar }}</span></span>
-            {{ a.summary }} <span class="muted small">· asked by {{ a.requestedBy }}</span>
-          </p>
-        }
+      </header>
+      @if (asked(); as a) {
+        <p class="waiting no-print">
+          <span class="pending-badge">{{ pendingLabel(a).en }}<span class="ar">{{ pendingLabel(a).ar }}</span></span>
+          {{ a.summary }} <span class="muted small">· asked by {{ a.requestedBy }}</span>
+        </p>
+      }
 
-        <div class="cards">
-          <div class="card">
-            <h3>Personal details <span class="inline-ar">البيانات الشخصية</span></h3>
-            <dl>
-              <div><dt>Full name<span class="ar">الاسم بالكامل</span></dt><dd>{{ e.name }}</dd></div>
-              <div>
-                <dt>National ID<span class="ar">رقم البطاقة</span></dt>
-                <dd [class.missing]="!e.nationalId" class="digits">{{ e.nationalId ?? 'Not entered' }}</dd>
-              </div>
-              <div>
-                <dt>Mobile<span class="ar">رقم الموبايل</span></dt>
-                <dd [class.missing]="!e.mobileNumber">
-                  @if (e.mobileNumber; as m) {
-                    <a class="digits" [href]="'tel:' + m">{{ m }}</a>
-                  } @else {
-                    Not entered
-                  }
-                </dd>
-              </div>
-              <div>
-                <dt>Started on<span class="ar">تاريخ التعيين</span></dt>
-                <dd>
-                  {{ e.hiredOn | date: 'd MMM y' }}
-                  @if (e.leftOn) {
-                    <span class="muted"> · last day {{ e.leftOn | date: 'd MMM y' }}</span>
-                  }
-                </dd>
-              </div>
-            </dl>
-            <h3>Work and pay <span class="inline-ar">العمل والأجر</span></h3>
-            <dl>
-              <div><dt>Department · role<span class="ar">القسم والوظيفة</span></dt><dd>{{ departmentName() }} · {{ e.jobTitle }}</dd></div>
-              <div>
-                <dt>Pay<span class="ar">الأجر</span></dt>
-                <dd>
-                  @if (e.employmentType === 'Daily') {
-                    {{ e.dailyWage | money }} a day <span class="muted">· daily wage</span>
-                  } @else {
-                    {{ e.monthlySalary | money }} a month <span class="muted">· {{ e.dailyRate | money }} a day</span>
-                  }
-                </dd>
-              </div>
-              <div>
-                <dt>Shift<span class="ar">الوردية</span></dt>
-                <dd>
-                  @if (e.shiftStartsAt && e.shiftEndsAt) {
-                    {{ e.shiftStartsAt.slice(0, 5) }}–{{ e.shiftEndsAt.slice(0, 5) }}
-                  } @else {
-                    Flexible hours
-                  }
-                  <span class="muted"> · off {{ daysOff() }}</span>
-                </dd>
-              </div>
-              <div><dt>Device no.<span class="ar">رقم البصمة</span></dt><dd [class.missing]="!e.deviceUserId">{{ e.deviceUserId ?? 'Not on the device' }}</dd></div>
-            </dl>
-          </div>
+      <div class="layout">
+        <section class="profile no-print" aria-label="Personal details">
+          <div class="cards">
+            <div class="card">
+              <h3>Personal details <span class="inline-ar">البيانات الشخصية</span></h3>
+              <dl>
+                <div><dt>Full name<span class="ar">الاسم بالكامل</span></dt><dd>{{ e.name }}</dd></div>
+                <div>
+                  <dt>National ID<span class="ar">رقم البطاقة</span></dt>
+                  <dd [class.missing]="!e.nationalId" class="digits">{{ e.nationalId ?? 'Not entered' }}</dd>
+                </div>
+                <div>
+                  <dt>Mobile<span class="ar">رقم الموبايل</span></dt>
+                  <dd [class.missing]="!e.mobileNumber">
+                    @if (e.mobileNumber; as m) {
+                      <a class="digits" [href]="'tel:' + m">{{ m }}</a>
+                    } @else {
+                      Not entered
+                    }
+                  </dd>
+                </div>
+                <div>
+                  <dt>Started on<span class="ar">تاريخ التعيين</span></dt>
+                  <dd>
+                    {{ e.hiredOn | date: 'd MMM y' }}
+                    @if (e.leftOn) {
+                      <span class="muted"> · last day {{ e.leftOn | date: 'd MMM y' }}</span>
+                    }
+                  </dd>
+                </div>
+              </dl>
+              <h3>Work and pay <span class="inline-ar">العمل والأجر</span></h3>
+              <dl>
+                <div><dt>Department · role<span class="ar">القسم والوظيفة</span></dt><dd>{{ departmentName() }} · {{ e.jobTitle }}</dd></div>
+                <div>
+                  <dt>Pay<span class="ar">الأجر</span></dt>
+                  <dd>
+                    @if (e.employmentType === 'Daily') {
+                      {{ e.dailyWage | money }} a day <span class="muted">· daily wage</span>
+                    } @else {
+                      {{ e.monthlySalary | money }} a month <span class="muted">· {{ e.dailyRate | money }} a day</span>
+                    }
+                  </dd>
+                </div>
+                <div>
+                  <dt>Shift<span class="ar">الوردية</span></dt>
+                  <dd>
+                    @if (e.shiftStartsAt && e.shiftEndsAt) {
+                      {{ e.shiftStartsAt.slice(0, 5) }}–{{ e.shiftEndsAt.slice(0, 5) }}
+                    } @else {
+                      Flexible hours
+                    }
+                    <span class="muted"> · off {{ daysOff() }}</span>
+                  </dd>
+                </div>
+                <div><dt>Device no.<span class="ar">رقم البصمة</span></dt><dd [class.missing]="!e.deviceUserId">{{ e.deviceUserId ?? 'Not on the device' }}</dd></div>
+              </dl>
+            </div>
 
-          <div class="card id-card">
-            <h3>ID card <span class="inline-ar">صورة البطاقة</span></h3>
-            @if (e.idPhoto; as photo) {
-              <app-paper-preview [fetch]="photoFetch()" [fileName]="photo.fileName" />
-              <p class="muted small">Uploaded by {{ photo.uploadedBy }}, {{ photo.uploadedAtUtc | date: 'd MMM y, HH:mm' }}</p>
-            } @else {
-              <div class="empty">
-                <mat-icon>badge</mat-icon>
-                <span>No photo of their ID card yet.</span>
-              </div>
-            }
-            @if (uploading()) {
-              <mat-progress-bar mode="indeterminate" />
-            }
-            <div class="card-actions">
+            <div class="card id-card">
+              <h3>ID card <span class="inline-ar">صورة البطاقة</span></h3>
               @if (e.idPhoto; as photo) {
-                <button mat-button (click)="enlarge(e, photo.fileName)"><mat-icon>zoom_in</mat-icon> View larger</button>
+                <app-paper-preview [fetch]="photoFetch()" [fileName]="photo.fileName" />
+                <p class="muted small">Uploaded by {{ photo.uploadedBy }}, {{ photo.uploadedAtUtc | date: 'd MMM y, HH:mm' }}</p>
+              } @else {
+                <div class="empty">
+                  <mat-icon>badge</mat-icon>
+                  <span>No photo of their ID card yet.</span>
+                </div>
               }
-              @if (canManage()) {
-                <button mat-stroked-button (click)="picker.click()" [disabled]="uploading()">
-                  <mat-icon>upload</mat-icon> {{ e.idPhoto ? 'Replace' : 'Upload' }} <span class="inline-ar">{{ e.idPhoto ? 'استبدال' : 'رفع' }}</span>
-                </button>
-                @if (e.idPhoto) {
-                  <button mat-button class="danger" (click)="removePhoto(e)" [disabled]="uploading()"><mat-icon>delete</mat-icon> Take off</button>
+              @if (uploading()) {
+                <mat-progress-bar mode="indeterminate" />
+              }
+              <div class="card-actions">
+                @if (e.idPhoto; as photo) {
+                  <button mat-button (click)="enlarge(e, photo.fileName)"><mat-icon>zoom_in</mat-icon> View larger</button>
                 }
+                @if (canManage()) {
+                  <button mat-stroked-button (click)="picker.click()" [disabled]="uploading()">
+                    <mat-icon>upload</mat-icon> {{ e.idPhoto ? 'Replace' : 'Upload' }} <span class="inline-ar">{{ e.idPhoto ? 'استبدال' : 'رفع' }}</span>
+                  </button>
+                  @if (e.idPhoto) {
+                    <button mat-button class="danger" (click)="removePhoto(e)" [disabled]="uploading()"><mat-icon>delete</mat-icon> Take off</button>
+                  }
+                }
+              </div>
+              <input #picker type="file" hidden accept="image/jpeg,image/png,image/webp,application/pdf" (change)="upload(e, picker)" aria-label="ID card photo to upload" />
+              @if (canManage()) {
+                <p class="muted small">A photo (JPEG, PNG or WebP) or a PDF, under 5 MB.</p>
               }
             </div>
-            <input #picker type="file" hidden accept="image/jpeg,image/png,image/webp,application/pdf" (change)="upload(e, picker)" aria-label="ID card photo to upload" />
-            @if (canManage()) {
-              <p class="muted small">A photo (JPEG, PNG or WebP) or a PDF, under 5 MB.</p>
-            }
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section class="payslip-part" aria-label="Payslip">
-        <div class="pay-head no-print">
-          <h3>Payslip <span class="inline-ar">قسيمة الراتب</span></h3>
-          <span class="spacer"></span>
-          <button mat-icon-button (click)="moveMonth(-1)" aria-label="The month before"><mat-icon>chevron_left</mat-icon></button>
-          <span class="month">{{ month() | date: 'MMMM y' }}</span>
-          <button mat-icon-button (click)="moveMonth(1)" [disabled]="month() >= thisMonth()" aria-label="The month after"><mat-icon>chevron_right</mat-icon></button>
-        </div>
-        <app-payslip-page [employeeId]="e.id" [month]="month()" [embedded]="true" />
-      </section>
+        <section class="payslip-part" aria-label="Payslip">
+          <div class="pay-head no-print">
+            <h3>Payslip <span class="inline-ar">قسيمة الراتب</span></h3>
+            <span class="spacer"></span>
+            <button mat-icon-button (click)="moveMonth(-1)" aria-label="The month before"><mat-icon>chevron_left</mat-icon></button>
+            <span class="month">{{ month() | date: 'MMMM y' }}</span>
+            <button mat-icon-button (click)="moveMonth(1)" [disabled]="month() >= thisMonth()" aria-label="The month after"><mat-icon>chevron_right</mat-icon></button>
+          </div>
+          <app-payslip-page [employeeId]="e.id" [month]="month()" [embedded]="true" />
+        </section>
+      </div>
     }
   `,
   styleUrl: '../costing/costing.scss',
   styles: `
-    .profile header {
+    .profile-head {
       display: flex;
       align-items: center;
       gap: 14px;
-      max-width: 1100px;
+      max-width: 1320px;
       margin: 4px 0 12px;
 
       h2 {
@@ -289,14 +291,20 @@ export class RemoveIdCardDialog {
       }
     }
     .waiting {
-      max-width: 1100px;
+      max-width: 1320px;
       margin: 0 0 12px;
+    }
+    /* Two columns on a desktop: who they are on the left, the payslip on the right. */
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 640px);
+      gap: 20px;
+      align-items: start;
+      max-width: 1320px;
     }
     .cards {
       display: grid;
-      grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
       gap: 16px;
-      max-width: 1100px;
     }
     .card {
       padding: 12px 16px;
@@ -359,19 +367,13 @@ export class RemoveIdCardDialog {
       gap: 8px;
       margin-top: 8px;
     }
-    .payslip-part {
-      margin-top: 20px;
-
-      app-payslip-page {
-        display: block;
-        max-width: 640px;
-      }
+    .payslip-part app-payslip-page {
+      display: block;
     }
     .pay-head {
       display: flex;
       align-items: center;
       gap: 4px;
-      max-width: 640px;
 
       h3 {
         margin: 0;
@@ -394,8 +396,9 @@ export class RemoveIdCardDialog {
     .small {
       font-size: 0.85em;
     }
-    @media (max-width: 760px) {
-      .cards {
+    /* One under the other where two would be cramped. */
+    @media (max-width: 1100px) {
+      .layout {
         grid-template-columns: minmax(0, 1fr);
       }
     }

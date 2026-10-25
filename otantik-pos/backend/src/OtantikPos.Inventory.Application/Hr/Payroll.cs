@@ -46,10 +46,11 @@ public sealed record PayrollSlipDto(
     IReadOnlyList<PayrollCashDto> Advances,
     IReadOnlyList<PayrollCashDto> Salaries);
 
+// Gross: the month's salaries (إجمالي الرواتب), what is earned before anything is deducted.
 public sealed record PayrollTotals(
     decimal BaseSalaries, decimal Incentives, decimal LeaveAllowances, decimal OvertimePay, decimal Advances, decimal BroughtForward,
     decimal LatenessPenalties, decimal AbsencePenalties, decimal NetPayable, decimal CarriedForward, decimal WagesCost, decimal SalaryPaid,
-    decimal DaysOffWorkedPay, decimal HolidaysWorkedPay);
+    decimal DaysOffWorkedPay, decimal HolidaysWorkedPay, decimal Gross = 0, decimal AdministrativePenalties = 0);
 
 public sealed record PayrollMonthDto(DateOnly Month, PayrollTotals Totals, IReadOnlyList<PayrollSlipDto> Slips);
 
@@ -117,7 +118,8 @@ internal sealed class PayrollWorker(
             new PayrollTotals(
                 Sum(f => f.BaseSalary), Sum(f => f.Incentives), Sum(f => f.LeaveAllowances), Sum(f => f.OvertimePay), Sum(f => f.Advances),
                 Sum(f => f.BroughtForward), Sum(f => f.LatenessPenalty), Sum(f => f.AbsencePenalty), Sum(f => f.NetPayable), Sum(f => f.CarriedForward),
-                Sum(f => f.WagesCost), slipDtos.Sum(s => s.SalaryPaid), Sum(f => f.DaysOffWorkedPay), Sum(f => f.HolidaysWorkedPay)),
+                Sum(f => f.WagesCost), slipDtos.Sum(s => s.SalaryPaid), Sum(f => f.DaysOffWorkedPay), Sum(f => f.HolidaysWorkedPay), Sum(f => f.Gross),
+                Sum(f => f.AdministrativePenalty)),
             slipDtos);
     }
 

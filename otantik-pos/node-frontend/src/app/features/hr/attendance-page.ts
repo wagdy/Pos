@@ -55,8 +55,9 @@ interface Row {
   day: AttendanceDay;
 }
 
-// Attendance (الحضور والانصراف): everyone's day, or one employee's month, as worked out from the
-// device's punches against each one's nine-hour shift. Each day opens to show its punches. A
+// Attendance (الحضور والانصراف): the day's review (مراجعة يوم: everyone's day, their in, out and
+// status, those who forgot to check out marked and shown alone when asked), or one employee's
+// month, as worked out from the device's punches against each one's nine-hour shift. Each day opens to show its punches. A
 // manager puts a day right there: a punch the device missed, one that should not count, a day of
 // leave or off, a suspended day's punch-out, an administrative penalty. Punches under a number nobody has yet are listed under the day, waiting for the
 // number to be given to someone on the Employees tab.
@@ -77,7 +78,7 @@ interface Row {
   template: `
     <div class="toolbar">
       <mat-button-toggle-group [value]="mode()" (change)="setMode($event.value)" aria-label="Show">
-        <mat-button-toggle value="day">By day · حسب اليوم</mat-button-toggle>
+        <mat-button-toggle value="day">Day review · مراجعة يوم</mat-button-toggle>
         <mat-button-toggle value="employee">By employee · حسب الموظف</mat-button-toggle>
       </mat-button-toggle-group>
       @if (mode() === 'day') {
@@ -116,6 +117,16 @@ interface Row {
         @for (t of totals(); track t.label) {
           <span class="chip" [class]="t.tone"><strong>{{ t.value }}</strong> {{ t.label }}</span>
         }
+        @if (mode() === 'day') {
+          <button type="button" class="chip forgot-filter" [class.bad]="forgot() > 0" [class.on]="onlyForgot()" [disabled]="!forgot() && !onlyForgot()"
+            [attr.aria-pressed]="onlyForgot()" (click)="onlyForgot.set(!onlyForgot())"
+            [matTooltip]="onlyForgot() ? 'Show everyone' : 'Show only them'" [matTooltipDisabled]="!forgot()">
+            @if (forgot()) {
+              <mat-icon>{{ onlyForgot() ? 'filter_alt_off' : 'filter_alt' }}</mat-icon>
+            }
+            <strong>{{ forgot() }}</strong> forgot to check out · نسي تسجيل الانصراف
+          </button>
+        }
       </div>
     }
 
@@ -142,7 +153,7 @@ interface Row {
           <tbody>
             @for (r of rows(); track r.key) {
               @let d = r.day;
-              <tr class="clickable" [class]="'status-' + d.status" (click)="toggle(r.key)" [attr.aria-expanded]="open().has(r.key)">
+              <tr class="clickable" [class]="'status-' + d.status" [class.forgot]="d.forgotToCheckOut" (click)="toggle(r.key)" [attr.aria-expanded]="open().has(r.key)">
                 <td>
                   <strong>{{ r.title }}</strong>
                   @if (r.sub) {
@@ -151,7 +162,13 @@ interface Row {
                 </td>
                 <td class="nowrap">{{ shift(d) }}</td>
                 <td class="nowrap">{{ clock(d.firstIn, d.date) }}</td>
-                <td class="nowrap">{{ clock(d.lastOut, d.date) }}</td>
+                <td class="nowrap">
+                  @if (d.forgotToCheckOut) {
+                    <span class="flag">Forgot to check out<span class="ar">نسي تسجيل الانصراف</span></span>
+                  } @else {
+                    {{ clock(d.lastOut, d.date) }}
+                  }
+                </td>
                 <td class="num">{{ duration(d.workedMinutes) }}</td>
                 <td class="num" [class.bad]="d.lateMinutes > 0">{{ duration(d.lateMinutes) }}</td>
                 <td class="num" [class.bad]="d.earlyLeaveMinutes > 0">{{ duration(d.earlyLeaveMinutes) }}</td>
@@ -284,6 +301,28 @@ interface Row {
       border-radius: 999px;
       background: var(--mat-sys-surface-container);
 
+      &.forgot-filter {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: 1px solid transparent;
+        font: inherit;
+        color: inherit;
+        cursor: pointer;
+
+        &:disabled {
+          cursor: default;
+        }
+        &.on {
+          border-color: var(--mat-sys-error);
+        }
+        mat-icon {
+          width: 18px;
+          height: 18px;
+          font-size: 18px;
+        }
+      }
+
       &.bad {
         background: color-mix(in srgb, var(--mat-sys-error) 14%, transparent);
       }
@@ -318,6 +357,18 @@ interface Row {
         background: color-mix(in srgb, var(--mat-sys-error) 16%, transparent);
         color: var(--mat-sys-error);
       }
+    }
+    /* Forgot to check out: the row lit, its Out said so. */
+    tr.forgot td {
+      background: color-mix(in srgb, var(--mat-sys-error) 7%, transparent);
+    }
+    .flag {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 999px;
+      font: var(--mat-sys-label-small);
+      color: var(--mat-sys-on-error-container);
+      background: var(--mat-sys-error-container);
     }
     tr.status-NotEmployed td,
     tr.status-DayOff td,
@@ -418,6 +469,9 @@ export class AttendancePage {
   protected readonly loading = signal(false);
   protected readonly error = signal<string | null>(null);
   protected readonly open = signal(new Set<string>());
+  // The day's review showing only those who forgot to check out.
+  protected readonly onlyForgot = signal(false);
+  protected readonly forgot = computed(() => this.report()?.totals.forgotToCheckOut ?? 0);
 
   protected readonly policy = computed<AttendancePolicy | null>(() => (this.mode() === 'day' ? this.report()?.policy : this.sheet()?.policy) ?? null);
   protected readonly unassigned = computed<Punch[]>(() => this.report()?.unassigned ?? []);
@@ -426,7 +480,9 @@ export class AttendancePage {
 
   protected readonly rows = computed<Row[]>(() => {
     if (this.mode() === 'day') {
-      return (this.report()?.employees ?? []).map((e) => ({ key: e.employee.id, title: e.employee.name, sub: e.employee.jobTitle, employee: e.employee, day: e.day }));
+      return (this.report()?.employees ?? [])
+        .filter((e) => !this.onlyForgot() || e.day.forgotToCheckOut)
+        .map((e) => ({ key: e.employee.id, title: e.employee.name, sub: e.employee.jobTitle, employee: e.employee, day: e.day }));
     }
     const sheet = this.sheet();
     if (!sheet) {
@@ -496,6 +552,7 @@ export class AttendancePage {
   protected pickDay(day: string): void {
     if (/^\d{4}-\d{2}-\d{2}$/.test(day ?? '')) {
       this.day.set(day);
+      this.onlyForgot.set(false);
       void this.load();
     }
   }
