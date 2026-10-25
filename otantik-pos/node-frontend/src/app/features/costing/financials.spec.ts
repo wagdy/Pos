@@ -229,7 +229,7 @@ describe('sending a safe entry', () => {
         },
         { provide: MatDialog, useValue: { open } },
         { provide: NotifyService, useValue: notify },
-        { provide: AuthService, useValue: { can: (p: string) => p !== Permissions.ApprovalDecide || manager } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: (p: string) => p !== Permissions.ApprovalDecide || manager } },
       ],
     });
     return TestBed.inject(Treasury);

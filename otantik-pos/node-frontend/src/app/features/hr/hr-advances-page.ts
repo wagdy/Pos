@@ -13,6 +13,7 @@ import { Permissions } from '../../core/auth/permissions';
 import { isRequested, SafeVoucherInput } from '../../core/costing/costing.api';
 import { errorMessage } from '../../core/http/error-message';
 import { AdvanceShare, AdvancesReport, AllocatedAdvance, Employee, HrApi, PendingAdvance } from '../../core/hr/hr.api';
+import { HrAccess } from '../../core/hr/hr-access';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals, pendingLabel } from '../costing/approvals';
@@ -203,7 +204,12 @@ import { DistributeAdvanceData, DistributeAdvanceDialog } from './distribute-adv
             @if (r.allocated.length) {
               <tfoot>
                 <tr>
-                  <td colspan="3">Off {{ month() | date: 'MMMM' }}'s pay · <a routerLink="/hr/payroll" [queryParams]="{ month: month() }">Payroll</a></td>
+                  <td colspan="3">
+                    Off {{ month() | date: 'MMMM' }}'s pay
+                    @if (access.has('Payroll')) {
+                      · <a routerLink="/hr/payroll" [queryParams]="{ month: month() }">Payroll</a>
+                    }
+                  </td>
                   <td class="num">{{ allocatedTotal() | money }}</td>
                   <td colspan="2"></td>
                 </tr>
@@ -295,6 +301,7 @@ export class HrAdvancesPage {
   private readonly notify = inject(NotifyService);
   private readonly approvals = inject(Approvals);
   private readonly auth = inject(AuthService);
+  protected readonly access = inject(HrAccess);
   private readonly businessDay = inject(BusinessDay);
 
   protected readonly canDistribute = this.approvals.canApprove;

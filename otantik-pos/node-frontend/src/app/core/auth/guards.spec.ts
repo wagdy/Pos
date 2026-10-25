@@ -6,7 +6,7 @@ import { Permissions } from './permissions';
 
 describe('the costing section guard', () => {
   function enter(can: boolean): boolean | UrlTree {
-    TestBed.configureTestingModule({ providers: [provideRouter([]), { provide: AuthService, useValue: { can: () => can } }] });
+    TestBed.configureTestingModule({ providers: [provideRouter([]), { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: () => can } }] });
     return TestBed.runInInjectionContext(
       () => permissionGuard(Permissions.CostingView)({} as ActivatedRouteSnapshot, {} as RouterStateSnapshot) as boolean | UrlTree,
     );
@@ -27,7 +27,7 @@ describe('an accountant at the till', () => {
   const accountant = new Set<string>([Permissions.InventoryView, Permissions.InventoryManage, Permissions.CostingView]);
 
   function run(guard: () => unknown): string | boolean {
-    TestBed.configureTestingModule({ providers: [provideRouter([]), { provide: AuthService, useValue: { can: (p: string) => accountant.has(p) } }] });
+    TestBed.configureTestingModule({ providers: [provideRouter([]), { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: (p: string) => accountant.has(p) } }] });
     const result = TestBed.runInInjectionContext(guard) as boolean | UrlTree;
     return typeof result === 'boolean' ? result : TestBed.inject(Router).serializeUrl(result);
   }

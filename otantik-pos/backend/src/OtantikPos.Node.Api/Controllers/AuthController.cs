@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Otantik.SharedKernel.Authorization;
 using Otantik.SharedKernel.Identity;
+using OtantikPos.Hr.Domain.Access;
 using OtantikPos.Node.Api.Auth;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Identity;
@@ -62,29 +63,35 @@ public sealed class AuthController(StaffDirectory staff, TokenService tokens, Re
             return Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Sign-in failed.", detail: detail);
         }
 
-        var (token, expiresAtUtc) = tokens.IssueEmployee(employee.Id, employee.Name, employee.PinSetAtUtc);
-        return new EmployeeSignInResponse(token, expiresAtUtc, employee.Id, employee.Name, PortalClaims.Role);
+        var (token, expiresAtUtc) = tokens.IssueEmployee(employee.Id, employee.Name, employee.PinSetAtUtc, employee.HrTabs);
+        return new EmployeeSignInResponse(token, expiresAtUtc, employee.Id, employee.Name, PortalClaims.Role, HrTabSet.Split(employee.HrTabs));
     }
 
     // Who is signed in, and what they may do: the permissions come from the shared
     // RolePermissions table, so the Angular app shows and hides buttons by the same rules the
     // API enforces, and both stay right when a role's rights change.
+    // HrTabs: the HR & Payroll tabs they hold, every one for a manager, an accountant's as a
+    // manager ticked them.
     [HttpGet("me")]
-    public Me GetMe() =>
-        Me.For(StaffClaims.IdOf(User)!, User.FindFirst(StaffClaims.Name)?.Value ?? string.Empty, StaffClaims.RoleOf(User)!.Value);
+    public async Task<Me> GetMe([FromServices] HrCaller hr, CancellationToken cancellationToken) =>
+        Me.For(StaffClaims.IdOf(User)!, User.FindFirst(StaffClaims.Name)?.Value ?? string.Empty, StaffClaims.RoleOf(User)!.Value) with
+        {
+            HrTabs = HrTabSet.Split(await hr.TabsAsync(cancellationToken)),
+        };
 }
 
 public sealed record SignInOption(string Id, string FullName);
 
 public sealed record EmployeeLoginRequest(string? MobileNumber, string? PinCode);
 
-public sealed record EmployeeSignInResponse(string Token, DateTime ExpiresAtUtc, Guid EmployeeId, string Name, string Role);
+// HrTabs: the HR & Payroll tabs a manager gave them, as the token names them.
+public sealed record EmployeeSignInResponse(string Token, DateTime ExpiresAtUtc, Guid EmployeeId, string Name, string Role, IReadOnlyList<HrTabs> HrTabs);
 
 public sealed record SignInRequest(string StaffId, string Pin);
 
 public sealed record SignInResponse(string Token, DateTime ExpiresAtUtc, Me Staff);
 
-public sealed record Me(string Id, string FullName, UserRole Role, IReadOnlyList<string> Permissions)
+public sealed record Me(string Id, string FullName, UserRole Role, IReadOnlyList<string> Permissions, IReadOnlyList<HrTabs>? HrTabs = null)
 {
     public static Me For(string id, string fullName, UserRole role) =>
         new(id, fullName, role, RolePermissions.For(role).Order(StringComparer.Ordinal).ToList());

@@ -11,6 +11,7 @@ import { Approvals } from '../costing/approvals';
 import { BusinessDay, Treasury } from '../costing/financials';
 import { AdjustmentDialog, FinalizeDialog, PayslipPage } from './payslip-page';
 import { PayrollPage } from './payroll-page';
+import { HrAccess } from '../../core/hr/hr-access';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 // Element by element: the template leaves no space between them.
@@ -80,7 +81,7 @@ describe('the monthly payroll', () => {
         provideRouter([]),
         { provide: HrApi, useValue: { payroll, calculatePayroll, exportPayroll, dailyCost } },
         { provide: BusinessDay, useValue: { today: () => Promise.resolve('2026-09-21') } },
-        { provide: AuthService, useValue: { can: (p: string) => manage || p !== Permissions.HrManage } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: (p: string) => manage || p !== Permissions.HrManage } },
         { provide: NotifyService, useValue: notify },
       ],
     });
@@ -202,6 +203,8 @@ describe('a payslip', () => {
         { provide: HrApi, useValue: { payroll, finalizeSlip, addAdjustment, voidAdjustment } },
         { provide: MatDialog, useValue: { open } },
         { provide: Treasury, useValue: { enter } },
+        { provide: HrAccess, useValue: { has: () => true } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: () => true } },
         { provide: Approvals, useValue: { canApprove } },
         { provide: NotifyService, useValue: notify },
       ],

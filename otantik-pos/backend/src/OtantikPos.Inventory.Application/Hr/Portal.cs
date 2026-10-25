@@ -1,6 +1,7 @@
 using MediatR;
 using Otantik.BuildingBlocks;
 using OtantikPos.Hr.Domain;
+using OtantikPos.Hr.Domain.Access;
 using OtantikPos.Hr.Domain.Employees;
 using OtantikPos.Inventory.Application.Approvals;
 
@@ -53,8 +54,9 @@ internal sealed class SetEmployeePinHandler(IEmployeeRepository employees, IPinH
     }
 }
 
-// Who signed in, as the token carries them: PinSetAtUtc stamps it, so a new PIN signs them out.
-public sealed record PortalEmployee(Guid Id, string Name, DateTime PinSetAtUtc);
+// Who signed in, as the token carries them: PinSetAtUtc stamps it, so a new PIN signs them out;
+// HrTabs are the HR & Payroll tabs a manager gave them, so changing those signs them out too.
+public sealed record PortalEmployee(Guid Id, string Name, DateTime PinSetAtUtc, HrTabs HrTabs = HrTabs.None);
 
 // Employee null: refused, LockedUntilUtc set when it is locked.
 public sealed record EmployeeSignInResult(PortalEmployee? Employee, DateTime? LockedUntilUtc);
@@ -88,7 +90,7 @@ internal sealed class EmployeeSignInHandler(IEmployeeRepository employees, IPinH
 
         employee.PinAccepted(check == PinCheck.RightRehash ? hasher.Hash(request.Pin!.Trim()) : null);
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        return new EmployeeSignInResult(new PortalEmployee(employee.Id, employee.Name, employee.PinSetAtUtc!.Value), null);
+        return new EmployeeSignInResult(new PortalEmployee(employee.Id, employee.Name, employee.PinSetAtUtc!.Value, employee.HrTabs), null);
     }
 }
 
@@ -105,7 +107,9 @@ public sealed record PortalProfileDto(
     EmployeeIdPhotoDto? IdPhoto,
     TimeOnly? ShiftStartsAt,
     TimeOnly? ShiftEndsAt,
-    IReadOnlyList<DayOfWeek> DaysOff);
+    IReadOnlyList<DayOfWeek> DaysOff,
+    // The HR & Payroll tabs a manager gave them, if any: the portal opens those beside their profile.
+    IReadOnlyList<HrTabs> HrTabs);
 
 public sealed record GetPortalProfileQuery(Guid EmployeeId) : IRequest<PortalProfileDto?>;
 
@@ -120,7 +124,7 @@ internal sealed class GetPortalProfileHandler(IEmployeeRepository employees, IDe
         var department = (await departments.GetByIdAsync(e.DepartmentId, cancellationToken))?.Name ?? "—";
         return new PortalProfileDto(
             e.Id, e.Name, e.JobTitle, department, e.EmploymentType, e.HiredOn, e.NationalId, e.MobileNumber, dto.IdPhoto, dto.ShiftStartsAt, dto.ShiftEndsAt,
-            dto.DaysOff);
+            dto.DaysOff, HrTabSet.Split(e.HrTabs));
     }
 }
 

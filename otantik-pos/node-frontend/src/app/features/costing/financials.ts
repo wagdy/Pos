@@ -24,6 +24,7 @@ import {
   paymentMethodLabels,
   safeKindLabels,
 } from '../../core/costing/costing.api';
+import { AuthService } from '../../core/auth/auth.service';
 import { errorMessage } from '../../core/http/error-message';
 import { EmployeePicker } from '../../core/hr/employee-picker';
 import { Employee, HrApi } from '../../core/hr/hr.api';
@@ -49,16 +50,18 @@ export function monthBounds(year: number, month: number): { from: string; to: st
 
 // The till's business day, as the server keeps it: between midnight and the hour the day starts
 // it is still yesterday, the night the cash belongs to. Asked once, and kept; the browser's own
-// date until it answers.
+// date until it answers. An employee working their HR tabs in the portal asks HR for it.
 @Injectable({ providedIn: 'root' })
 export class BusinessDay {
   private readonly api = inject(CostingApi);
+  private readonly hr = inject(HrApi);
+  private readonly auth = inject(AuthService);
   private asked: Promise<string> | null = null;
 
   today(): Promise<string> {
     this.asked ??= (async () => {
       try {
-        return (await firstValueFrom(this.api.businessToday())).today;
+        return (await firstValueFrom(this.auth.employeeActing() ? this.hr.today() : this.api.businessToday())).today;
       } catch {
         // Asked again next time.
         this.asked = null;

@@ -61,7 +61,7 @@ describe('HR’s advances', () => {
           },
         },
         { provide: Approvals, useValue: approvals },
-        { provide: AuthService, useValue: { can: () => true } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: () => true } },
         { provide: BusinessDay, useValue: { today: () => Promise.resolve('2026-10-22') } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },

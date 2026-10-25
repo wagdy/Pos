@@ -76,7 +76,7 @@ describe('the employees', () => {
           useValue: { employees, deviceUsers, saveEmployee, departments: () => of(departments), devices: devicesOf, readDeviceUsers, syncDevice,
             employeesTemplate, importEmployees, exportEmployees },
         },
-        { provide: AuthService, useValue: { can: (p: string) => manage || p !== Permissions.HrManage } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: (p: string) => manage || p !== Permissions.HrManage } },
         { provide: Approvals, useValue: approvals },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },

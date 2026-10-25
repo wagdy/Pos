@@ -1,6 +1,7 @@
 import { DatePipe } from '@angular/common';
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
@@ -19,11 +20,14 @@ import { PayslipSheet } from '../hr/payslip-sheet';
 // from the list), and what is in their custody.
 @Component({
   selector: 'app-my-profile-page',
-  imports: [DatePipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatProgressBarModule, MatSelectModule, PaperPreview, PayslipSheet],
+  imports: [DatePipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatProgressBarModule, MatSelectModule, PaperPreview, PayslipSheet, RouterLink],
   template: `
     <header class="bar">
       <mat-icon>badge</mat-icon>
       <span class="title">My profile <span class="ar">ملفي</span></span>
+      @if (auth.hrTabs().length) {
+        <a mat-button routerLink="/hr" class="hr-link">HR &amp; Payroll <span class="ar">الموارد البشرية</span></a>
+      }
       <span class="spacer"></span>
       <span class="who">{{ auth.session()?.name }}</span>
       <button mat-button (click)="auth.signOut()"><mat-icon>logout</mat-icon> Sign out</button>
@@ -130,7 +134,8 @@ import { PayslipSheet } from '../hr/payslip-sheet';
       background: var(--mat-sys-primary);
       color: var(--mat-sys-on-primary);
 
-      button {
+      button,
+      a {
         color: inherit;
       }
       .title {

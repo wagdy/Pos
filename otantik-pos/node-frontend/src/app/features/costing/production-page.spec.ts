@@ -114,7 +114,7 @@ describe('making a batch', () => {
         },
         { provide: MatDialog, useValue: { open } },
         { provide: NotifyService, useValue: notify },
-        { provide: AuthService, useValue: { can: (p: string) => p !== Permissions.ApprovalDecide || manager } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: (p: string) => p !== Permissions.ApprovalDecide || manager } },
       ],
     });
     const fixture = TestBed.createComponent(ProductionPage);

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using OtantikPos.Hr.Domain;
+using OtantikPos.Hr.Domain.Access;
 using OtantikPos.Hr.Domain.Attendance;
 using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
@@ -33,6 +34,20 @@ internal sealed class EmployeeRepository(NodeDbContext db) : IEmployeeRepository
 
     public async Task<IReadOnlyList<Employee>> GetWithRoleAsync(Guid jobRoleId, CancellationToken cancellationToken = default) =>
         await db.Employees.Where(e => e.JobRoleId == jobRoleId).ToListAsync(cancellationToken);
+}
+
+internal sealed class StaffHrAccessRepository(NodeDbContext db) : IStaffHrAccessRepository
+{
+    public Task<StaffHrAccess?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.StaffHrAccess.SingleOrDefaultAsync(a => a.Id == id, cancellationToken);
+
+    public void Add(StaffHrAccess aggregate) => db.StaffHrAccess.Add(aggregate);
+
+    public Task<StaffHrAccess?> GetByStaffIdAsync(string staffId, CancellationToken cancellationToken = default) =>
+        db.StaffHrAccess.SingleOrDefaultAsync(a => a.StaffId == staffId, cancellationToken);
+
+    public async Task<IReadOnlyList<StaffHrAccess>> GetAllAsync(CancellationToken cancellationToken = default) =>
+        await db.StaffHrAccess.AsNoTracking().ToListAsync(cancellationToken);
 }
 
 internal sealed class AssetCategoryRepository(NodeDbContext db) : IAssetCategoryRepository

@@ -266,6 +266,12 @@ interface Row {
   `,
   styleUrl: '../costing/costing.scss',
   styles: `
+    /* A phone (the portal's): the two views one under the other rather than off its edge. */
+    @media (max-width: 600px) {
+      mat-button-toggle-group {
+        flex-wrap: wrap;
+      }
+    }
     .day {
       width: 170px;
     }

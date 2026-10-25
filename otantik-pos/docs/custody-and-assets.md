@@ -97,9 +97,11 @@ expense when it was bought, and counting its breaking too would count it twice.
   have now (when it was set): a new PIN, none, or their leaving signs them out at once.
 - Five wrong PINs lock it five minutes; ten sign-ins a minute from one address at most.
 - **The portal's port** (`Portal:Port`, 5083, which `start.sh` listens on) answers only
-  `POST /api/auth/employee-login`, `/api/portal/*` and the app's files (GET); the rest of the
-  API, the hub, `/iclock` and the health checks are not found there. Its address alone, or any
-  screen of the till's (`/costing/waste`), sends a phone to `/portal`.
+  `POST /api/auth/employee-login`, `/api/portal/*`, `/api/hr/*` (for the HR tabs a manager gave
+  an employee; only an employee's token holds a tab there, see the HR design's Employee
+  permissions) and the app's files (GET); the rest of the API, the hub, `/iclock` and the
+  health checks are not found there. Its address alone, or any screen of the till's other than
+  `/portal`, `/my-profile` and `/hr` (`/costing/waste`), sends a phone to `/portal`.
 
 ## The screens
 

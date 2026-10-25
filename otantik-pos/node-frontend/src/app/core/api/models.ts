@@ -150,6 +150,8 @@ export interface Me {
   fullName: string;
   role: UserRole;
   permissions: string[];
+  // The HR & Payroll tabs they hold: every one for a manager, an accountant's as a manager ticked them.
+  hrTabs?: string[];
 }
 
 export interface SignInOption {

@@ -8,6 +8,7 @@ import { saveDeviceLink, savedDeviceLink } from '../../core/hr/device-link';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { DeviceNameDialog, DevicesPage, ReadAttendanceDialog } from './devices-page';
+import { HrAccess } from '../../core/hr/hr-access';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 
@@ -48,6 +49,7 @@ describe('the attendance devices', () => {
         provideRouter([]),
         { provide: HrApi, useValue: { devices, settings, approveDevice, revokeDevice, saveSettings, readDeviceUsers, readDeviceAttendance, deviceConnection, testDevice, syncDevice } },
         { provide: Approvals, useValue: { canApprove } },
+        { provide: HrAccess, useValue: { has: () => true } },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
       ],

@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Otantik.BuildingBlocks;
+using OtantikPos.Hr.Domain.Access;
 
 namespace OtantikPos.Hr.Domain.Employees;
 
@@ -167,6 +168,10 @@ public sealed partial class Employee : AggregateRoot
     public int FailedPinAttempts { get; private set; }
     public DateTime? PinLockedUntilUtc { get; private set; }
     public bool HasPin => PinHash is not null;
+
+    // The HR & Payroll tabs a manager gave them (صلاحيات الموظفين), seen in the portal: none to
+    // start with. They work them as an accountant does, their changes asked of a manager.
+    public HrTabs HrTabs { get; private set; }
 
     public decimal DailyRate => IsDaily ? DailyWage : MonthlySalary / PayDaysInMonth;
     public decimal HourlyRate => DailyRate / ShiftHours;
@@ -337,6 +342,9 @@ public sealed partial class Employee : AggregateRoot
         FailedPinAttempts = 0;
         PinLockedUntilUtc = null;
     }
+
+    // From their next sign-in: changing them signs them out of the portal, as a new PIN does.
+    public void SetHrTabs(HrTabs tabs) => HrTabs = tabs & HrTabs.All;
 
     public void ClearPin()
     {

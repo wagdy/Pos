@@ -1,5 +1,5 @@
 import { DatePipe, DecimalPipe } from '@angular/common';
-import { Component, effect, inject, input, signal, untracked } from '@angular/core';
+import { Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
@@ -12,7 +12,10 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { errorMessage } from '../../core/http/error-message';
+import { AuthService } from '../../core/auth/auth.service';
+import { Permissions } from '../../core/auth/permissions';
 import { AdjustmentKind, HrApi, PayrollAdjustment, PayrollSlip } from '../../core/hr/hr.api';
+import { HrAccess } from '../../core/hr/hr-access';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
@@ -126,7 +129,9 @@ export class FinalizeDialog {
         @if (embedded()) {
           <a mat-button [routerLink]="['/hr/payroll', s.employee.id]" [queryParams]="{ month: month() }"><mat-icon>open_in_new</mat-icon> On Payroll</a>
         }
-        <a mat-button routerLink="/hr/attendance" [queryParams]="{ employee: s.employee.id, month: month() }"><mat-icon>schedule</mat-icon> Timesheet</a>
+        @if (access.has('Attendance')) {
+          <a mat-button routerLink="/hr/attendance" [queryParams]="{ employee: s.employee.id, month: month() }"><mat-icon>schedule</mat-icon> Timesheet</a>
+        }
         <button mat-button (click)="print()"><mat-icon>print</mat-icon> Print</button>
       }
     </div>
@@ -145,14 +150,14 @@ export class FinalizeDialog {
               <button mat-flat-button (click)="finalize(s)" [disabled]="!!finalizeBlocked(s)"><mat-icon>verified</mat-icon> Finalize <span class="inline-ar">اعتماد</span></button>
             </span>
           }
-          @if (s.status === 'Finalized' && s.salaryOwed > 0) {
+          @if (s.status === 'Finalized' && s.salaryOwed > 0 && canPay()) {
             <button mat-flat-button (click)="pay(s)"><mat-icon>payments</mat-icon> Pay salary <span class="inline-ar">صرف الراتب</span></button>
           }
         </div>
         @if (s.status !== 'Finalized' && finalizeBlocked(s); as why) {
           <p class="note no-print">
             {{ why }}
-            @if (!f.openDays && f.missingPunchDays > 0) {
+            @if (!f.openDays && f.missingPunchDays > 0 && access.has('Corrections')) {
               <a routerLink="/hr/corrections">Open Corrections</a>
             }
           </p>
@@ -174,6 +179,8 @@ export class FinalizeDialog {
 })
 export class PayslipPage {
   private readonly api = inject(HrApi);
+  protected readonly access = inject(HrAccess);
+  private readonly auth = inject(AuthService);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
   private readonly treasury = inject(Treasury);
@@ -185,6 +192,8 @@ export class PayslipPage {
   readonly embedded = input(false);
 
   protected readonly canDecide = this.approvals.canApprove;
+  // Paying is a safe entry, Financials': whoever keeps the books.
+  protected readonly canPay = computed(() => this.auth.can(Permissions.InventoryManage));
   protected readonly month = signal(isoDay(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
   protected readonly slip = signal<PayrollSlip | null>(null);
   protected readonly loading = signal(false);

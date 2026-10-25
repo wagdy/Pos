@@ -9,6 +9,7 @@ import { aheadBy } from '../../core/hr/device-link';
 import { errorMessage } from '../../core/http/error-message';
 import { AttendanceSignal } from '../../core/hr/attendance-signal';
 import { AttendanceDevice, Department, EmployeeStatus, HrApi, Presence, PresenceState, clock } from '../../core/hr/hr.api';
+import { HrAccess } from '../../core/hr/hr-access';
 import { CorrectionsCount } from './corrections-count';
 
 // What a state is called, and its colour.
@@ -57,7 +58,9 @@ const states: Record<PresenceState, { en: string; ar: string; tone: string }> = 
           @if (pointAt(); as at) {
             On the device, set Cloud Server Setting to <strong>{{ at }}</strong>.
           }
-          <a routerLink="/hr/devices">Attendance devices</a>
+          @if (access.has('Devices')) {
+            <a routerLink="/hr/devices">Attendance devices</a>
+          }
         </span>
       </div>
     }
@@ -68,7 +71,9 @@ const states: Record<PresenceState, { en: string; ar: string; tone: string }> = 
           <strong>{{ d.name ?? d.serialNumber }}'s clock is {{ ahead(d.clockAheadMinutes!) }} ahead</strong>: its punches are stamped later than
           they happen, and count at the wrong times. The till sends it the restaurant's time zone each time it starts: restart the device to set
           its clock, and ignore those punches on the Attendance tab.
-          <a routerLink="/hr/devices">Attendance devices</a>
+          @if (access.has('Devices')) {
+            <a routerLink="/hr/devices">Attendance devices</a>
+          }
         </span>
       </div>
     }
@@ -84,7 +89,7 @@ const states: Record<PresenceState, { en: string; ar: string; tone: string }> = 
         <h3>{{ g.name }} <span class="muted small">· {{ g.in }} in of {{ g.people.length }}</span></h3>
         <div class="cards">
           @for (p of g.people; track p.employee.id) {
-            <a class="card" [class]="tone(p)" [class.fresh]="fresh().has(p.employee.id)" routerLink="/hr/attendance"
+            <a class="card" [class]="tone(p)" [class.fresh]="fresh().has(p.employee.id)" [routerLink]="access.has('Attendance') ? '/hr/attendance' : null"
               [queryParams]="{ employee: p.employee.id, month: p.day }">
               <span class="dot" aria-hidden="true"></span>
               <span class="who">
@@ -275,6 +280,7 @@ const states: Record<PresenceState, { en: string; ar: string; tone: string }> = 
 })
 export class NowPage {
   private readonly api = inject(HrApi);
+  protected readonly access = inject(HrAccess);
   private readonly punches = inject(AttendanceSignal);
   protected readonly waiting = inject(CorrectionsCount);
 

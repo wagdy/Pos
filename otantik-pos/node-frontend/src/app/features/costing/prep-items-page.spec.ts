@@ -60,7 +60,7 @@ describe('the prep items', () => {
           provide: CostingApi,
           useValue: { prepItems: () => of([dough, sauce, glaze]), approvalRequests: () => of({ pending, decided: [] }), recipeCategories: () => of([]) },
         },
-        { provide: AuthService, useValue: { can: () => true } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: () => true } },
       ],
     });
     const fixture = TestBed.createComponent(PrepItemsPage);

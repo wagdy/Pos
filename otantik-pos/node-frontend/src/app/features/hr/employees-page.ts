@@ -19,6 +19,7 @@ import { ApprovalResult, isRequested } from '../../core/costing/costing.api';
 import { addressOf, DeviceLink, savedDeviceLink, ZkPort } from '../../core/hr/device-link';
 import { errorMessage } from '../../core/http/error-message';
 import { Department, DeviceUser, Employee, EmployeeImportResult, EmployeeInput, HrApi, weekDays } from '../../core/hr/hr.api';
+import { HrAccess } from '../../core/hr/hr-access';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { saveBlob } from '../../core/ui/save-blob';
@@ -288,7 +289,7 @@ export class LinkDeviceUserDialog {
         } @else {
           <p class="muted">
             No users read from the attendance device yet. Sync device reads them, as does a device’s “Read its users” on
-            the <a routerLink="/hr/devices">Attendance devices</a> tab.
+            the @if (access.has('Devices')) { <a routerLink="/hr/devices">Attendance devices</a> } @else { Attendance devices } tab.
           </p>
         }
       </section>
@@ -390,6 +391,7 @@ export class LinkDeviceUserDialog {
 export class EmployeesPage {
   private readonly api = inject(HrApi);
   private readonly auth = inject(AuthService);
+  protected readonly access = inject(HrAccess);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
   private readonly businessDay = inject(BusinessDay);

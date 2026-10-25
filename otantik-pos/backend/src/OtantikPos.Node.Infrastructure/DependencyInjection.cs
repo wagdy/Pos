@@ -94,6 +94,7 @@ public static class DependencyInjection
         services.AddScoped<OtantikPos.Hr.Domain.IEmployeeRepository, Hr.EmployeeRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IEmployeeIdPhotoStore, Hr.EmployeeIdPhotoStore>();
         services.AddScoped<OtantikPos.Hr.Domain.IAssetCategoryRepository, Hr.AssetCategoryRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IStaffHrAccessRepository, Hr.StaffHrAccessRepository>();
         services.AddSingleton<OtantikPos.Inventory.Application.Hr.IPinHasher, Identity.PinHasher>();
         services.AddScoped<OtantikPos.Hr.Domain.IAssetItemRepository, Hr.AssetItemRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IAssetTransactionRepository, Hr.AssetTransactionRepository>();

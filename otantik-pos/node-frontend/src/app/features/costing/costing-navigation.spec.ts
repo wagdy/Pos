@@ -92,7 +92,7 @@ describe('the costing navigation', () => {
 
   it('keeps Purchases to buying: no expense items or spending there, and the categories called simply Categories', async () => {
     TestBed.configureTestingModule({
-      providers: [provideRouter([]), { provide: AuthService, useValue: { can: () => true } }, { provide: Treasury, useValue: { enter: vi.fn() } }],
+      providers: [provideRouter([]), { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: () => true } }, { provide: Treasury, useValue: { enter: vi.fn() } }],
     });
     const fixture = TestBed.createComponent(PurchasesShell);
     await fixture.whenStable();
@@ -106,7 +106,7 @@ describe('the costing navigation', () => {
     const enter = vi.fn().mockResolvedValue(true);
     const can = vi.fn(() => true);
     TestBed.configureTestingModule({
-      providers: [provideRouter([]), { provide: AuthService, useValue: { can } }, { provide: Treasury, useValue: { enter } }],
+      providers: [provideRouter([]), { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can } }, { provide: Treasury, useValue: { enter } }],
     });
     const fixture = TestBed.createComponent(PurchasesShell);
     fixture.detectChanges();
@@ -118,7 +118,7 @@ describe('the costing navigation', () => {
 
     can.mockReturnValue(false);
     TestBed.configureTestingModule({
-      providers: [provideRouter([]), { provide: AuthService, useValue: { can } }, { provide: Treasury, useValue: { enter } }],
+      providers: [provideRouter([]), { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can } }, { provide: Treasury, useValue: { enter } }],
     });
     const viewer = TestBed.createComponent(PurchasesShell);
     viewer.detectChanges();

@@ -103,7 +103,7 @@ describe('the recipes', () => {
         },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },
-        { provide: AuthService, useValue: { can: (p: string) => p !== Permissions.ApprovalDecide || manager } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: (p: string) => p !== Permissions.ApprovalDecide || manager } },
       ],
     });
     const fixture = TestBed.createComponent(RecipesPage);

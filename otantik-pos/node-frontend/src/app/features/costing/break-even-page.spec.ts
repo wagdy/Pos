@@ -53,7 +53,7 @@ describe('the break-even worksheet', () => {
         providers: [
           provideRouter([]),
           { provide: CostingApi, useValue: { breakEven, saveBreakEvenScenarios } },
-          { provide: AuthService, useValue: { can: () => true } },
+          { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: () => true } },
           { provide: NotifyService, useValue: { info: vi.fn(), error: vi.fn() } },
         ],
       });

@@ -110,7 +110,7 @@ describe('a prep item', () => {
         { provide: CostingApi, useValue: { materials, prepItem, savePrepItem, approvalRequests, recipeCategories: () => of(recipeCategories) } },
         { provide: MatDialog, useValue: { open } },
         { provide: NotifyService, useValue: notify },
-        { provide: AuthService, useValue: { can: (p: string) => p !== Permissions.ApprovalDecide || manager } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: (p: string) => p !== Permissions.ApprovalDecide || manager } },
       ],
     });
     const fixture = TestBed.createComponent(PrepItemPage);

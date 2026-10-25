@@ -71,7 +71,7 @@ describe('the KPIs', () => {
       providers: [
         provideRouter([]),
         { provide: CostingApi, useValue: { kpis, saveExpenses } },
-        { provide: AuthService, useValue: { can: () => true } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: () => true } },
         { provide: NotifyService, useValue: { info: vi.fn(), error: vi.fn() } },
       ],
     });

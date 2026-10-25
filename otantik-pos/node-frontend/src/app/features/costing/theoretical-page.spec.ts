@@ -106,7 +106,7 @@ describe('the monthly theoretical cost report', () => {
     TestBed.configureTestingModule({
       providers: [
         { provide: CostingApi, useValue: { theoretical, manualSales, saveManualSales } },
-        { provide: AuthService, useValue: { can: () => true } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: () => true } },
         { provide: NotifyService, useValue: { info, error: vi.fn() } },
       ],
     });

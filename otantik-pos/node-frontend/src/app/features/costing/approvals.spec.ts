@@ -21,7 +21,7 @@ describe('deleting from the costing screens', () => {
         { provide: CostingApi, useValue: { requestDeletion, approvalRequests } },
         { provide: MatDialog, useValue: { open } },
         { provide: NotifyService, useValue: notify },
-        { provide: AuthService, useValue: { can: (p: string) => p !== Permissions.ApprovalDecide || manager } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: (p: string) => p !== Permissions.ApprovalDecide || manager } },
       ],
     });
     return TestBed.inject(Approvals);

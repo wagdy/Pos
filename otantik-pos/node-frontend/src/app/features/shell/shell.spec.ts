@@ -28,7 +28,7 @@ describe('the till top bar', () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: AuthService, useValue: { me: signal(me), can, canAny: (permissions: readonly Permission[]) => permissions.some(can) } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: signal(me), can, canAny: (permissions: readonly Permission[]) => permissions.some(can) } },
         {
           provide: ConnectivityService,
           useValue: { nodeOnline: signal(true), cloudOnline: signal(true), cloudNotConfigured: signal(false), cloud: signal(null), printers: signal([]) },

@@ -99,6 +99,7 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
     public DbSet<AdvanceAllocation> AdvanceAllocations => Set<AdvanceAllocation>();
     public DbSet<HrAdvance> HrAdvances => Set<HrAdvance>();
     public DbSet<AssetCategory> AssetCategories => Set<AssetCategory>();
+    public DbSet<OtantikPos.Hr.Domain.Access.StaffHrAccess> StaffHrAccess => Set<OtantikPos.Hr.Domain.Access.StaffHrAccess>();
     public DbSet<AssetItem> AssetItems => Set<AssetItem>();
     public DbSet<AssetTransaction> AssetTransactions => Set<AssetTransaction>();
     public DbSet<BreakageEntry> BreakageEntries => Set<BreakageEntry>();

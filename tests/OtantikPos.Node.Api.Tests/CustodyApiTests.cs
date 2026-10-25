@@ -355,18 +355,20 @@ public class CustodyApiTests
         await using var api = await TestApi.StartAsync(new Dictionary<string, string> { ["Portal:Port"] = "0" });
         var phone = api.Anonymous();
 
-        foreach (var path in new[] { "/api/auth/staff", "/api/hr/employees", "/api/custody/assets", "/health", "/iclock/cdata?SN=CQZ7232060112", "/hubs/till/negotiate" })
+        foreach (var path in new[] { "/api/auth/staff", "/api/custody/assets", "/api/financials/today", "/health", "/iclock/cdata?SN=CQZ7232060112", "/hubs/till/negotiate" })
             Assert.Equal(HttpStatusCode.NotFound, (await phone.GetAsync(path, Cancel)).StatusCode);
+        // HR answers there, for the tabs a manager gave an employee: no one signed in, nothing.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await phone.GetAsync("/api/hr/employees", Cancel)).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await phone.PostAsJsonAsync("/api/auth/sign-in", new { staffId = "x", pin = "1234" }, Cancel)).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await phone.PostAsync("/my-profile", null, Cancel)).StatusCode);
         // Its address alone, or a screen of the till's, opens the portal's sign-in; the portal's own screens and the app's files open.
         var root = api.Anonymous(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
-        foreach (var path in new[] { "/", "/costing/waste", "/hr/employees/x", "/portalx" })
+        foreach (var path in new[] { "/", "/costing/waste", "/custody/assets", "/portalx" })
         {
             var opened = await root.GetAsync(path, Cancel);
             Assert.Equal((HttpStatusCode.Redirect, "/portal"), (opened.StatusCode, opened.Headers.Location?.OriginalString));
         }
-        foreach (var path in new[] { "/portal", "/my-profile", "/Portal?reason=expired", "/favicon.ico", "/main-ABC.js" })
+        foreach (var path in new[] { "/portal", "/my-profile", "/hr/now", "/Portal?reason=expired", "/favicon.ico", "/main-ABC.js" })
             Assert.NotEqual(HttpStatusCode.Redirect, (await root.GetAsync(path, Cancel)).StatusCode);
         // Its sign-in and its API answer there.
         Assert.Equal(HttpStatusCode.Unauthorized,

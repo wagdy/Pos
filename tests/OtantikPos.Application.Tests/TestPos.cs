@@ -109,6 +109,7 @@ public sealed class TestPos
         services.AddSingleton<OtantikPos.Hr.Domain.IAdvanceAllocationRepository>(Hr.Allocations);
         services.AddSingleton<OtantikPos.Hr.Domain.IHrAdvanceRepository>(Hr.HrAdvances);
         services.AddSingleton<OtantikPos.Hr.Domain.IAssetCategoryRepository>(Hr.AssetCategories);
+        services.AddSingleton<OtantikPos.Hr.Domain.IStaffHrAccessRepository>(Hr.StaffHrAccess);
         services.AddSingleton<OtantikPos.Hr.Domain.IAssetItemRepository>(Hr.Assets);
         services.AddSingleton<OtantikPos.Hr.Domain.IAssetTransactionRepository>(Hr.AssetVouchers);
         services.AddSingleton<OtantikPos.Inventory.Domain.Waste.IBreakageEntryRepository>(Hr.Breakage);

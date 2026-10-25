@@ -37,7 +37,7 @@ describe('a day’s purchases entered together', () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: AuthService, useValue: { can: (p: string) => hr || p !== Permissions.HrManage } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: (p: string) => hr || p !== Permissions.HrManage } },
         {
           provide: HrApi,
           useValue: {

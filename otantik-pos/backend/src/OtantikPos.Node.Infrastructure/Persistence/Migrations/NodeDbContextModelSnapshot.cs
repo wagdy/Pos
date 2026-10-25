@@ -530,6 +530,43 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.ToTable("OrderItemAddOns", "pos");
                 });
 
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Access.StaffHrAccess", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("SetAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("SetBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("StaffId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<string>("Tabs")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StaffId")
+                        .IsUnique();
+
+                    b.ToTable("StaffHrAccess", "hr");
+                });
+
             modelBuilder.Entity("OtantikPos.Hr.Domain.Attendance.AdministrativePenalty", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1181,6 +1218,11 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
 
                     b.Property<DateOnly>("HiredOn")
                         .HasColumnType("date");
+
+                    b.Property<string>("HrTabs")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<int?>("IdPhotoBytes")
                         .HasColumnType("integer");

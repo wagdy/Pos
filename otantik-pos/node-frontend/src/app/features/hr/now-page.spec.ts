@@ -6,6 +6,7 @@ import { AttendanceSignal } from '../../core/hr/attendance-signal';
 import { AttendanceDevice, Department, Employee, EmployeeStatus, HrApi, Presence } from '../../core/hr/hr.api';
 import { CorrectionsCount } from './corrections-count';
 import { NowPage } from './now-page';
+import { HrAccess } from '../../core/hr/hr-access';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 // Each element's text inside, as Angular drops the spaces between elements.
@@ -61,6 +62,7 @@ describe('who is in now', () => {
         },
         { provide: AttendanceSignal, useValue: punches },
         { provide: CorrectionsCount, useValue: waiting },
+        { provide: HrAccess, useValue: { has: () => true } },
       ],
     });
     const fixture = TestBed.createComponent(NowPage);

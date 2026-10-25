@@ -13,6 +13,7 @@ import { firstValueFrom } from 'rxjs';
 import { aheadBy, addressOf, isIPv4, saveDeviceLink, savedDeviceLink, ZkPort } from '../../core/hr/device-link';
 import { errorMessage } from '../../core/http/error-message';
 import { AttendanceDevice, AttendancePolicy, DeviceCommand, HrApi } from '../../core/hr/hr.api';
+import { HrAccess } from '../../core/hr/hr-access';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 
@@ -181,7 +182,7 @@ export class ReadAttendanceDialog {
             <mat-icon>{{ r.ok ? 'check_circle' : 'error' }}</mat-icon>
             <span>
               {{ r.text }}
-              @if (r.unlinked) {
+              @if (r.unlinked && access.has('Employees')) {
                 <a routerLink="/hr/employees">Link {{ r.unlinked === 1 ? 'it' : 'them' }} on the Employees tab</a>
               }
             </span>
@@ -268,7 +269,7 @@ export class ReadAttendanceDialog {
                         }
                       } @else if (c.returnCode === 0) {
                         done {{ c.answeredAtUtc | date: 'd MMM, HH:mm' }}
-                        @if (c.kind === 'ReadUsers') {
+                        @if (c.kind === 'ReadUsers' && access.has('Employees')) {
                           · <a routerLink="/hr/employees">its users are on the Employees tab</a>
                         }
                       } @else {
@@ -441,6 +442,7 @@ export class ReadAttendanceDialog {
 })
 export class DevicesPage {
   private readonly api = inject(HrApi);
+  protected readonly access = inject(HrAccess);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
   private readonly approvals = inject(Approvals);

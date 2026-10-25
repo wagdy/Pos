@@ -21,10 +21,12 @@
       <mat-icon>calculate</mat-icon>
       <span class="nav-text">Costing</span>
     </a>
-    <a *appCan="Permissions.HrView" mat-button routerLink="/hr" routerLinkActive="active" aria-label="HR & Payroll" matTooltip="HR & Payroll · الموارد البشرية والرواتب" [matTooltipDisabled]="!compactNav()">
-      <mat-icon>groups</mat-icon>
-      <span class="nav-text">HR &amp; Payroll</span>
-    </a>
+    @if (hr.any()) {
+      <a mat-button routerLink="/hr" routerLinkActive="active" aria-label="HR & Payroll" matTooltip="HR & Payroll · الموارد البشرية والرواتب" [matTooltipDisabled]="!compactNav()">
+        <mat-icon>groups</mat-icon>
+        <span class="nav-text">HR &amp; Payroll</span>
+      </a>
+    }
     <a *appCan="Permissions.HrView" mat-button routerLink="/custody" routerLinkActive="active" aria-label="Custody & Assets" matTooltip="Custody & Assets · العهدة والأصول" [matTooltipDisabled]="!compactNav()">
       <mat-icon>inventory_2</mat-icon>
       <span class="nav-text">Custody</span>

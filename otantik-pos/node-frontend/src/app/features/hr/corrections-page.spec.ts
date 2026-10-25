@@ -10,6 +10,7 @@ import { BusinessDay } from '../costing/financials';
 import { IgnorePunchDialog, PenaltyDialog, ResolveDayDialog } from './attendance-dialogs';
 import { CorrectionsPage } from './corrections-page';
 import { CorrectionsCount } from './corrections-count';
+import { HrAccess } from '../../core/hr/hr-access';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 // Each element's text inside, as Angular drops the spaces between elements.
@@ -91,6 +92,7 @@ describe('the corrections', () => {
         { provide: MatDialog, useValue: { open } },
         { provide: BusinessDay, useValue: { today: () => Promise.resolve('2026-10-21') } },
         { provide: CorrectionsCount, useValue: count },
+        { provide: HrAccess, useValue: { has: () => true } },
       ],
     });
     const fixture = TestBed.createComponent(CorrectionsPage);

@@ -12,6 +12,7 @@ import { RouterLink } from '@angular/router';
 import { Observable, firstValueFrom } from 'rxjs';
 import { errorMessage } from '../../core/http/error-message';
 import { AdministrativePenalty, AttendanceDay, Employee, EmployeeDay, HrApi, LatePunch, Punch, clock, dayName, duration, shift } from '../../core/hr/hr.api';
+import { HrAccess } from '../../core/hr/hr-access';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
@@ -107,10 +108,12 @@ import { CorrectionsCount } from './corrections-count';
                       <button mat-flat-button (click)="resolve(s, stray)"><mat-icon>logout</mat-icon> Punch-out <span class="inline-ar">الانصراف</span></button>
                       <button mat-button (click)="ignore(s, stray)">Ignore the punch</button>
                     }
-                    <a mat-icon-button routerLink="/hr/attendance" [queryParams]="{ employee: s.employee.id, month: d.date }" matTooltip="Their month"
-                      [attr.aria-label]="s.employee.name + '’s month'">
-                      <mat-icon>calendar_month</mat-icon>
-                    </a>
+                    @if (access.has('Attendance')) {
+                      <a mat-icon-button routerLink="/hr/attendance" [queryParams]="{ employee: s.employee.id, month: d.date }" matTooltip="Their month"
+                        [attr.aria-label]="s.employee.name + '’s month'">
+                        <mat-icon>calendar_month</mat-icon>
+                      </a>
+                    }
                   </td>
                 </tr>
               } @empty {
@@ -327,6 +330,7 @@ import { CorrectionsCount } from './corrections-count';
 })
 export class CorrectionsPage {
   private readonly api = inject(HrApi);
+  protected readonly access = inject(HrAccess);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
   private readonly approvals = inject(Approvals);

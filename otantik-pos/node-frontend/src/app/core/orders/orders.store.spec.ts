@@ -13,7 +13,7 @@ describe('OrdersStore', () => {
     TestBed.configureTestingModule({
       providers: [
         { provide: OrdersApi, useValue: {} },
-        { provide: AuthService, useValue: { me: signal(cashierMe) } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: signal(cashierMe) } },
       ],
     });
     store = TestBed.inject(OrdersStore);

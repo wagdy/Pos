@@ -11,15 +11,19 @@ import { PortalAuth } from '../portal/portal-auth';
 //
 // The employee portal's calls are apart: they carry the employee's token and never the till's
 // (on a till where both are signed in, neither reaches the other's API), and a 401 there signs
-// the employee out of the portal, not the till.
+// the employee out of the portal, not the till. So do HR's calls while an employee is the one
+// acting (no one of the till signed in): the HR tabs a manager gave them, in the portal.
 export const authInterceptor: HttpInterceptorFn = (request, next) => {
-  if (request.url.startsWith('/api/portal') || request.url.startsWith('/api/auth/employee-login')) {
+  const auth = inject(AuthService);
+  const portalCall = request.url.startsWith('/api/portal');
+  const hrAsEmployee = request.url.startsWith('/api/hr') && auth.employeeActing();
+  if (portalCall || hrAsEmployee || request.url.startsWith('/api/auth/employee-login')) {
     const portal = inject(PortalAuth);
-    const employeeToken = request.url.startsWith('/api/portal') ? portal.token() : null;
+    const employeeToken = portalCall || hrAsEmployee ? portal.token() : null;
     const asEmployee = employeeToken ? request.clone({ setHeaders: { Authorization: `Bearer ${employeeToken}` } }) : request;
     return next(asEmployee).pipe(
       catchError((error: unknown) => {
-        if (error instanceof HttpErrorResponse && error.status === 401 && request.url.startsWith('/api/portal') && portal.session()) {
+        if (error instanceof HttpErrorResponse && error.status === 401 && (portalCall || hrAsEmployee) && portal.session()) {
           portal.signOut('expired');
         }
         return throwError(() => error);
@@ -27,7 +31,6 @@ export const authInterceptor: HttpInterceptorFn = (request, next) => {
     );
   }
 
-  const auth = inject(AuthService);
   const token = auth.token();
   const isApi = request.url.startsWith('/api/');
   const authorized = token && isApi ? request.clone({ setHeaders: { Authorization: `Bearer ${token}` } }) : request;

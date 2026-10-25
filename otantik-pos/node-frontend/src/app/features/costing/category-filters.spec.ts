@@ -101,7 +101,7 @@ describe('prep items by recipe category', () => {
             approvalRequests: () => of({ pending: [], decided: [] }),
           },
         },
-        { provide: AuthService, useValue: { can: () => true } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: () => true } },
       ],
     });
     const fixture = TestBed.createComponent(PrepItemsPage);

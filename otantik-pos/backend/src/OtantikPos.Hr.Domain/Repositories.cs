@@ -1,4 +1,5 @@
 using Otantik.BuildingBlocks;
+using OtantikPos.Hr.Domain.Access;
 using OtantikPos.Hr.Domain.Attendance;
 using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
@@ -207,4 +208,12 @@ public interface IPayrollSlipRepository : IRepository<PayrollSlip>
     Task<PayrollSlip?> GetAsync(Guid employeeId, DateOnly month, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<PayrollSlip>> GetForMonthAsync(DateOnly month, CancellationToken cancellationToken = default);
+}
+
+// The HR tabs of till accounts that are not a manager's, by the account's id.
+public interface IStaffHrAccessRepository : IRepository<StaffHrAccess>
+{
+    Task<StaffHrAccess?> GetByStaffIdAsync(string staffId, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<StaffHrAccess>> GetAllAsync(CancellationToken cancellationToken = default);
 }

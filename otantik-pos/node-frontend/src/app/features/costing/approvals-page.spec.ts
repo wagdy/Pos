@@ -31,7 +31,7 @@ describe('the pending approvals', () => {
       providers: [
         { provide: CostingApi, useValue: { approvalRequests, approveRequest, rejectRequest, approvalPreview } },
         { provide: NotifyService, useValue: notify },
-        { provide: AuthService, useValue: { can: () => true } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: () => true } },
       ],
     });
     const fixture = TestBed.createComponent(ApprovalsPage);

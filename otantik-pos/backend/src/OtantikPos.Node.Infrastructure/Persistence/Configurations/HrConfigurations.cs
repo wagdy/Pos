@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using OtantikPos.Hr.Domain.Access;
 using OtantikPos.Hr.Domain.Attendance;
 using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
@@ -42,6 +43,20 @@ internal sealed class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
         builder.HasIndex(e => e.MobileNumber).IsUnique().HasFilter("\"MobileNumber\" IS NOT NULL");
         builder.Property(e => e.PinHash).HasMaxLength(200);
         builder.Ignore(e => e.HasPin);
+        // By name, "Now, Attendance", as the days off are; "None" for none.
+        builder.Property(e => e.HrTabs).HasConversion<string>().HasMaxLength(200);
+    }
+}
+
+internal sealed class StaffHrAccessConfiguration : IEntityTypeConfiguration<StaffHrAccess>
+{
+    public void Configure(EntityTypeBuilder<StaffHrAccess> builder)
+    {
+        builder.ToTable("StaffHrAccess", NodeDbContext.HrSchema);
+        builder.Property(a => a.StaffId).HasMaxLength(StaffHrAccess.MaxStaffIdLength);
+        builder.HasIndex(a => a.StaffId).IsUnique();
+        builder.Property(a => a.Tabs).HasConversion<string>().HasMaxLength(200);
+        builder.Property(a => a.SetBy).HasMaxLength(200);
     }
 }
 

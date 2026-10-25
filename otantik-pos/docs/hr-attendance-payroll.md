@@ -393,10 +393,42 @@ A day off worked earns its leave allowance by itself (the slip's `DaysOffWorkedP
 `DaysOffWorkedPay`), and a public holiday worked its holiday allowance (`HolidaysWorkedPay`,
 migration `PublicHolidays`); leave allowances entered by a manager are for anything else.
 
+## Employee permissions (صلاحيات الموظفين, built)
+
+Each tab of HR & Payroll is given on its own: Now, Employees, Departments, Attendance,
+Corrections, Payroll, Advances, Holidays and Devices (`HrTabs`, a bit each).
+
+- **Who holds which.** A manager holds every tab, always, and alone gives them (the
+  Permissions tab, `GET /api/hr/access`, `PUT …/access/employees/{id}`,
+  `PUT …/access/staff/{staffId}`).
+  - An employee holds none until given some (`Employee.HrTabs`, stored by name). They work
+    theirs in the portal, on their phone: `/hr` there is HR & Payroll's own screens, only their
+    tabs, under the portal's bar.
+  - An accountant holds every tab until a manager ticks theirs (`hr.StaffHrAccess`, by the till
+    account's id; the account itself is the delivery system's).
+- **What a tab lets them do.** Whoever holds a tab works it as an accountant does: what they
+  change is asked of a manager (approval). What only a manager does (correcting attendance,
+  finalizing and paying, the devices, the departments, the holidays, PINs) stays a manager's.
+- **The token.** An employee's portal token names their tabs (`hr_tabs`), which the portal reads
+  for its tabs. Every request checks them against the ones they have now, as it checks their
+  PIN: a change of tabs signs them out, and they sign in again to see the new ones.
+- **The API.** Each HR endpoint says its tabs (`[HrTab(...)]`; a test keeps every one saying
+  so). The portal's port answers `/api/hr` and `/hr` too, and only an employee's token holds a
+  tab there: a till account's, carried over the Wi-Fi, holds none.
+- **What is never sent.** These come back as null to whoever lacks the tab that shows them:
+  - what anyone earns, their national ID, mobile and ID card, without the Employees or Payroll
+    tab (Attendance has the names and shifts, not the pay);
+  - a department's costs, without Departments, Employees or Payroll;
+  - what an asset cost, to an employee, always.
+- **The screens.** Only the tabs held show, and a typed address opens only those (the first one
+  held otherwise). A link to another tab (an employee's month from Corrections, the timesheet
+  from a payslip) shows only to whoever holds that tab; the profile's payslip is the Payroll
+  tab's.
+
 ## The screens
 
 **Built:**
-- HR & Payroll in the top bar (`hr.view`), opening on Now (الآن): who is in the restaurant right
+- HR & Payroll in the top bar for whoever holds a tab of it, opening on the first one they hold, Now (الآن): who is in the restaurant right
   now, by department, green in since their last scan, grey left, yellow not arrived yet, red
   late, and off today; with the counts, and what waits on Corrections. A pushed card changes in
   place, lit up for a moment, without the page being read again; the whole page is read every

@@ -3,13 +3,89 @@ import { inject } from '@angular/core';
 import { AuthService } from './core/auth/auth.service';
 import { homePath, ordersGuard, permissionGuard, signedInGuard, signedOutGuard } from './core/auth/guards';
 import { Permissions } from './core/auth/permissions';
+import { HrAccess, hrGiveGuard, hrGuard, hrTabGuard, portalHrMatch } from './core/hr/hr-access';
 import { portalGuard, portalSignedOutGuard } from './core/portal/portal-auth';
+
+// HR & Payroll's tabs, the till's and the portal's alike: each guarded by its tab (HrAccess), so a
+// typed address opens only a tab held. Opens on the first one held.
+const hrChildren: Routes = [
+  { path: '', pathMatch: 'full', redirectTo: () => `/hr/${inject(HrAccess).first() ?? 'now'}` },
+  {
+    // Who is in now, live from the attendance device.
+    path: 'now',
+    canActivate: [hrTabGuard('Now')],
+    loadComponent: () => import('./features/hr/now-page').then((m) => m.NowPage),
+  },
+  {
+    path: 'employees',
+    canActivate: [hrTabGuard('Employees')],
+    loadComponent: () => import('./features/hr/employees-page').then((m) => m.EmployeesPage),
+  },
+  {
+    // An employee's profile: their details, ID card and the month's payslip.
+    path: 'employees/:employeeId',
+    canActivate: [hrTabGuard('Employees')],
+    loadComponent: () => import('./features/hr/employee-profile-page').then((m) => m.EmployeeProfilePage),
+  },
+  {
+    path: 'departments',
+    canActivate: [hrTabGuard('Departments')],
+    loadComponent: () => import('./features/hr/departments-page').then((m) => m.DepartmentsPage),
+  },
+  {
+    // ?date=, or ?employee=&month= for one employee's month.
+    path: 'attendance',
+    canActivate: [hrTabGuard('Attendance')],
+    loadComponent: () => import('./features/hr/attendance-page').then((m) => m.AttendancePage),
+  },
+  {
+    // ?month= its first day.
+    path: 'payroll',
+    canActivate: [hrTabGuard('Payroll')],
+    loadComponent: () => import('./features/hr/payroll-page').then((m) => m.PayrollPage),
+  },
+  {
+    path: 'payroll/:employeeId',
+    canActivate: [hrTabGuard('Payroll')],
+    loadComponent: () => import('./features/hr/payslip-page').then((m) => m.PayslipPage),
+  },
+  {
+    // The month's advances, and those handed out with no one named, to give out.
+    path: 'advances',
+    canActivate: [hrTabGuard('Advances')],
+    loadComponent: () => import('./features/hr/hr-advances-page').then((m) => m.HrAdvancesPage),
+  },
+  {
+    // Suspended days for a manager's punch-out, and the month's administrative penalties.
+    path: 'corrections',
+    canActivate: [hrTabGuard('Corrections')],
+    loadComponent: () => import('./features/hr/corrections-page').then((m) => m.CorrectionsPage),
+  },
+  {
+    // A year's public holidays: ?year= not needed, it opens on the business day's.
+    path: 'holidays',
+    canActivate: [hrTabGuard('Holidays')],
+    loadComponent: () => import('./features/hr/holidays-page').then((m) => m.HolidaysPage),
+  },
+  {
+    path: 'devices',
+    canActivate: [hrTabGuard('Devices')],
+    loadComponent: () => import('./features/hr/devices-page').then((m) => m.DevicesPage),
+  },
+  {
+    // Employee permissions (صلاحيات الموظفين): who holds which tab; a manager's.
+    path: 'permissions',
+    canActivate: [hrGiveGuard],
+    loadComponent: () => import('./features/hr/permissions-page').then((m) => m.PermissionsPage),
+  },
+];
 
 export const routes: Routes = [
   // The employee portal: its own sign-in and the employee's own page, outside the till's shell, so
   // none of the till's navigation is there; the employee's token reaches /api/portal alone.
   {
     path: 'portal',
+    pathMatch: 'full',
     canActivate: [portalSignedOutGuard],
     loadComponent: () => import('./features/portal/portal-login-page').then((m) => m.PortalLoginPage),
   },
@@ -17,6 +93,16 @@ export const routes: Routes = [
     path: 'my-profile',
     canActivate: [portalGuard],
     loadComponent: () => import('./features/portal/my-profile-page').then((m) => m.MyProfilePage),
+  },
+  {
+    // The HR tabs a manager gave an employee, in the portal: the till's own screens, only theirs,
+    // and nothing else of the till around them. /hr is this only while no one of the till is
+    // signed in here; on the till it is its own section, below.
+    path: 'hr',
+    canMatch: [portalHrMatch],
+    canActivate: [portalGuard, hrGuard],
+    loadComponent: () => import('./features/portal/portal-hr-frame').then((m) => m.PortalHrFrame),
+    children: [{ path: '', loadComponent: () => import('./features/hr/hr-shell').then((m) => m.HrShell), children: hrChildren }],
   },
   {
     path: 'sign-in',
@@ -273,64 +359,12 @@ export const routes: Routes = [
         ],
       },
       {
-        // HR & Payroll (الموارد البشرية والرواتب): employees, their attendance and their pay.
+        // HR & Payroll (الموارد البشرية والرواتب): employees, their attendance and their pay; each
+        // tab for whoever holds it.
         path: 'hr',
-        canActivate: [permissionGuard(Permissions.HrView)],
+        canActivate: [hrGuard],
         loadComponent: () => import('./features/hr/hr-shell').then((m) => m.HrShell),
-        children: [
-          { path: '', pathMatch: 'full', redirectTo: 'now' },
-          {
-            // Who is in now, live from the attendance device.
-            path: 'now',
-            loadComponent: () => import('./features/hr/now-page').then((m) => m.NowPage),
-          },
-          {
-            path: 'employees',
-            loadComponent: () => import('./features/hr/employees-page').then((m) => m.EmployeesPage),
-          },
-          {
-            // An employee's profile: their details, ID card and the month's payslip.
-            path: 'employees/:employeeId',
-            loadComponent: () => import('./features/hr/employee-profile-page').then((m) => m.EmployeeProfilePage),
-          },
-          {
-            path: 'departments',
-            loadComponent: () => import('./features/hr/departments-page').then((m) => m.DepartmentsPage),
-          },
-          {
-            // ?date=, or ?employee=&month= for one employee's month.
-            path: 'attendance',
-            loadComponent: () => import('./features/hr/attendance-page').then((m) => m.AttendancePage),
-          },
-          {
-            // ?month= its first day.
-            path: 'payroll',
-            loadComponent: () => import('./features/hr/payroll-page').then((m) => m.PayrollPage),
-          },
-          {
-            path: 'payroll/:employeeId',
-            loadComponent: () => import('./features/hr/payslip-page').then((m) => m.PayslipPage),
-          },
-          {
-            // The month's advances, and those handed out with no one named, to give out.
-            path: 'advances',
-            loadComponent: () => import('./features/hr/hr-advances-page').then((m) => m.HrAdvancesPage),
-          },
-          {
-            // Suspended days for a manager's punch-out, and the month's administrative penalties.
-            path: 'corrections',
-            loadComponent: () => import('./features/hr/corrections-page').then((m) => m.CorrectionsPage),
-          },
-          {
-            // A year's public holidays: ?year= not needed, it opens on the business day's.
-            path: 'holidays',
-            loadComponent: () => import('./features/hr/holidays-page').then((m) => m.HolidaysPage),
-          },
-          {
-            path: 'devices',
-            loadComponent: () => import('./features/hr/devices-page').then((m) => m.DevicesPage),
-          },
-        ],
+        children: hrChildren,
       },
       {
         path: 'orders/:orderId',

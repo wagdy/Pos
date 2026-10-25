@@ -38,7 +38,7 @@ describe('prep items from a sheet of batch recipes', () => {
           provide: CostingApi,
           useValue: { importPrepItems, prepItems, approvalRequests: () => of({ pending: [], decided: [] }), recipeCategories: () => of([]) },
         },
-        { provide: AuthService, useValue: { can: () => true } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: () => true } },
         { provide: MatDialog, useValue: { open } },
         { provide: NotifyService, useValue: notify },
       ],

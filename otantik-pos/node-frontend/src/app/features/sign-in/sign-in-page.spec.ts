@@ -1,6 +1,7 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
-import { of } from 'rxjs';
+import { Router, provideRouter } from '@angular/router';
+import { of, throwError } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { SignInPage } from './sign-in-page';
 
@@ -11,7 +12,7 @@ describe('signing in from a keyboard', () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: AuthService, useValue: { signInOptions: () => of([{ id: 'omar', fullName: 'Omar Manager' }]), signIn, can: () => true } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, signInOptions: () => of([{ id: 'omar', fullName: 'Omar Manager' }]), signIn, can: () => true } },
       ],
     });
     const fixture = TestBed.createComponent(SignInPage);
@@ -35,5 +36,24 @@ describe('signing in from a keyboard', () => {
     key('Enter');
 
     expect(signIn).toHaveBeenCalledWith('omar', '1357');
+  });
+});
+
+describe('the till’s sign-in on the portal’s own port', () => {
+  it('opens the portal’s sign-in, as no one of the till signs in there', async () => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([]),
+        {
+          provide: AuthService,
+          useValue: { employeeActing: () => false, me: () => null, signInOptions: () => throwError(() => new HttpErrorResponse({ status: 404 })), can: () => true },
+        },
+      ],
+    });
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const fixture = TestBed.createComponent(SignInPage);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(navigate).toHaveBeenCalledWith(['/portal']);
   });
 });

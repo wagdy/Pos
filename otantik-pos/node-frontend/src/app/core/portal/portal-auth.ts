@@ -2,6 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { CanActivateFn, Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
+import { HrTab, hrTabsOf } from '../hr/hr-tabs';
 
 const SessionKey = 'otantik-portal.session';
 
@@ -31,6 +32,9 @@ export class PortalAuth {
 
   readonly session = this._session.asReadonly();
   readonly token = computed(() => this._session()?.token ?? null);
+  // The HR & Payroll tabs a manager gave them, as their token names them (hr_tabs): the API
+  // signs them out once those change, so the token's are theirs.
+  readonly hrTabs = computed<HrTab[]>(() => tabsInToken(this.token()));
   // Until it runs out: the API says so too, and a 401 signs them out (authInterceptor).
   readonly isSignedIn = computed(() => {
     const session = this._session();
@@ -59,6 +63,21 @@ export class PortalAuth {
       // Nothing was kept.
     }
     void this.router.navigate(['/portal'], { queryParams: reason ? { reason } : {} });
+  }
+}
+
+// The token's payload, base64url: its hr_tabs, one name or a list of them.
+function tabsInToken(token: string | null): HrTab[] {
+  if (!token) {
+    return [];
+  }
+  try {
+    const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const bytes = Uint8Array.from(atob(part.padEnd(part.length + ((4 - (part.length % 4)) % 4), '=')), (c) => c.charCodeAt(0));
+    const claim = (JSON.parse(new TextDecoder().decode(bytes)) as { hr_tabs?: unknown }).hr_tabs;
+    return hrTabsOf(Array.isArray(claim) ? claim : claim === undefined ? [] : [claim]);
+  } catch {
+    return [];
   }
 }
 

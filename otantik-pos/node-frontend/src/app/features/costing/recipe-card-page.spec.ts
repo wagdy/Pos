@@ -131,7 +131,7 @@ describe('a recipe', () => {
           },
         },
         { provide: MatDialog, useValue: { open } },
-        { provide: AuthService, useValue: { can } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can } },
         { provide: NotifyService, useValue: notify },
       ],
     });

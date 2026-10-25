@@ -1,5 +1,6 @@
 using Otantik.BuildingBlocks;
 using OtantikPos.Hr.Domain;
+using OtantikPos.Hr.Domain.Access;
 using OtantikPos.Hr.Domain.Attendance;
 using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
@@ -28,6 +29,7 @@ public sealed class HrStore
     public AllocationStore Allocations { get; } = new();
     public HrAdvanceStore HrAdvances { get; } = new();
     public AssetCategoryStore AssetCategories { get; } = new();
+    public StaffHrAccessStore StaffHrAccess { get; } = new();
     public AssetItemStore Assets { get; } = new();
     public AssetTransactionStore AssetVouchers { get; } = new();
     public BreakageStore Breakage { get; } = new();
@@ -265,6 +267,15 @@ public sealed class HrAdvanceStore : ListStore<HrAdvance>, IHrAdvanceRepository
 
     public Task<IReadOnlyList<HrAdvance>> GetPendingAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<HrAdvance>>(Items.Where(a => a.IsPending && !a.IsVoided).ToList());
+}
+
+public sealed class StaffHrAccessStore : ListStore<StaffHrAccess>, IStaffHrAccessRepository
+{
+    public Task<StaffHrAccess?> GetByStaffIdAsync(string staffId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Items.SingleOrDefault(a => a.StaffId == staffId));
+
+    public Task<IReadOnlyList<StaffHrAccess>> GetAllAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<StaffHrAccess>>(Items.ToList());
 }
 
 public sealed class AssetCategoryStore : ListStore<AssetCategory>, IAssetCategoryRepository

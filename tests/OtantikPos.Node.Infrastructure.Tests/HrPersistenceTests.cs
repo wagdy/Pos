@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Otantik.BuildingBlocks;
+using OtantikPos.Hr.Domain.Access;
 using OtantikPos.Hr.Domain.Attendance;
 using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
@@ -254,6 +255,39 @@ public class HrPersistenceTests
             INSERT INTO hr."AssetTransactions" ("Id", "AssetItemId", "Type", "Date", "Quantity", "RecordedBy", "RecordedAtUtc")
             VALUES (gen_random_uuid(), {plates.Id}, 'CheckOut', '2026-10-26', 1, 'Omar', now())
             """)));
+    }
+
+    [Fact]
+    public async Task HR_tabs_are_kept_by_name_and_an_accountant_has_one_row()
+    {
+        await using var node = await TestNode.StartAsync();
+        var supervisor = new Employee(Guid.NewGuid(), "Hassan", "Supervisor", 9_000, new TimeOnly(10, 0), WeekDays.Friday, new DateOnly(2026, 1, 1));
+        var cook = new Employee(Guid.NewGuid(), "Mona", "Cook", 5_400, new TimeOnly(10, 0), WeekDays.Friday, new DateOnly(2026, 1, 1));
+        supervisor.SetHrTabs(HrTabs.Now | HrTabs.Attendance);
+        await node.Db(async db =>
+        {
+            db.Employees.AddRange(supervisor, cook);
+            db.StaffHrAccess.Add(new StaffHrAccess("staff-accountant", HrTabs.Payroll | HrTabs.Advances, "Omar"));
+            return await db.SaveChangesAsync();
+        });
+
+        await node.Db(async db =>
+        {
+            Assert.Equal(HrTabs.Now | HrTabs.Attendance, (await db.Employees.SingleAsync(e => e.Id == supervisor.Id)).HrTabs);
+            Assert.Equal(HrTabs.None, (await db.Employees.SingleAsync(e => e.Id == cook.Id)).HrTabs);
+            var mona = await db.StaffHrAccess.SingleAsync(a => a.StaffId == "staff-accountant");
+            Assert.Equal((HrTabs.Payroll | HrTabs.Advances, "Omar"), (mona.Tabs, mona.SetBy));
+            // As they are written: by name.
+            Assert.Equal(["Now, Attendance"], await db.Database.SqlQuery<string>($"SELECT \"HrTabs\" AS \"Value\" FROM hr.\"Employees\" WHERE \"Id\" = {supervisor.Id}").ToListAsync());
+            return 0;
+        });
+
+        // One row to an account.
+        await Assert.ThrowsAsync<ConflictException>(() => node.Db(async db =>
+        {
+            db.StaffHrAccess.Add(new StaffHrAccess("staff-accountant", HrTabs.Now, "Sara"));
+            return await db.SaveChangesAsync();
+        }));
     }
 
     [Fact]

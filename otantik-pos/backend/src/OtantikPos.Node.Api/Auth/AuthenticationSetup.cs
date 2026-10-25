@@ -24,6 +24,9 @@ internal static class AuthenticationSetup
         services.AddSingleton<TokenService>();
         services.AddHttpContextAccessor();
         services.AddScoped<ICurrentUser, CurrentUser>();
+        services.AddScoped<HrCaller>();
+        services.AddScoped<IAuthorizationHandler, HrTabHandler>();
+        services.AddSingleton<IAuthorizationPolicyProvider, HrTabPolicyProvider>();
 
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(jwt =>
@@ -61,8 +64,9 @@ internal static class AuthenticationSetup
                     OnTokenValidated = async context =>
                     {
                         var principal = context.Principal!;
-                        // An employee's portal token: still employed, with the PIN it was signed
-                        // in with. A new PIN, none, or their leaving signs them out.
+                        // An employee's portal token: still employed, with the PIN and the HR tabs
+                        // it was signed in with. A new PIN, none, other tabs, or their leaving signs
+                        // them out, so the tabs the token names are always theirs.
                         if (PortalClaims.IsEmployee(principal))
                         {
                             var employee = PortalClaims.EmployeeIdOf(principal) is { } employeeId
@@ -70,8 +74,9 @@ internal static class AuthenticationSetup
                                     .GetByIdAsync(employeeId, context.HttpContext.RequestAborted)
                                 : null;
                             // To the microsecond, as the database keeps it.
-                            if (employee is not { IsActive: true, PinSetAtUtc: { } pinSetAt } || pinSetAt.Ticks / 10 != PortalClaims.PinSetAtOf(principal) / 10)
-                                context.Fail("Your PIN has changed, or you have left. Sign in again.");
+                            if (employee is not { IsActive: true, PinSetAtUtc: { } pinSetAt } || pinSetAt.Ticks / 10 != PortalClaims.PinSetAtOf(principal) / 10
+                                || employee.HrTabs != PortalClaims.HrTabsOf(principal))
+                                context.Fail("Your PIN or your HR tabs have changed, or you have left. Sign in again.");
                             return;
                         }
 

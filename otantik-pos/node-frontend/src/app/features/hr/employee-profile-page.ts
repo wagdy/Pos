@@ -16,6 +16,7 @@ import { ApprovalResult, isRequested } from '../../core/costing/costing.api';
 import { CustodyApi, CustodyItem } from '../../core/custody/custody.api';
 import { errorMessage } from '../../core/http/error-message';
 import { Department, Employee, HrApi, weekDays } from '../../core/hr/hr.api';
+import { HrAccess } from '../../core/hr/hr-access';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals, pendingLabel } from '../costing/approvals';
@@ -315,7 +316,9 @@ export class PinDialog {
               } @empty {
                 <p class="muted">Nothing in their custody.</p>
               }
-              <a mat-button routerLink="/custody/assets"><mat-icon>inventory_2</mat-icon> Custody &amp; Assets</a>
+              @if (!auth.employeeActing()) {
+                <a mat-button routerLink="/custody/assets"><mat-icon>inventory_2</mat-icon> Custody &amp; Assets</a>
+              }
             </div>
 
             <div class="card pin">
@@ -342,16 +345,18 @@ export class PinDialog {
           </div>
         </section>
 
-        <section class="payslip-part" aria-label="Payslip">
-          <div class="pay-head no-print">
-            <h3>Payslip <span class="inline-ar">قسيمة الراتب</span></h3>
-            <span class="spacer"></span>
-            <button mat-icon-button (click)="moveMonth(-1)" aria-label="The month before"><mat-icon>chevron_left</mat-icon></button>
-            <span class="month">{{ month() | date: 'MMMM y' }}</span>
-            <button mat-icon-button (click)="moveMonth(1)" [disabled]="month() >= thisMonth()" aria-label="The month after"><mat-icon>chevron_right</mat-icon></button>
-          </div>
-          <app-payslip-page [employeeId]="e.id" [month]="month()" [embedded]="true" />
-        </section>
+        @if (access.has('Payroll')) {
+          <section class="payslip-part" aria-label="Payslip">
+            <div class="pay-head no-print">
+              <h3>Payslip <span class="inline-ar">قسيمة الراتب</span></h3>
+              <span class="spacer"></span>
+              <button mat-icon-button (click)="moveMonth(-1)" aria-label="The month before"><mat-icon>chevron_left</mat-icon></button>
+              <span class="month">{{ month() | date: 'MMMM y' }}</span>
+              <button mat-icon-button (click)="moveMonth(1)" [disabled]="month() >= thisMonth()" aria-label="The month after"><mat-icon>chevron_right</mat-icon></button>
+            </div>
+            <app-payslip-page [employeeId]="e.id" [month]="month()" [embedded]="true" />
+          </section>
+        }
       </div>
     }
   `,
@@ -524,7 +529,8 @@ export class PinDialog {
 })
 export class EmployeeProfilePage {
   private readonly api = inject(HrApi);
-  private readonly auth = inject(AuthService);
+  protected readonly access = inject(HrAccess);
+  protected readonly auth = inject(AuthService);
   private readonly dialog = inject(MatDialog);
   private readonly notify = inject(NotifyService);
   private readonly businessDay = inject(BusinessDay);

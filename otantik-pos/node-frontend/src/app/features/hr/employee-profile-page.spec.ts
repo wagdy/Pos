@@ -81,7 +81,7 @@ describe('an employee’s profile', () => {
           provide: CustodyApi,
           useValue: { employeeCustody },
         },
-        { provide: AuthService, useValue: { can: (p: string) => manage || p !== Permissions.HrManage } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, can: (p: string) => manage || p !== Permissions.HrManage } },
         { provide: Approvals, useValue: approvals },
         { provide: NotifyService, useValue: notify },
         { provide: MatDialog, useValue: { open } },

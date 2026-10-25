@@ -11,6 +11,7 @@ import { PortalApi, PortalProfile } from '../../core/portal/portal.api';
 import { PayrollSlip } from '../../core/hr/hr.api';
 import { MyProfilePage } from './my-profile-page';
 import { PortalLoginPage } from './portal-login-page';
+import { PortalHrFrame } from './portal-hr-frame';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
 // Element by element: the template leaves no space between them.
@@ -29,7 +30,7 @@ describe('the portal’s sign-in, kept apart from the till’s', () => {
         provideHttpClient(withInterceptors([authInterceptor])),
         provideHttpClientTesting(),
         provideRouter([]),
-        { provide: AuthService, useValue: { token: signal('staff-token'), isSignedIn: () => true, signOut: staffSignOut } },
+        { provide: AuthService, useValue: { employeeActing: () => false, me: () => null, token: signal('staff-token'), isSignedIn: () => true, signOut: staffSignOut } },
       ],
     });
     return { http: TestBed.inject(HttpClient), backend: TestBed.inject(HttpTestingController), portal: TestBed.inject(PortalAuth) };
@@ -148,6 +149,7 @@ describe('an employee’s own profile in the portal', () => {
   const custody = vi.fn();
   const idPhoto = vi.fn();
   const signOut = vi.fn();
+  const hrTabs = signal<string[]>([]);
 
   const profile: PortalProfile = {
     id: 'hassan', name: 'Hassan Mahmoud Ali', jobTitle: 'Chef', department: 'Kitchen', employmentType: 'Monthly', hiredOn: '2026-01-05',
@@ -172,7 +174,7 @@ describe('an employee’s own profile in the portal', () => {
       providers: [
         provideRouter([]),
         { provide: PortalApi, useValue: { me, months, payslip, custody, idPhoto } },
-        { provide: PortalAuth, useValue: { session: signal({ name: 'Hassan Mahmoud Ali' }), signOut } },
+        { provide: PortalAuth, useValue: { session: signal({ name: 'Hassan Mahmoud Ali' }), hrTabs, signOut } },
       ],
     });
     const fixture = TestBed.createComponent(MyProfilePage);
@@ -197,6 +199,7 @@ describe('an employee’s own profile in the portal', () => {
       { name: 'Knife set', category: null, quantity: 1 },
     ]));
     signOut.mockReset();
+    hrTabs.set([]);
   });
 
   it('shows their details, this month’s draft payslip and their custody, with nothing of the till', async () => {
@@ -248,6 +251,33 @@ describe('an employee’s own profile in the portal', () => {
 
   it('signs out', async () => {
     const { el } = await render();
+    (el.querySelector('.bar button') as HTMLElement).click();
+    expect(signOut).toHaveBeenCalled();
+  });
+
+  it('opens the HR tabs a manager gave them, when they have some', async () => {
+    const { el, refresh } = await render();
+    expect(el.querySelector('.bar a.hr-link')).toBeNull();
+    hrTabs.set(['Now', 'Attendance']);
+    await refresh();
+    expect(el.querySelector('.bar a.hr-link')!.getAttribute('href')).toBe('/hr');
+  });
+});
+
+describe('the portal around an employee’s HR tabs', () => {
+  it('has the portal’s bar, back to their profile, says their changes wait for a manager, and signs out', async () => {
+    const signOut = vi.fn();
+    TestBed.configureTestingModule({
+      providers: [provideRouter([]), { provide: PortalAuth, useValue: { session: signal({ name: 'Hassan' }), signOut } }],
+    });
+    const fixture = TestBed.createComponent(PortalHrFrame);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const el = fixture.nativeElement as HTMLElement;
+    expect([...el.querySelectorAll('.bar nav a')].map((a) => a.getAttribute('href'))).toEqual(['/my-profile', '/hr']);
+    expect(text(el.querySelector('.who')!)).toBe('Hassan');
+    expect(text(el.querySelector('.note')!)).toContain('goes to a manager to approve');
+    expect(el.querySelector('app-shell, mat-toolbar')).toBeNull();
     (el.querySelector('.bar button') as HTMLElement).click();
     expect(signOut).toHaveBeenCalled();
   });

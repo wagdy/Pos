@@ -2,6 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { ApprovalResult } from '../costing/costing.api';
+import { HrTab } from './hr-tabs';
 
 // HR & Payroll (الموارد البشرية والرواتب), as the till's API serves it (/api/hr). Times of day are
 // the restaurant's wall clock, sent and read without a zone: '2026-10-12T10:00:00', '10:00:00'.
@@ -646,9 +647,55 @@ export function shamElNessim(year: number): string {
   return monday.toISOString().slice(0, 10);
 }
 
+// An employee's HR tabs; hasMobile and hasPin say whether they can sign in to the portal to use them.
+export interface EmployeeHrAccess {
+  id: string;
+  name: string;
+  jobTitle: string;
+  department: string;
+  hasMobile: boolean;
+  hasPin: boolean;
+  tabs: HrTab[];
+}
+
+// An accountant's: every tab until a manager ticks theirs (restricted).
+export interface StaffHrAccess {
+  id: string;
+  name: string;
+  role: string;
+  restricted: boolean;
+  tabs: HrTab[];
+  setBy: string | null;
+  setAtUtc: string | null;
+}
+
+export interface HrAccessList {
+  employees: EmployeeHrAccess[];
+  staff: StaffHrAccess[];
+}
+
 @Injectable({ providedIn: 'root' })
 export class HrApi {
   private readonly http = inject(HttpClient);
+
+  // The till's business day, for whoever works a tab (in the portal too).
+  today(): Observable<{ today: string }> {
+    return this.http.get<{ today: string }>('/api/hr/today');
+  }
+
+  // ---- Employee permissions (صلاحيات الموظفين): a manager's ----
+
+  access(): Observable<HrAccessList> {
+    return this.http.get<HrAccessList>('/api/hr/access');
+  }
+
+  setEmployeeTabs(employeeId: string, tabs: readonly HrTab[]): Observable<EmployeeHrAccess> {
+    return this.http.put<EmployeeHrAccess>(`/api/hr/access/employees/${employeeId}`, { tabs });
+  }
+
+  setStaffTabs(staffId: string, tabs: readonly HrTab[]): Observable<StaffHrAccess> {
+    return this.http.put<StaffHrAccess>(`/api/hr/access/staff/${encodeURIComponent(staffId)}`, { tabs });
+  }
 
   employees(): Observable<Employee[]> {
     return this.http.get<Employee[]>('/api/hr/employees');

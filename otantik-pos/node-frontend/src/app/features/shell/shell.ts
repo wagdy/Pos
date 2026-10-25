@@ -12,6 +12,7 @@ import { Order, PrinterProblem } from '../../core/api/models';
 import { AuthService } from '../../core/auth/auth.service';
 import { CanDirective } from '../../core/auth/can.directive';
 import { MoneyPermissions, Permissions } from '../../core/auth/permissions';
+import { HrAccess } from '../../core/hr/hr-access';
 import { ConnectivityService } from '../../core/connectivity/connectivity.service';
 import { MenuService } from '../../core/menu/menu.service';
 import { orderLabel } from '../../core/orders/order-rules';
@@ -39,6 +40,8 @@ import { NotifyService } from '../../core/ui/notify.service';
 })
 export class Shell implements OnInit, OnDestroy {
   protected readonly auth = inject(AuthService);
+  // HR & Payroll for whoever holds a tab of it.
+  protected readonly hr = inject(HrAccess);
   protected readonly connectivity = inject(ConnectivityService);
   protected readonly Permissions = Permissions;
   private readonly hub = inject(TillHubService);

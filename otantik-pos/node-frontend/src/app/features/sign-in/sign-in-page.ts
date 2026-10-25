@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { Component, OnInit, computed, inject, input, signal } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -46,6 +47,12 @@ export class SignInPage implements OnInit {
     try {
       this.staff.set(await firstValueFrom(this.auth.signInOptions()));
     } catch (error) {
+      // Not found: this is the employee portal's own port (on the Wi-Fi), where no one of the
+      // till signs in. Its sign-in, then.
+      if (error instanceof HttpErrorResponse && error.status === 404) {
+        void this.router.navigate(['/portal']);
+        return;
+      }
       this.loadError.set(errorMessage(error, 'The staff list could not be loaded.'));
     }
   }
