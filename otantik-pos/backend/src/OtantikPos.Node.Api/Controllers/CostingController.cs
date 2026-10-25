@@ -14,7 +14,8 @@ namespace OtantikPos.Node.Api.Controllers;
 [Route("api/costing")]
 [Authorize(Policy = Permissions.CostingView)]
 public sealed class CostingController(
-    CostingService costing, VarianceService variance, KpiService kpis, BreakEvenService breakEven, PurchaseSpendingService spending) : ControllerBase
+    CostingService costing, VarianceService variance, KpiService kpis, BreakEvenService breakEven, PurchaseSpendingService spending,
+    MediatR.ISender sender, OtantikPos.Ordering.Application.Ports.IBusinessCalendar calendar) : ControllerBase
 {
     // Raw materials with their costs: what each costs per purchase unit, the last price paid, and
     // the stock's value.
@@ -78,6 +79,16 @@ public sealed class CostingController(
     {
         var to = DateTime.UtcNow;
         return variance.GetSpoilageAsync(to.AddDays(-Math.Clamp(days, 1, 366)), to.AddMinutes(1), cancellationToken);
+    }
+
+    // Breakage (كسر) in the last so many business days: consumable assets checked out of custody as
+    // broken, at their cost, beside the spoilage. Voided ones too, marked.
+    [HttpGet("breakage")]
+    public Task<IReadOnlyList<OtantikPos.Inventory.Application.Custody.BreakageEntryDto>> GetBreakage(
+        [FromQuery] int days = 30, CancellationToken cancellationToken = default)
+    {
+        var today = calendar.BusinessDateOf(DateTime.UtcNow);
+        return sender.Send(new OtantikPos.Inventory.Application.Custody.GetBreakageQuery(today.AddDays(-Math.Clamp(days, 1, 366) + 1), today), cancellationToken);
     }
 
     // The template's financial KPIs for a business month, with the month as an income statement

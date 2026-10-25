@@ -8,6 +8,10 @@ namespace OtantikPos.Inventory.Domain.Expenses;
 // for the profit and loss. Kept apart from the raw materials so it cannot reach those screens.
 //
 // One on an invoice is never removed, only archived, as a supplier is. Its id is made by the till.
+//
+// Marked an asset (AssetCategoryId: plates, a fryer), each posted invoice line of it is also an
+// asset in Custody & Assets, in the store, of that category: its quantity at the line's cost a
+// piece. Not stock either way.
 public sealed class ExpenseItem : AggregateRoot
 {
     private ExpenseItem() { }
@@ -30,6 +34,10 @@ public sealed class ExpenseItem : AggregateRoot
     // What a line of it is usually counted in (bottle, visit, month), for the invoice to start
     // from. None: a line is just its amount.
     public string? Unit { get; private set; }
+
+    // The custody category its purchases are assets of; none for a plain expense.
+    public Guid? AssetCategoryId { get; private set; }
+    public bool IsAsset => AssetCategoryId is not null;
 
     public bool IsArchived { get; private set; }
     public DateTime CreatedAtUtc { get; private set; }
@@ -58,6 +66,10 @@ public sealed class ExpenseItem : AggregateRoot
             throw new DomainException("Choose the expense's category.");
         CategoryId = categoryId;
     }
+
+    // From the invoices posted after it: those posted before stay as they were.
+    public void MarkAsAsset(Guid? assetCategoryId) =>
+        AssetCategoryId = assetCategoryId == Guid.Empty ? throw new DomainException("Choose the asset category, or none.") : assetCategoryId;
 
     // Off the list new invoices pick from; on the invoices it is already on.
     public void Archive()

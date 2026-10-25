@@ -75,6 +75,9 @@ export interface Employee {
   mobileNumber: string | null;
   // Their ID card's photo or scan, when one is uploaded: what it is, not the file.
   idPhoto: EmployeeIdPhoto | null;
+  // Whether they have a portal PIN, and since when; never the PIN.
+  hasPin?: boolean;
+  pinSetAtUtc?: string | null;
 }
 
 export interface EmployeeIdPhoto {
@@ -672,6 +675,15 @@ export class HrApi {
     return this.http.delete<Employee>(`/api/hr/employees/${id}/id-photo`);
   }
 
+  // Their portal PIN, a manager's: 4 to 6 digits. Setting one signs them out of the portal.
+  setPin(id: string, pin: string): Observable<Employee> {
+    return this.http.put<Employee>(`/api/hr/employees/${id}/pin`, { pin });
+  }
+
+  removePin(id: string): Observable<Employee> {
+    return this.http.delete<Employee>(`/api/hr/employees/${id}/pin`);
+  }
+
   departments(): Observable<Department[]> {
     return this.http.get<Department[]>('/api/hr/departments');
   }
@@ -824,8 +836,8 @@ export class HrApi {
 
   // Where a device reaches this till: the device's own port when one is set (the till's screens
   // then stay on its machine), and the machine's addresses on its networks.
-  deviceConnection(): Observable<{ devicePort: number | null; addresses: string[] }> {
-    return this.http.get<{ devicePort: number | null; addresses: string[] }>('/api/hr/devices/connection');
+  deviceConnection(): Observable<{ devicePort: number | null; portalPort?: number | null; addresses: string[] }> {
+    return this.http.get<{ devicePort: number | null; portalPort?: number | null; addresses: string[] }>('/api/hr/devices/connection');
   }
 
   devices(): Observable<AttendanceDevice[]> {

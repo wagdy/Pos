@@ -1,9 +1,11 @@
 using Otantik.BuildingBlocks;
 using OtantikPos.Hr.Domain;
 using OtantikPos.Hr.Domain.Attendance;
+using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
 using OtantikPos.Hr.Domain.Payroll;
 using OtantikPos.Inventory.Application.Hr;
+using OtantikPos.Inventory.Domain.Waste;
 
 namespace OtantikPos.Application.Tests;
 
@@ -25,6 +27,11 @@ public sealed class HrStore
     public SlipStore Slips { get; } = new();
     public AllocationStore Allocations { get; } = new();
     public HrAdvanceStore HrAdvances { get; } = new();
+    public AssetCategoryStore AssetCategories { get; } = new();
+    public AssetItemStore Assets { get; } = new();
+    public AssetTransactionStore AssetVouchers { get; } = new();
+    public BreakageStore Breakage { get; } = new();
+    public PlainPinHasher Pins { get; } = new();
     public AttendanceSettingsStore Settings { get; } = new();
     public AttendanceNotifications Notifications { get; } = new();
     public DeviceLink Link { get; } = new();
@@ -58,6 +65,9 @@ public sealed class EmployeeStore : ListStore<Employee>, IEmployeeRepository, IE
 
     public Task<Employee?> GetByNationalIdAsync(string nationalId, CancellationToken cancellationToken = default) =>
         Task.FromResult(Items.FirstOrDefault(e => e.NationalId == nationalId));
+
+    public Task<Employee?> GetByMobileNumberAsync(string mobileNumber, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Items.FirstOrDefault(e => e.MobileNumber == mobileNumber));
 
     public Task<IReadOnlyList<Employee>> GetAllAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<Employee>>(Items.OrderBy(e => e.Name).ToList());
@@ -255,4 +265,63 @@ public sealed class HrAdvanceStore : ListStore<HrAdvance>, IHrAdvanceRepository
 
     public Task<IReadOnlyList<HrAdvance>> GetPendingAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<HrAdvance>>(Items.Where(a => a.IsPending && !a.IsVoided).ToList());
+}
+
+public sealed class AssetCategoryStore : ListStore<AssetCategory>, IAssetCategoryRepository
+{
+    public Task<IReadOnlyList<AssetCategory>> GetAllAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<AssetCategory>>(Items.OrderBy(c => c.Name).ToList());
+
+    public void Remove(AssetCategory category) => Items.Remove(category);
+}
+
+public sealed class AssetItemStore : ListStore<AssetItem>, IAssetItemRepository
+{
+    public Task<IReadOnlyList<AssetItem>> GetAllAsync(AssetOrigin? origin = null, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<AssetItem>>(Items.Where(a => origin is null || a.Origin == origin).OrderBy(a => a.Name).ToList());
+
+    public Task<IReadOnlyList<AssetItem>> GetInCustodyOfAsync(Guid employeeId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<AssetItem>>(Items.Where(a => a.EmployeeId == employeeId && a.Status == AssetStatus.InCustody).ToList());
+
+    public Task<bool> AnyInCategoryAsync(Guid categoryId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Items.Any(a => a.CategoryId == categoryId));
+
+    public Task<AssetItem?> GetBySourceLineAsync(Guid invoiceLineId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Items.SingleOrDefault(a => a.SourceInvoiceLineId == invoiceLineId));
+
+    public Task<IReadOnlyList<AssetItem>> GetFromInvoiceAsync(Guid invoiceId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<AssetItem>>(Items.Where(a => a.SourceInvoiceId == invoiceId).ToList());
+
+    public void Remove(AssetItem asset) => Items.Remove(asset);
+}
+
+public sealed class AssetTransactionStore : ListStore<AssetTransaction>, IAssetTransactionRepository
+{
+    public Task<IReadOnlyList<AssetTransaction>> GetForAssetAsync(Guid assetItemId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<AssetTransaction>>(Items.Where(t => t.AssetItemId == assetItemId).OrderByDescending(t => t.Date).ThenByDescending(t => t.RecordedAtUtc).ToList());
+
+    public Task<IReadOnlyList<AssetTransaction>> GetBetweenAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<AssetTransaction>>(Items.Where(t => t.Date >= from && t.Date <= to).OrderByDescending(t => t.Date).ThenByDescending(t => t.RecordedAtUtc).ToList());
+
+    public Task<bool> AnyForAssetAsync(Guid assetItemId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Items.Any(t => t.AssetItemId == assetItemId));
+}
+
+public sealed class BreakageStore : ListStore<BreakageEntry>, IBreakageEntryRepository
+{
+    public Task<IReadOnlyList<BreakageEntry>> GetBetweenAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<BreakageEntry>>(Items.Where(b => b.BusinessDate >= from && b.BusinessDate <= to).ToList());
+
+    public Task<BreakageEntry?> GetForTransactionAsync(Guid assetTransactionId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Items.SingleOrDefault(b => b.AssetTransactionId == assetTransactionId));
+}
+
+// A PIN "hashed" as itself, reversed: enough for the use cases, never what the till keeps.
+public sealed class PlainPinHasher : IPinHasher
+{
+    public string NobodysHash => "nobody";
+
+    public string Hash(string pin) => new(pin.Reverse().ToArray());
+
+    public PinCheck Verify(string hash, string pin) => hash == Hash(pin) ? PinCheck.Right : PinCheck.Wrong;
 }

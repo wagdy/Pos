@@ -38,13 +38,17 @@ public sealed record EmployeeDto(
     string? NationalId,
     string? MobileNumber,
     // Their ID card's photo or scan, when one is uploaded: what it is, not its bytes.
-    EmployeeIdPhotoDto? IdPhoto)
+    EmployeeIdPhotoDto? IdPhoto,
+    // Whether they have a portal PIN, and since when; never the PIN.
+    bool HasPin = false,
+    DateTime? PinSetAtUtc = null)
 {
     public static EmployeeDto From(Employee e) => new(
         e.Id, e.Name, e.JobTitle, e.JobRoleId, e.EmploymentType, e.MonthlySalary, e.DailyWage, e.DepartmentId, e.ShiftStartsAt, e.ShiftStartsAt?.Add(Employee.ShiftLength), Employees.DaysOf(e.DaysOff),
         e.DeviceUserId, e.HiredOn, e.LeftOn, e.IsActive, Math.Round(e.DailyRate, 2, MidpointRounding.AwayFromZero),
         Math.Round(e.HourlyRate, 2, MidpointRounding.AwayFromZero), e.NationalId, e.MobileNumber,
-        e.HasIdPhoto ? new EmployeeIdPhotoDto(e.IdPhotoFileName!, e.IdPhotoContentType!, e.IdPhotoBytes ?? 0, e.IdPhotoUploadedAtUtc!.Value, e.IdPhotoUploadedBy ?? string.Empty) : null);
+        e.HasIdPhoto ? new EmployeeIdPhotoDto(e.IdPhotoFileName!, e.IdPhotoContentType!, e.IdPhotoBytes ?? 0, e.IdPhotoUploadedAtUtc!.Value, e.IdPhotoUploadedBy ?? string.Empty) : null,
+        e.HasPin, e.PinSetAtUtc);
 }
 
 public sealed record EmployeeIdPhotoDto(string FileName, string ContentType, int Bytes, DateTime UploadedAtUtc, string UploadedBy);
@@ -115,6 +119,9 @@ internal sealed class EmployeeWriter(
                 throw new DomainException($"{holder.Name} has number {number} on the attendance device already.");
             if (draft.NationalId is { } card && await employees.GetByNationalIdAsync(card, cancellationToken) is { } carded && carded.Id != employeeId)
                 throw new DomainException($"{carded.Name} has national ID {card} already.");
+            // The portal signs in by it: one employee to a mobile number.
+            if (draft.MobileNumber is { } mobile && await employees.GetByMobileNumberAsync(mobile, cancellationToken) is { } reached && reached.Id != employeeId)
+                throw new DomainException($"{reached.Name} has mobile number {mobile} already.");
             if (existing is { LeftOn: { } left } && details.HiredOn > left)
                 throw new DomainException("They have left: they start again by coming back, not by a later start.");
             return;

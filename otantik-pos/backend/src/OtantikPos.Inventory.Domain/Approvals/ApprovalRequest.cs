@@ -40,6 +40,9 @@ public enum ApprovalModule
 
     // HR: an advance paid outside the till, recorded in HR only.
     Advance = 11,
+
+    // Custody & Assets: an asset added or changed, or a custody voucher (in or out).
+    Custody = 12,
 }
 
 public enum ApprovalAction
@@ -99,7 +102,7 @@ public sealed class ApprovalRequest : AggregateRoot
             throw new DomainException("Say what is to be done.");
         if (action != ApprovalAction.Delete
             && module is not (ApprovalModule.PrepItem or ApprovalModule.ProductionOrder or ApprovalModule.Treasury or ApprovalModule.PurchaseInvoice
-                or ApprovalModule.RawMaterial or ApprovalModule.Employee or ApprovalModule.Advance))
+                or ApprovalModule.RawMaterial or ApprovalModule.Employee or ApprovalModule.Advance or ApprovalModule.Custody))
             throw new DomainException(
                 "Only prep items, production orders, safe entries, invoices, raw materials, employees and advances are added or changed through an approval.");
         if (action == ApprovalAction.Update && module == ApprovalModule.Treasury)

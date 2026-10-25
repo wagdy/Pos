@@ -3,8 +3,21 @@ import { inject } from '@angular/core';
 import { AuthService } from './core/auth/auth.service';
 import { homePath, ordersGuard, permissionGuard, signedInGuard, signedOutGuard } from './core/auth/guards';
 import { Permissions } from './core/auth/permissions';
+import { portalGuard, portalSignedOutGuard } from './core/portal/portal-auth';
 
 export const routes: Routes = [
+  // The employee portal: its own sign-in and the employee's own page, outside the till's shell, so
+  // none of the till's navigation is there; the employee's token reaches /api/portal alone.
+  {
+    path: 'portal',
+    canActivate: [portalSignedOutGuard],
+    loadComponent: () => import('./features/portal/portal-login-page').then((m) => m.PortalLoginPage),
+  },
+  {
+    path: 'my-profile',
+    canActivate: [portalGuard],
+    loadComponent: () => import('./features/portal/my-profile-page').then((m) => m.MyProfilePage),
+  },
   {
     path: 'sign-in',
     canActivate: [signedOutGuard],
@@ -235,6 +248,27 @@ export const routes: Routes = [
             path: 'approvals',
             canActivate: [permissionGuard(Permissions.ApprovalDecide)],
             loadComponent: () => import('./features/costing/approvals-page').then((m) => m.ApprovalsPage),
+          },
+        ],
+      },
+      {
+        // Custody & Assets: what the restaurant owns, and whose custody each thing is in.
+        path: 'custody',
+        canActivate: [permissionGuard(Permissions.HrView)],
+        loadComponent: () => import('./features/custody/custody-shell').then((m) => m.CustodyShell),
+        children: [
+          { path: '', pathMatch: 'full', redirectTo: 'assets' },
+          {
+            path: 'categories',
+            loadComponent: () => import('./features/custody/categories-page').then((m) => m.CategoriesPage),
+          },
+          {
+            path: 'assets',
+            loadComponent: () => import('./features/custody/assets-page').then((m) => m.AssetsPage),
+          },
+          {
+            path: 'vouchers',
+            loadComponent: () => import('./features/custody/vouchers-page').then((m) => m.VouchersPage),
           },
         ],
       },

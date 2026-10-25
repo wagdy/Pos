@@ -11,6 +11,7 @@ using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Inventory.Domain.Suppliers;
 using OtantikPos.Inventory.Domain.Treasury;
+using OtantikPos.Inventory.Domain.Waste;
 using OtantikPos.Node.Infrastructure.Common;
 
 namespace OtantikPos.Node.Infrastructure.Persistence;
@@ -420,4 +421,21 @@ internal sealed class RecordDescriptions(NodeDbContext db, RestaurantClock clock
     public DateOnly LocalDateOf(DateTime utc) => clock.LocalDateOf(utc);
 
     public DateTime LocalTimeOf(DateTime utc) => DateTime.SpecifyKind(clock.ToLocal(utc), DateTimeKind.Unspecified);
+}
+
+internal sealed class BreakageEntryRepository(NodeDbContext db) : IBreakageEntryRepository
+{
+    public Task<BreakageEntry?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.BreakageEntries.SingleOrDefaultAsync(b => b.Id == id, cancellationToken);
+
+    public void Add(BreakageEntry aggregate) => db.BreakageEntries.Add(aggregate);
+
+    public async Task<IReadOnlyList<BreakageEntry>> GetBetweenAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default) =>
+        await db.BreakageEntries.AsNoTracking()
+            .Where(b => b.BusinessDate >= from && b.BusinessDate <= to)
+            .OrderByDescending(b => b.BusinessDate).ThenByDescending(b => b.RecordedAtUtc)
+            .ToListAsync(cancellationToken);
+
+    public Task<BreakageEntry?> GetForTransactionAsync(Guid assetTransactionId, CancellationToken cancellationToken = default) =>
+        db.BreakageEntries.SingleOrDefaultAsync(b => b.AssetTransactionId == assetTransactionId, cancellationToken);
 }

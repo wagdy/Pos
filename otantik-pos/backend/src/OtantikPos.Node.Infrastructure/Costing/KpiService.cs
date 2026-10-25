@@ -64,7 +64,10 @@ public sealed record MonthStatement(
     // wages, added to the wages entered.
     decimal LoggedWages = 0,
     // Every overhead: wages, controllable, occupation, other fixed, interest and depreciation.
-    decimal TotalExpenses = 0);
+    decimal TotalExpenses = 0,
+    // Consumable assets broken in the month (Costing → Waste's breakage), at their cost. Said, not
+    // counted again: what they cost was counted when they were bought, as an expense.
+    decimal Breakage = 0);
 
 public sealed record MonthlyExpensesDto(
     decimal? WagesAndBenefits,
@@ -189,6 +192,9 @@ public sealed class KpiService(NodeDbContext db, RestaurantClock clock, CostingS
         var totalExpenses = (wages ?? 0) + (expenses?.OtherControllableCosts ?? 0) + (expenses?.OccupationCost ?? 0)
             + (expenses?.Interest ?? 0) + (expenses?.Depreciation ?? 0) + loggedControllable + loggedOccupation + loggedOtherFixed;
         decimal? netProfit = wages is not null ? grossProfit - totalExpenses : null;
+        var breakage = Money(await db.BreakageEntries.AsNoTracking()
+            .Where(b => b.BusinessDate >= theoretical.From && b.BusinessDate <= theoretical.To && b.VoidedAtUtc == null)
+            .SumAsync(b => b.Cost, cancellationToken));
 
         decimal? Share(decimal part, decimal whole) => whole > 0 ? Percent(part / whole) : null;
         var kpis = new List<Kpi>
@@ -231,7 +237,7 @@ public sealed class KpiService(NodeDbContext db, RestaurantClock clock, CostingS
                 Money(foodRecipe), Money(drinksRecipe), kitchenWaste, spoilage, countDifferences,
                 Money(costOfSales), Money(grossProfit),
                 expenses?.WagesAndBenefits, expenses?.OtherControllableCosts, expenses?.OccupationCost, expenses?.Interest, expenses?.Depreciation,
-                Money(netProfit), loggedControllable, loggedOccupation, loggedOtherFixed, logged, loggedWages, Money(totalExpenses)),
+                Money(netProfit), loggedControllable, loggedOccupation, loggedOtherFixed, logged, loggedWages, Money(totalExpenses), breakage),
             ToDto(expenses), kpis, items,
             withoutRecipe.Count, withoutRecipe.Sum(r => r.NetSales));
     }

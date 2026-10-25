@@ -25,11 +25,13 @@ public sealed record ExpenseItemDto(
     decimal PostedTotal,
     DateTime? LastPostedAtUtc,
     // In a raw materials category: filed there before the kinds were kept apart.
-    bool Misplaced = false)
+    bool Misplaced = false,
+    // Bought as an asset of this custody category: each posted line of it is one in Custody & Assets.
+    Guid? AssetCategoryId = null)
 {
     public static ExpenseItemDto From(ExpenseItem item, PurchaseCategory? category, ExpenseItemUse? use) => new(
         item.Id, item.Name, item.NameAr, item.CategoryId, category?.Name ?? PurchaseCategory.GeneralExpensesName, category?.NameAr, item.Unit,
-        item.IsArchived, use?.Invoices ?? 0, use?.PostedTotal ?? 0, use?.LastPostedAtUtc, category?.Kind == CategoryKind.RawMaterials);
+        item.IsArchived, use?.Invoices ?? 0, use?.PostedTotal ?? 0, use?.LastPostedAtUtc, category?.Kind == CategoryKind.RawMaterials, item.AssetCategoryId);
 }
 
 public enum ExpenseItemRemoval
@@ -96,6 +98,28 @@ internal sealed class SaveExpenseItemHandler(
         else
             item.Update(request.Name ?? string.Empty, category.Id, request.NameAr, request.Unit);
 
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return await categories.DtoAsync(invoices, item, cancellationToken);
+    }
+}
+
+// Bought as an asset of a custody category from the invoices posted after, or (none) a plain
+// expense again. Apart from the item's own form, which knows nothing of it.
+public sealed record MarkExpenseItemAsAssetCommand(Guid ExpenseItemId, Guid? AssetCategoryId) : IRequest<ExpenseItemDto>;
+
+internal sealed class MarkExpenseItemAsAssetHandler(
+    IExpenseItemRepository items,
+    OtantikPos.Hr.Domain.IAssetCategoryRepository assetCategories,
+    IPurchaseCategoryRepository categories,
+    IPurchaseInvoiceRepository invoices,
+    IUnitOfWork unitOfWork) : IRequestHandler<MarkExpenseItemAsAssetCommand, ExpenseItemDto>
+{
+    public async Task<ExpenseItemDto> Handle(MarkExpenseItemAsAssetCommand request, CancellationToken cancellationToken)
+    {
+        var item = await items.GetByIdAsync(request.ExpenseItemId, cancellationToken) ?? throw new NotFoundException(nameof(ExpenseItem), request.ExpenseItemId);
+        if (request.AssetCategoryId is { } id && await assetCategories.GetByIdAsync(id, cancellationToken) is null)
+            throw new DomainException("That asset category is not there any more: choose another.");
+        item.MarkAsAsset(request.AssetCategoryId);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return await categories.DtoAsync(invoices, item, cancellationToken);
     }

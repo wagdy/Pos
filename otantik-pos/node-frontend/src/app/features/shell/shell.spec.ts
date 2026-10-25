@@ -66,7 +66,7 @@ describe('the till top bar', () => {
     const el = await render(accountantMe);
 
     expect(el.querySelector('.badge')).toBeNull();
-    expect(nav(el)).toEqual(['Costing', 'HR & Payroll']);
+    expect(nav(el)).toEqual(['Costing', 'HR & Payroll', 'Custody & Assets']);
     expect(text(el.querySelector('.user-name')!)).toBe('Mona');
   });
 });

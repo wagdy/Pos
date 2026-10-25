@@ -26,6 +26,8 @@ public static class DependencyInjection
         services.AddScoped<Hr.Presence>();
         services.AddScoped<Hr.AttendanceBroadcast>();
         services.AddScoped<Hr.HrAdvanceWriter>();
+        services.AddScoped<Custody.CustodyWriter>();
+        services.AddScoped<Custody.PurchasedAssets>();
         return services;
     }
 }

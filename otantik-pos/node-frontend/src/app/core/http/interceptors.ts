@@ -3,11 +3,30 @@ import { inject } from '@angular/core';
 import { catchError, tap, throwError } from 'rxjs';
 import { AuthService } from '../auth/auth.service';
 import { ConnectivityService } from '../connectivity/connectivity.service';
+import { PortalAuth } from '../portal/portal-auth';
 
 // The till token on every API call. A 401 on anything but the sign-in itself means the API no
 // longer accepts it (the shift ended, or the account changed in the delivery system), so the
 // till goes back to the sign-in screen.
+//
+// The employee portal's calls are apart: they carry the employee's token and never the till's
+// (on a till where both are signed in, neither reaches the other's API), and a 401 there signs
+// the employee out of the portal, not the till.
 export const authInterceptor: HttpInterceptorFn = (request, next) => {
+  if (request.url.startsWith('/api/portal') || request.url.startsWith('/api/auth/employee-login')) {
+    const portal = inject(PortalAuth);
+    const employeeToken = request.url.startsWith('/api/portal') ? portal.token() : null;
+    const asEmployee = employeeToken ? request.clone({ setHeaders: { Authorization: `Bearer ${employeeToken}` } }) : request;
+    return next(asEmployee).pipe(
+      catchError((error: unknown) => {
+        if (error instanceof HttpErrorResponse && error.status === 401 && request.url.startsWith('/api/portal') && portal.session()) {
+          portal.signOut('expired');
+        }
+        return throwError(() => error);
+      }),
+    );
+  }
+
   const auth = inject(AuthService);
   const token = auth.token();
   const isApi = request.url.startsWith('/api/');

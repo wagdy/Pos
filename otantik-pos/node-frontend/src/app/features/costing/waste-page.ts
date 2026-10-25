@@ -10,6 +10,7 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { firstValueFrom } from 'rxjs';
 import { CostingApi, ApprovalRequest, MaterialCost, SpoilageEntry, countUnit } from '../../core/costing/costing.api';
+import { BreakageEntry, CustodyApi } from '../../core/custody/custody.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
@@ -25,6 +26,8 @@ interface Line {
 // Raw stock thrown away: expired, spoiled, dropped. Recorded, it takes the stock off and the
 // variance report sets it against the shortfall, so a loss with a reason is not mistaken for
 // one without. Dishes voided after the kitchen made them are recorded by the void itself.
+// Below, the breakage (الكسر): consumable assets checked out of custody as broken, at their cost,
+// recorded by the voucher in Custody & Assets; no stock moves.
 @Component({
   selector: 'app-waste-page',
   imports: [
@@ -175,6 +178,51 @@ interface Line {
           }
         </table>
       </div>
+
+      <h2 class="recent">Breakage, last 30 days <span class="inline-ar">الكسر</span></h2>
+      <p class="muted tiny">Consumable assets checked out of custody as broken, recorded by the voucher in Custody &amp; Assets. No stock moves.</p>
+      <div class="table-wrap">
+        <table class="grid" aria-label="Breakage">
+          <thead>
+            <tr>
+              <th>Day<span class="ar">اليوم</span></th>
+              <th>What broke<span class="ar">الصنف</span></th>
+              <th class="num">How many<span class="ar">العدد</span></th>
+              <th>In whose custody<span class="ar">العهدة</span></th>
+              <th class="num">Cost<span class="ar">التكلفة</span></th>
+              <th>By<span class="ar">بواسطة</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (b of breakage(); track b.id) {
+              <tr [class.voided]="b.isVoided">
+                <td class="nowrap">{{ b.businessDate | date: 'd MMM' }}</td>
+                <td>
+                  <strong>{{ b.description }}</strong>
+                  @if (b.notes) {
+                    <div class="muted tiny">{{ b.notes }}</div>
+                  }
+                </td>
+                <td class="num">{{ b.quantity }}</td>
+                <td>{{ b.employeeName ?? '—' }}</td>
+                <td class="num">{{ b.unitCost === null ? 'Cost not known' : (b.cost | money) }}</td>
+                <td class="muted tiny">{{ b.recordedBy }}</td>
+              </tr>
+            } @empty {
+              <tr><td colspan="6" class="muted">Nothing broken.</td></tr>
+            }
+          </tbody>
+          @if (breakage().length) {
+            <tfoot>
+              <tr>
+                <td colspan="4">Total · الإجمالي</td>
+                <td class="num">{{ breakageTotal() | money }}</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          }
+        </table>
+      </div>
     }
   `,
   styleUrl: './costing.scss',
@@ -195,6 +243,16 @@ interface Line {
     .recent {
       margin: 24px 0 8px;
       font: var(--mat-sys-title-medium);
+    }
+    .tiny {
+      font-size: 0.85em;
+    }
+    .nowrap {
+      white-space: nowrap;
+    }
+    tr.voided td {
+      text-decoration: line-through;
+      color: var(--mat-sys-on-surface-variant);
     }
     .danger {
       color: var(--mat-sys-error);
@@ -236,6 +294,9 @@ export class WastePage {
 
   protected readonly total = computed(() => this.lines().reduce((sum, l) => sum + (this.worth(l) ?? 0), 0));
   protected readonly recentTotal = computed(() => this.recent().reduce((sum, e) => sum + (e.value ?? 0), 0));
+  private readonly custody = inject(CustodyApi);
+  protected readonly breakage = signal<BreakageEntry[]>([]);
+  protected readonly breakageTotal = computed(() => this.breakage().filter((b) => !b.isVoided).reduce((sum, b) => sum + b.cost, 0));
 
   protected readonly ready = computed(() => {
     const lines = this.lines();
@@ -337,6 +398,12 @@ export class WastePage {
       this.error.set(errorMessage(error, 'The waste could not be loaded.'));
     } finally {
       this.loading.set(false);
+    }
+    // Apart, so the spoilage stands without it.
+    try {
+      this.breakage.set(await firstValueFrom(this.custody.breakage(30)));
+    } catch {
+      this.breakage.set([]);
     }
   }
 }

@@ -61,6 +61,20 @@ internal static class AuthenticationSetup
                     OnTokenValidated = async context =>
                     {
                         var principal = context.Principal!;
+                        // An employee's portal token: still employed, with the PIN it was signed
+                        // in with. A new PIN, none, or their leaving signs them out.
+                        if (PortalClaims.IsEmployee(principal))
+                        {
+                            var employee = PortalClaims.EmployeeIdOf(principal) is { } employeeId
+                                ? await context.HttpContext.RequestServices.GetRequiredService<OtantikPos.Hr.Domain.IEmployeeRepository>()
+                                    .GetByIdAsync(employeeId, context.HttpContext.RequestAborted)
+                                : null;
+                            // To the microsecond, as the database keeps it.
+                            if (employee is not { IsActive: true, PinSetAtUtc: { } pinSetAt } || pinSetAt.Ticks / 10 != PortalClaims.PinSetAtOf(principal) / 10)
+                                context.Fail("Your PIN has changed, or you have left. Sign in again.");
+                            return;
+                        }
+
                         var staffId = StaffClaims.IdOf(principal);
                         var role = staffId is null
                             ? null
@@ -73,10 +87,18 @@ internal static class AuthenticationSetup
                 };
             });
 
+        // Signed in as staff, for an endpoint that says [Authorize] and for one that forgets to (the
+        // fallback), so a new endpoint is closed by default rather than open. An employee's portal
+        // token is signed in too, but holds no till role: it passes only the Employee policy, on
+        // the portal's own endpoints.
+        var staff = new AuthorizationPolicyBuilder()
+            .RequireAuthenticatedUser()
+            .RequireAssertion(context => StaffClaims.RoleOf(context.User) is not null)
+            .Build();
         var authorization = services.AddAuthorizationBuilder()
-            // Signed in unless an endpoint says otherwise, so a new endpoint that forgets
-            // [Authorize] is closed by default rather than open.
-            .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build());
+            .SetDefaultPolicy(staff)
+            .SetFallbackPolicy(staff)
+            .AddPolicy(PortalClaims.Policy, policy => policy.RequireAuthenticatedUser().RequireClaim(StaffClaims.Role, PortalClaims.Role));
 
         // One policy per permission, named by the permission itself, for endpoints whose rule
         // does not depend on the record they touch:

@@ -1,5 +1,6 @@
 using Otantik.BuildingBlocks;
 using OtantikPos.Hr.Domain.Attendance;
+using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
 using OtantikPos.Hr.Domain.Payroll;
 
@@ -15,6 +16,9 @@ public interface IEmployeeRepository : IRepository<Employee>
     Task<Employee?> GetByDeviceUserIdAsync(string deviceUserId, CancellationToken cancellationToken = default);
 
     Task<Employee?> GetByNationalIdAsync(string nationalId, CancellationToken cancellationToken = default);
+
+    // Tracked: the portal signs in by it.
+    Task<Employee?> GetByMobileNumberAsync(string mobileNumber, CancellationToken cancellationToken = default);
 
     // Tracked: everyone in a department, left or not.
     Task<IReadOnlyList<Employee>> GetInDepartmentAsync(Guid departmentId, CancellationToken cancellationToken = default);
@@ -32,6 +36,45 @@ public interface IEmployeeIdPhotoStore
     Task RemoveAsync(Guid employeeId, CancellationToken cancellationToken = default);
 
     Task<byte[]?> GetAsync(Guid employeeId, CancellationToken cancellationToken = default);
+}
+
+public interface IAssetCategoryRepository : IRepository<AssetCategory>
+{
+    // By name.
+    Task<IReadOnlyList<AssetCategory>> GetAllAsync(CancellationToken cancellationToken = default);
+
+    void Remove(AssetCategory category);
+}
+
+public interface IAssetItemRepository : IRepository<AssetItem>
+{
+    // By name; of one origin, or all of them.
+    Task<IReadOnlyList<AssetItem>> GetAllAsync(AssetOrigin? origin = null, CancellationToken cancellationToken = default);
+
+    // What is in an employee's custody now.
+    Task<IReadOnlyList<AssetItem>> GetInCustodyOfAsync(Guid employeeId, CancellationToken cancellationToken = default);
+
+    Task<bool> AnyInCategoryAsync(Guid categoryId, CancellationToken cancellationToken = default);
+
+    // The asset a posted invoice line made, if it made one.
+    Task<AssetItem?> GetBySourceLineAsync(Guid invoiceLineId, CancellationToken cancellationToken = default);
+
+    // Tracked: the assets an invoice's lines made.
+    Task<IReadOnlyList<AssetItem>> GetFromInvoiceAsync(Guid invoiceId, CancellationToken cancellationToken = default);
+
+    // Only one that never moved: its invoice voided before it was handed out.
+    void Remove(AssetItem asset);
+}
+
+public interface IAssetTransactionRepository : IRepository<AssetTransaction>
+{
+    // An asset's vouchers, the latest first.
+    Task<IReadOnlyList<AssetTransaction>> GetForAssetAsync(Guid assetItemId, CancellationToken cancellationToken = default);
+
+    // The vouchers of the business days from `from` to `to`, the latest first.
+    Task<IReadOnlyList<AssetTransaction>> GetBetweenAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default);
+
+    Task<bool> AnyForAssetAsync(Guid assetItemId, CancellationToken cancellationToken = default);
 }
 
 public interface IJobRoleRepository : IRepository<JobRole>

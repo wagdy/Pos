@@ -83,6 +83,8 @@ public sealed class TestApi : IAsyncDisposable
 
     public HttpClient Anonymous() => _factory.CreateClient();
 
+    public HttpClient Anonymous(Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions options) => _factory.CreateClient(options);
+
     public async Task<HttpClient> SignInAsync(string staffId, string pin)
     {
         var client = _factory.CreateClient();

@@ -68,6 +68,24 @@ public sealed class HrController(ISender sender) : ControllerBase
     public Task<EmployeeDto> RemoveIdPhoto(Guid employeeId, CancellationToken cancellationToken) =>
         sender.Send(new RemoveEmployeeIdPhotoCommand(employeeId), cancellationToken);
 
+    // What is in their custody now (العهدة), and since when.
+    [HttpGet("employees/{employeeId:guid}/custody")]
+    public Task<IReadOnlyList<OtantikPos.Inventory.Application.Custody.CustodyItemDto>> GetCustody(Guid employeeId, CancellationToken cancellationToken) =>
+        sender.Send(new OtantikPos.Inventory.Application.Custody.GetEmployeeCustodyQuery(employeeId), cancellationToken);
+
+    // Their portal PIN, a manager's to set: 4 to 6 digits, kept hashed, never shown. Setting one
+    // signs them out of the portal and unlocks it; they sign in with their mobile number.
+    [HttpPut("employees/{employeeId:guid}/pin")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<EmployeeDto> SetPin(Guid employeeId, PinRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new SetEmployeePinCommand(employeeId, request.Pin ?? string.Empty), cancellationToken);
+
+    // No PIN: they cannot sign in to the portal.
+    [HttpDelete("employees/{employeeId:guid}/pin")]
+    [Authorize(Policy = Permissions.ApprovalDecide)]
+    public Task<EmployeeDto> RemovePin(Guid employeeId, CancellationToken cancellationToken) =>
+        sender.Send(new SetEmployeePinCommand(employeeId, null), cancellationToken);
+
     // The departments, by name, with how many are in each.
     [HttpGet("departments")]
     public Task<IReadOnlyList<DepartmentDto>> GetDepartments(CancellationToken cancellationToken) => sender.Send(new GetDepartmentsQuery(), cancellationToken);
@@ -268,10 +286,11 @@ public sealed class HrController(ISender sender) : ControllerBase
     }
 
     // Where a device reaches this till: the device's own port when one is set, and this
-    // machine's addresses on its networks. No port: the one the screens are served on.
+    // machine's addresses on its networks. No port: the one the screens are served on. The
+    // employee portal's port too, when there is one: where phones on the Wi-Fi open it.
     [HttpGet("devices/connection")]
     public object GetDeviceConnection([FromServices] IConfiguration configuration) =>
-        new { DevicePort = Hosting.DevicePort.Of(configuration), Addresses = Hosting.DevicePort.Addresses() };
+        new { DevicePort = Hosting.DevicePort.Of(configuration), PortalPort = Hosting.PortalPort.Of(configuration), Addresses = Hosting.DevicePort.Addresses() };
 
     // The device reached by the till over its own port (ZKTeco's, 4370), beside ADMS: whether it
     // answers, and what it is. A manager's, as the till reaches out for it.
@@ -435,6 +454,8 @@ public sealed record SaveEmployeeRequest(
     string? MobileNumber = null);
 
 public sealed record DepartmentRequest(string Name);
+
+public sealed record PinRequest(string? Pin);
 
 public sealed record LeaveRequest(Guid RequestId, DateOnly LastDay, string? Reason = null);
 

@@ -10,6 +10,7 @@ using OtantikPos.Inventory.Domain.Production;
 using OtantikPos.Inventory.Domain.Purchases;
 using OtantikPos.Inventory.Domain.RawMaterials;
 using OtantikPos.Inventory.Domain.Recipes;
+using OtantikPos.Inventory.Domain.Waste;
 using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Inventory.Domain.Suppliers;
@@ -340,6 +341,28 @@ internal sealed class ExpenseItemConfiguration : IEntityTypeConfiguration<Expens
         // Archived or not: two of one name would make the invoices ambiguous.
         builder.HasIndex(e => e.NormalizedName).IsUnique();
         builder.HasOne<PurchaseCategory>().WithMany().HasForeignKey(e => e.CategoryId).OnDelete(DeleteBehavior.Restrict);
+        builder.Ignore(e => e.IsAsset);
+        builder.HasOne<OtantikPos.Hr.Domain.Custody.AssetCategory>().WithMany().HasForeignKey(e => e.AssetCategoryId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+internal sealed class BreakageEntryConfiguration : IEntityTypeConfiguration<BreakageEntry>
+{
+    public void Configure(EntityTypeBuilder<BreakageEntry> builder)
+    {
+        builder.ToTable("BreakageEntries", NodeDbContext.InventorySchema, t => t.HasCheckConstraint("CK_BreakageEntries_Quantity", "\"Quantity\" > 0"));
+        builder.Property(b => b.Description).HasMaxLength(BreakageEntry.MaxDescriptionLength);
+        builder.Property(b => b.Notes).HasMaxLength(BreakageEntry.MaxNotesLength);
+        builder.Property(b => b.RecordedBy).HasMaxLength(200);
+        builder.Property(b => b.VoidedBy).HasMaxLength(200);
+        builder.Property(b => b.UnitCost).HasPrecision(18, 2);
+        builder.Property(b => b.Cost).HasPrecision(18, 2);
+        builder.Ignore(b => b.IsVoided);
+        builder.HasOne<OtantikPos.Hr.Domain.Custody.AssetItem>().WithMany().HasForeignKey(b => b.AssetItemId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<OtantikPos.Hr.Domain.Custody.AssetTransaction>().WithOne()
+            .HasForeignKey<BreakageEntry>(b => b.AssetTransactionId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<Employee>().WithMany().HasForeignKey(b => b.EmployeeId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(b => b.BusinessDate);
     }
 }
 

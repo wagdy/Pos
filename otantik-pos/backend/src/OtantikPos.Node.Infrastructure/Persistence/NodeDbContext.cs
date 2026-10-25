@@ -5,6 +5,7 @@ using Otantik.SharedKernel.Auditing;
 using Otantik.SharedKernel.Catalog;
 using Otantik.SharedKernel.Orders;
 using OtantikPos.Hr.Domain.Attendance;
+using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
 using OtantikPos.Hr.Domain.Payroll;
 using OtantikPos.Inventory.Domain.Approvals;
@@ -18,6 +19,7 @@ using OtantikPos.Inventory.Domain.StockCounts;
 using OtantikPos.Inventory.Domain.StockMovements;
 using OtantikPos.Inventory.Domain.Suppliers;
 using OtantikPos.Inventory.Domain.Treasury;
+using OtantikPos.Inventory.Domain.Waste;
 using OtantikPos.Node.Infrastructure.Common;
 using OtantikPos.Node.Infrastructure.Costing;
 using OtantikPos.Node.Infrastructure.DeliverySystem;
@@ -96,6 +98,10 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
     public DbSet<PayrollAdjustment> PayrollAdjustments => Set<PayrollAdjustment>();
     public DbSet<AdvanceAllocation> AdvanceAllocations => Set<AdvanceAllocation>();
     public DbSet<HrAdvance> HrAdvances => Set<HrAdvance>();
+    public DbSet<AssetCategory> AssetCategories => Set<AssetCategory>();
+    public DbSet<AssetItem> AssetItems => Set<AssetItem>();
+    public DbSet<AssetTransaction> AssetTransactions => Set<AssetTransaction>();
+    public DbSet<BreakageEntry> BreakageEntries => Set<BreakageEntry>();
     public DbSet<PayrollSlip> PayrollSlips => Set<PayrollSlip>();
     public DbSet<HrSettings> HrSettings => Set<HrSettings>();
 

@@ -1,9 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Otantik.BuildingBlocks;
 using OtantikPos.Hr.Domain.Attendance;
+using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
 using OtantikPos.Hr.Domain.Payroll;
 using OtantikPos.Inventory.Domain.Treasury;
+using OtantikPos.Inventory.Domain.Waste;
 using OtantikPos.Node.Infrastructure.Hr;
 
 namespace OtantikPos.Node.Infrastructure.Tests;
@@ -178,6 +180,80 @@ public class HrPersistenceTests
             db.EmployeeIdPhotos.Add(new EmployeeIdPhoto { EmployeeId = Guid.NewGuid(), Content = png });
             return await db.SaveChangesAsync();
         }));
+    }
+
+    [Fact]
+    public async Task Custody_its_vouchers_breakage_and_the_portal_pin_are_kept_and_the_database_refuses_what_the_rules_forbid()
+    {
+        await using var node = await TestNode.StartAsync();
+        var chef = new Employee(Guid.NewGuid(), "Hassan", "Chef", 5_400, new TimeOnly(10, 0), WeekDays.Friday, new DateOnly(2026, 1, 1));
+        chef.SetMobileNumber("01012345678");
+        chef.SetPinHash("AQAAAAIAAYagAAAAEH...");
+        var tableware = new AssetCategory(Guid.NewGuid(), "Tableware", isConsumable: true);
+        var plates = new AssetItem(Guid.NewGuid(), "Dinner plates", tableware.Id, 35, 40, AssetOrigin.HrManual, "Omar");
+        var handed = plates.CheckIn(Guid.NewGuid(), chef.Id, Monday, "Kitchen", "Omar");
+        var broken = plates.CheckOut(Guid.NewGuid(), AssetMovementReason.Breakage, 3, Monday, "Dropped a tray", "Omar");
+        var entry = new BreakageEntry(Guid.NewGuid(), Monday, plates.Id, broken.Id, plates.Name, broken.Quantity, broken.UnitCost, broken.EmployeeId, broken.Notes, "Omar");
+        broken.RouteToWaste(entry.Id);
+        await node.Db(async db =>
+        {
+            db.Employees.Add(chef);
+            db.AssetCategories.Add(tableware);
+            db.AssetItems.Add(plates);
+            db.AssetTransactions.AddRange(handed, broken);
+            db.BreakageEntries.Add(entry);
+            return await db.SaveChangesAsync();
+        });
+
+        await node.Db(async db =>
+        {
+            var employee = await db.Employees.SingleAsync();
+            Assert.Equal(("AQAAAAIAAYagAAAAEH...", 0, true), (employee.PinHash, employee.FailedPinAttempts, employee.HasPin));
+            Assert.True((await db.AssetCategories.SingleAsync()).IsConsumable);
+            var item = await db.AssetItems.SingleAsync();
+            Assert.Equal((37, AssetStatus.InCustody, (Guid?)chef.Id, AssetOrigin.HrManual, (decimal?)35m), (item.Quantity, item.Status, item.EmployeeId, item.Origin, item.UnitCost));
+            var vouchers = await db.AssetTransactions.OrderBy(t => t.Type).ToListAsync();
+            Assert.Equal(
+                [(AssetTransactionType.CheckIn, 40, (AssetMovementReason?)null, (Guid?)null), (AssetTransactionType.CheckOut, 3, AssetMovementReason.Breakage, (Guid?)entry.Id)],
+                vouchers.Select(t => (t.Type, t.Quantity, t.Reason, t.WasteEntryId)));
+            var kept = await db.BreakageEntries.SingleAsync();
+            Assert.Equal(("Dinner plates", 3, 105m, (Guid?)chef.Id, broken.Id), (kept.Description, kept.Quantity, kept.Cost, kept.EmployeeId, kept.AssetTransactionId));
+            return 0;
+        });
+
+        // One employee to a mobile number: the portal signs in by it.
+        await Assert.ThrowsAsync<ConflictException>(() => node.Db(async db =>
+        {
+            var waiter = new Employee(Guid.NewGuid(), "Mona", "Waiter", 4_000, new TimeOnly(12, 0), WeekDays.Sunday, new DateOnly(2026, 1, 1));
+            waiter.SetMobileNumber("01012345678");
+            db.Employees.Add(waiter);
+            return await db.SaveChangesAsync();
+        }));
+        // Two categories of a name; a breakage for a voucher that is not there; one voucher's breakage twice.
+        await Assert.ThrowsAsync<ConflictException>(() => node.Db(async db =>
+        {
+            db.AssetCategories.Add(new AssetCategory(Guid.NewGuid(), "Tableware", false));
+            return await db.SaveChangesAsync();
+        }));
+        await Assert.ThrowsAsync<ConflictException>(() => node.Db(async db =>
+        {
+            db.BreakageEntries.Add(new BreakageEntry(Guid.NewGuid(), Monday, plates.Id, Guid.NewGuid(), "Glass", 1, 5, null, null, "Omar"));
+            return await db.SaveChangesAsync();
+        }));
+        await Assert.ThrowsAsync<ConflictException>(() => node.Db(async db =>
+        {
+            db.BreakageEntries.Add(new BreakageEntry(Guid.NewGuid(), Monday, plates.Id, broken.Id, "Dinner plates", 3, 35, null, null, "Omar"));
+            return await db.SaveChangesAsync();
+        }));
+        // The database's own checks: an asset bought on an invoice names it; a check-out says why.
+        await Assert.ThrowsAnyAsync<Exception>(() => node.Db(db => db.Database.ExecuteSqlRawAsync("""
+            INSERT INTO hr."AssetItems" ("Id", "Name", "Quantity", "Origin", "Status", "CreatedBy", "CreatedAtUtc")
+            VALUES (gen_random_uuid(), 'Fryer', 1, 'FinancialPurchase', 'InStore', 'Omar', now())
+            """)));
+        await Assert.ThrowsAnyAsync<Exception>(() => node.Db(db => db.Database.ExecuteSqlAsync($"""
+            INSERT INTO hr."AssetTransactions" ("Id", "AssetItemId", "Type", "Date", "Quantity", "RecordedBy", "RecordedAtUtc")
+            VALUES (gen_random_uuid(), {plates.Id}, 'CheckOut', '2026-10-26', 1, 'Omar', now())
+            """)));
     }
 
     [Fact]

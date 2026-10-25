@@ -3,6 +3,7 @@ import { MatDialog } from '@angular/material/dialog';
 import { provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { CostingApi, ExpenseItem } from '../../core/costing/costing.api';
+import { CustodyApi } from '../../core/custody/custody.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { ExpenseItemDialog } from './expense-item-dialog';
 import { ExpenseItemsPage } from './expense-items-page';
@@ -25,12 +26,15 @@ describe('the expense items', () => {
   const restoreExpenseItem = vi.fn();
   const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
+  const categories = vi.fn();
+  const markExpenseItemAsAsset = vi.fn();
 
   async function render() {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: CostingApi, useValue: { expenseItems, deleteExpenseItem, restoreExpenseItem } },
+        { provide: CostingApi, useValue: { expenseItems, deleteExpenseItem, restoreExpenseItem, markExpenseItemAsAsset } },
+        { provide: CustodyApi, useValue: { categories } },
         { provide: MatDialog, useValue: { open } },
         { provide: NotifyService, useValue: notify },
       ],
@@ -52,6 +56,23 @@ describe('the expense items', () => {
     restoreExpenseItem.mockReset().mockReturnValue(of(old));
     open.mockReset();
     notify.info.mockReset();
+    // Not seen by whoever does not see Custody: the column is not there.
+    categories.mockReset().mockReturnValue(of([]));
+    markExpenseItemAsAsset.mockReset();
+  });
+
+  it('buys one as an asset of a custody category, for whoever sees Custody', async () => {
+    categories.mockReturnValue(of([{ id: 'tableware', name: 'Tableware', isConsumable: true, assets: 0, inCustody: 0 }]));
+    const marked = { ...spray, assetCategoryId: 'tableware' };
+    markExpenseItemAsAsset.mockReturnValue(of(marked));
+    const { el, page, rows } = await render();
+
+    expect([...el.querySelectorAll('thead th')].map(text)).toContain('Bought as an assetيُسجل كأصل');
+    await page['markAsAsset'](spray, 'tableware');
+    expect(markExpenseItemAsAsset).toHaveBeenCalledWith('spray', 'tableware');
+    expect(notify.info).toHaveBeenLastCalledWith('Cleaning spray is bought as an asset: each invoice line of it posted from now is one in Custody & Assets.');
+    expect(page['items']().find((i: ExpenseItem) => i.id === 'spray').assetCategoryId).toBe('tableware');
+    expect(rows()[0].querySelector('mat-select')).not.toBeNull();
   });
 
   it('lists each under its category, with what was spent on it; archived ones only when asked', async () => {

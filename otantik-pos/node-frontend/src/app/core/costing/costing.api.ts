@@ -690,7 +690,8 @@ export type ApprovalModule =
   | 'Treasury'
   | 'PurchaseCategory'
   | 'Employee'
-  | 'Advance';
+  | 'Advance'
+  | 'Custody';
 export type ApprovalAction = 'Create' | 'Update' | 'Delete';
 export type ApprovalStatus = 'Pending' | 'Approved' | 'Rejected';
 export type ApprovalOutcome = 'Requested' | 'Applied';
@@ -707,6 +708,7 @@ export const moduleLabels: Record<ApprovalModule, { en: string; ar: string }> = 
   PurchaseCategory: { en: 'Purchase category', ar: 'أقسام المشتريات' },
   Employee: { en: 'Employee', ar: 'الموظفين' },
   Advance: { en: 'Advance', ar: 'السلفيات' },
+  Custody: { en: 'Custody', ar: 'العهدة' },
 };
 
 export const actionLabels: Record<ApprovalAction, { en: string; ar: string }> = {
@@ -1081,6 +1083,8 @@ export interface ExpenseItem {
   lastPostedAtUtc: string | null;
   // In a raw materials category: filed there before the kinds were kept apart.
   misplaced?: boolean;
+  // Bought as an asset of this custody category: each posted line of it is one in Custody & Assets.
+  assetCategoryId?: string | null;
 }
 
 export interface SaveExpenseItem {
@@ -1263,6 +1267,11 @@ export class CostingApi {
 
   expenseItems(includeArchived = false): Observable<ExpenseItem[]> {
     return this.http.get<ExpenseItem[]>('/api/inventory/expense-items', { params: { includeArchived } });
+  }
+
+  // Bought as an asset of a custody category, or (null) a plain expense again.
+  markExpenseItemAsAsset(id: string, assetCategoryId: string | null): Observable<ExpenseItem> {
+    return this.http.put<ExpenseItem>(`/api/inventory/expense-items/${id}/asset-category`, { assetCategoryId });
   }
 
   saveExpenseItem(id: string, item: SaveExpenseItem): Observable<ExpenseItem> {

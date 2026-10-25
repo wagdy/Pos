@@ -151,6 +151,9 @@ public class HrApiTests
         await ApproveAsync(manager, asked);
         profile = await Json(await manager.GetAsync($"/api/hr/employees/{hassanId}", Cancel));
         Assert.Equal(("29001010123456", "01198765432"), (profile.GetProperty("nationalId").GetString(), profile.GetProperty("mobileNumber").GetString()));
+        // One employee to a mobile: the portal signs in by it.
+        Assert.Contains("Hassan Mahmoud Ali has mobile number 01198765432 already",
+            await Problem(await manager.PutAsJsonAsync($"/api/hr/employees/{Guid.NewGuid()}", Profile("Karim", null, "011 9876 5432"), Cancel)));
 
         // The card's photo: whoever manages HR, at once; the picture its type says, under 5 MB.
         byte[] jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4];

@@ -58,6 +58,11 @@ builder.Services.AddRateLimiter(o =>
     o.AddPolicy(AuthController.SignInRateLimit, context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    // The portal's, from phones on the restaurant's Wi-Fi: ten a minute from one, on top of each
+    // employee's own lockout.
+    o.AddPolicy(AuthController.EmployeeSignInRateLimit, context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
 
 // Only needed when the Angular app is served from somewhere else, such as `ng serve` during
@@ -77,6 +82,8 @@ app.UseStatusCodePages();
 
 // The attendance device's own port, when there is one: nothing but its /iclock paths there.
 app.UseDevicePort(DevicePort.Of(app.Configuration));
+// The employee portal's own port, when there is one: its sign-in, its API and the app's files.
+app.UsePortalPort(PortalPort.Of(app.Configuration));
 
 // Before authentication: the page itself is public, and only the API behind it needs a
 // sign-in.

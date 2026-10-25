@@ -39,7 +39,8 @@ internal sealed class DeletionTargets(
     TreasuryWriter treasury,
     IRecordDescriptions descriptions,
     IPayrollSlipRepository slips,
-    IAdvanceAllocationRepository allocations)
+    IAdvanceAllocationRepository allocations,
+    Custody.PurchasedAssets purchasedAssets)
 {
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
@@ -137,6 +138,8 @@ internal sealed class DeletionTargets(
 
     private async Task<string> DescribeInvoiceAsync(PurchaseInvoice invoice, CancellationToken cancellationToken)
     {
+        // Refused before it is asked: an asset it bought has been handed out.
+        await purchasedAssets.CheckVoidAsync(invoice, cancellationToken);
         var supplier = invoice.SupplierId is { } id ? (await suppliers.GetByIdAsync(id, cancellationToken))?.Name : null;
         var date = invoice.InvoiceDate ?? descriptions.BusinessDateOf(invoice.PostedAtUtc ?? invoice.CreatedAtUtc);
         return string.Join(" · ", new[]
@@ -260,6 +263,8 @@ internal sealed class DeletionTargets(
     // what it put on its supplier's account off it. replacedBy, the invoice correcting it.
     public async Task<IReadOnlyList<StockMovement>> VoidInvoiceAsync(PurchaseInvoice invoice, string by, Guid? replacedBy, CancellationToken cancellationToken)
     {
+        // The assets it bought go with it, unless one has been handed out.
+        await purchasedAssets.RemoveAsync(invoice, cancellationToken);
         var reversals = await ReverseAsync(invoice.Id, StockMovementReason.Purchase, by, cancellationToken);
         await treasury.UndoInvoiceAsync(invoice, by, cancellationToken);
         invoice.Void(by, replacedBy);

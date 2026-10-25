@@ -1,8 +1,11 @@
 import { DatePipe } from '@angular/common';
 import { Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
+import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
+import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { RouterLink } from '@angular/router';
@@ -10,6 +13,7 @@ import { Observable, firstValueFrom } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
 import { ApprovalResult, isRequested } from '../../core/costing/costing.api';
+import { CustodyApi, CustodyItem } from '../../core/custody/custody.api';
 import { errorMessage } from '../../core/http/error-message';
 import { Department, Employee, HrApi, weekDays } from '../../core/hr/hr.api';
 import { MoneyPipe } from '../../core/ui/money.pipe';
@@ -17,7 +21,7 @@ import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals, pendingLabel } from '../costing/approvals';
 import { BusinessDay } from '../costing/financials';
 import { PaperPreview } from '../costing/invoice-paper';
-import { EmployeeDialog, EmployeeDialogData } from './employee-dialog';
+import { EmployeeDialog, EmployeeDialogData, idDigits } from './employee-dialog';
 import { EmploymentDialog, EmploymentDialogData } from './employment-dialog';
 import { PayslipPage } from './payslip-page';
 
@@ -86,6 +90,69 @@ export class IdCardDialog {
 })
 export class RemoveIdCardDialog {
   protected readonly data = inject<{ name: string }>(MAT_DIALOG_DATA);
+}
+
+// A manager's: their portal PIN, typed twice. 4 to 6 digits, Arabic ones as well; never shown
+// again, nor kept as typed.
+@Component({
+  selector: 'app-pin-dialog',
+  imports: [FormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatInputModule],
+  template: `
+    <h2 mat-dialog-title>{{ data.hasPin ? 'Change' : 'Set' }} {{ data.name }}’s portal PIN <span class="inline-ar">الرقم السري للبوابة</span></h2>
+    <mat-dialog-content>
+      <p class="muted">They sign in to the portal with their mobile number, {{ data.mobile }}, and this PIN. Tell them it yourself: it is not shown again.</p>
+      <mat-form-field class="wide">
+        <mat-label>PIN · الرقم السري</mat-label>
+        <input matInput type="password" inputmode="numeric" autocomplete="new-password" maxlength="6" [(ngModel)]="pin" aria-label="PIN" />
+        <mat-hint>4 to 6 digits</mat-hint>
+      </mat-form-field>
+      <mat-form-field class="wide">
+        <mat-label>Again · تأكيد</mat-label>
+        <input matInput type="password" inputmode="numeric" autocomplete="new-password" maxlength="6" [(ngModel)]="again" aria-label="PIN again" />
+        @if (again && digits(again) !== digits(pin)) {
+          <mat-hint class="bad">Not the same PIN</mat-hint>
+        }
+      </mat-form-field>
+      @if (data.hasPin) {
+        <p class="muted small">A new PIN signs them out of the portal wherever they are signed in.</p>
+      }
+    </mat-dialog-content>
+    <mat-dialog-actions align="end">
+      <button mat-button mat-dialog-close>Cancel</button>
+      <button mat-flat-button [disabled]="!ready()" [mat-dialog-close]="digits(pin)">Save the PIN</button>
+    </mat-dialog-actions>
+  `,
+  styles: `
+    .wide {
+      width: 100%;
+    }
+    .muted {
+      color: var(--mat-sys-on-surface-variant);
+    }
+    .small {
+      font-size: 0.85em;
+    }
+    .bad {
+      color: var(--mat-sys-error);
+    }
+    .inline-ar {
+      direction: rtl;
+      unicode-bidi: isolate;
+      opacity: 0.75;
+      margin-left: 6px;
+    }
+  `,
+})
+export class PinDialog {
+  protected readonly data = inject<{ name: string; mobile: string; hasPin: boolean }>(MAT_DIALOG_DATA);
+  protected pin = '';
+  protected again = '';
+  protected readonly digits = (text: string) => idDigits(text);
+
+  protected ready(): boolean {
+    const pin = this.digits(this.pin);
+    return /^\d{4,6}$/.test(pin) && pin === this.digits(this.again);
+  }
 }
 
 // An employee's profile (ملف الموظف), opened from their row on Employees: who they are (their full
@@ -234,6 +301,44 @@ export class RemoveIdCardDialog {
                 <p class="muted small">A photo (JPEG, PNG or WebP) or a PDF, under 5 MB.</p>
               }
             </div>
+
+            <div class="card custody">
+              <h3>Assigned custody <span class="inline-ar">العهدة</span></h3>
+              @for (c of custody(); track c.asset.id) {
+                <div class="held">
+                  <span>
+                    <strong>{{ c.asset.name }}</strong> × {{ c.asset.quantity }}
+                    <div class="muted small">{{ c.asset.categoryName ?? 'No category' }}@if (c.since) { · since {{ c.since | date: 'd MMM y' }} }</div>
+                  </span>
+                  <span class="amount">{{ c.asset.totalCost === null ? '—' : (c.asset.totalCost | money) }}</span>
+                </div>
+              } @empty {
+                <p class="muted">Nothing in their custody.</p>
+              }
+              <a mat-button routerLink="/custody/assets"><mat-icon>inventory_2</mat-icon> Custody &amp; Assets</a>
+            </div>
+
+            <div class="card pin">
+              <h3>Portal <span class="inline-ar">بوابة الموظف</span></h3>
+              @if (e.hasPin) {
+                <p>A PIN is set{{ e.pinSetAtUtc ? ', on ' + (e.pinSetAtUtc | date: 'd MMM y') : '' }}: they sign in with their mobile number and it.</p>
+              } @else if (!e.mobileNumber) {
+                <p class="muted">Enter their mobile number first: they sign in to the portal with it.</p>
+              } @else {
+                <p class="muted">No PIN yet: they cannot sign in to the portal.</p>
+              }
+              @if (portalAddress(); as address) {
+                <p class="muted small">On the restaurant's Wi-Fi: <span class="digits">{{ address }}</span></p>
+              }
+              @if (canSetPin() && e.isActive && e.mobileNumber) {
+                <div class="card-actions">
+                  <button mat-stroked-button (click)="setPin(e)"><mat-icon>password</mat-icon> {{ e.hasPin ? 'Change PIN' : 'Set a PIN' }} <span class="inline-ar">الرقم السري</span></button>
+                  @if (e.hasPin) {
+                    <button mat-button class="danger" (click)="removePin(e)"><mat-icon>no_encryption</mat-icon> Take it off</button>
+                  }
+                </div>
+              }
+            </div>
           </div>
         </section>
 
@@ -361,6 +466,19 @@ export class RemoveIdCardDialog {
         font-size: 40px;
       }
     }
+    .held {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 6px 0;
+      border-bottom: 1px solid var(--mat-sys-outline-variant);
+
+      .amount {
+        margin-left: auto;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+    }
     .card-actions {
       display: flex;
       flex-wrap: wrap;
@@ -413,7 +531,13 @@ export class EmployeeProfilePage {
   protected readonly approvals = inject(Approvals);
   protected readonly pendingLabel = pendingLabel;
 
+  private readonly custodyApi = inject(CustodyApi);
+
   readonly employeeId = input.required<string>();
+  protected readonly custody = signal<CustodyItem[]>([]);
+  protected readonly portalAddress = signal<string | null>(null);
+  // A PIN is a manager's to set.
+  protected readonly canSetPin = this.approvals.canApprove;
 
   protected readonly employee = signal<Employee | null>(null);
   protected readonly departments = signal<Department[]>([]);
@@ -494,6 +618,35 @@ export class EmployeeProfilePage {
       data: { name: employee.name, fileName, fetch: () => this.api.idPhoto(employee.id) },
       maxWidth: '95vw',
     });
+  }
+
+  protected async setPin(employee: Employee): Promise<void> {
+    const pin = await firstValueFrom(
+      this.dialog
+        .open<PinDialog, { name: string; mobile: string; hasPin: boolean }, string>(PinDialog, {
+          data: { name: employee.name, mobile: employee.mobileNumber ?? '', hasPin: !!employee.hasPin },
+          width: '440px',
+        })
+        .afterClosed(),
+    );
+    if (!pin) {
+      return;
+    }
+    try {
+      this.employee.set(await firstValueFrom(this.api.setPin(employee.id, pin)));
+      this.notify.info(`${employee.name}’s portal PIN saved.`);
+    } catch (error) {
+      this.notify.error(error, 'The PIN could not be saved.');
+    }
+  }
+
+  protected async removePin(employee: Employee): Promise<void> {
+    try {
+      this.employee.set(await firstValueFrom(this.api.removePin(employee.id)));
+      this.notify.info(`${employee.name} can no longer sign in to the portal.`);
+    } catch (error) {
+      this.notify.error(error, 'The PIN could not be taken off.');
+    }
   }
 
   // Checked here first, so a file the till would refuse is said at once; the picker cleared, so
@@ -580,6 +733,18 @@ export class EmployeeProfilePage {
       this.error.set(errorMessage(error, 'The employee could not be loaded.'));
     } finally {
       this.loading.set(false);
+    }
+    // Only a help: the profile stands without them.
+    try {
+      this.custody.set(await firstValueFrom(this.custodyApi.employeeCustody(id)));
+    } catch {
+      this.custody.set([]);
+    }
+    try {
+      const where = await firstValueFrom(this.api.deviceConnection());
+      this.portalAddress.set(where.portalPort && where.addresses.length ? `http://${where.addresses[0]}:${where.portalPort}/portal` : null);
+    } catch {
+      this.portalAddress.set(null);
     }
   }
 }

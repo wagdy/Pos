@@ -124,6 +124,7 @@ internal sealed class ApproveRequestHandler(
     CategoryDeleter categoryDeleter,
     EmployeeWriter employees,
     HrAdvanceWriter hrAdvances,
+    Custody.CustodyWriter custody,
     IRawMaterialRepository materials,
     IStockMovementRepository movements,
     IUnitOfWork unitOfWork) : IRequestHandler<ApproveRequestCommand, ApprovalRequestDto>
@@ -167,6 +168,11 @@ internal sealed class ApproveRequestHandler(
             // An advance paid outside the till, recorded in HR only.
             case (ApprovalAction.Create, ApprovalModule.Advance):
                 await hrAdvances.ApplyAsync(approval.RecordId, ApprovalPayload.Read<HrAdvanceInput>(approval), approval.RequestedBy, request.StaffName, cancellationToken);
+                break;
+
+            // An asset added or changed, or a custody voucher, as asked; by who asked.
+            case (_, ApprovalModule.Custody):
+                await custody.ApplyAsync(approval.RecordId, ApprovalPayload.Read<Custody.CustodyRequest>(approval), approval.RequestedBy, cancellationToken);
                 break;
 
             case (ApprovalAction.Create, ApprovalModule.Treasury):

@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using OtantikPos.Hr.Domain.Attendance;
+using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
 using OtantikPos.Hr.Domain.Payroll;
 
@@ -36,8 +37,76 @@ internal sealed class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
         // One employee to a user number on the device, and to a till account.
         builder.HasIndex(e => e.DeviceUserId).IsUnique().HasFilter("\"DeviceUserId\" IS NOT NULL");
         builder.HasIndex(e => e.StaffMemberId).IsUnique().HasFilter("\"StaffMemberId\" IS NOT NULL");
-        // One employee to an ID card.
+        // One employee to an ID card, and to a mobile number: the portal signs in by it.
         builder.HasIndex(e => e.NationalId).IsUnique().HasFilter("\"NationalId\" IS NOT NULL");
+        builder.HasIndex(e => e.MobileNumber).IsUnique().HasFilter("\"MobileNumber\" IS NOT NULL");
+        builder.Property(e => e.PinHash).HasMaxLength(200);
+        builder.Ignore(e => e.HasPin);
+    }
+}
+
+internal sealed class AssetCategoryConfiguration : IEntityTypeConfiguration<AssetCategory>
+{
+    public void Configure(EntityTypeBuilder<AssetCategory> builder)
+    {
+        builder.ToTable("AssetCategories", NodeDbContext.HrSchema);
+        builder.Property(c => c.Name).HasMaxLength(AssetCategory.MaxNameLength);
+        builder.HasIndex(c => c.Name).IsUnique();
+    }
+}
+
+internal sealed class AssetItemConfiguration : IEntityTypeConfiguration<AssetItem>
+{
+    public void Configure(EntityTypeBuilder<AssetItem> builder)
+    {
+        builder.ToTable("AssetItems", NodeDbContext.HrSchema, t =>
+        {
+            t.HasCheckConstraint("CK_AssetItems_Quantity", "\"Quantity\" >= 0");
+            // Bought on an invoice: its line said; entered in HR: none.
+            t.HasCheckConstraint(
+                "CK_AssetItems_Source",
+                "(\"Origin\" = 'FinancialPurchase') = (\"SourceInvoiceId\" IS NOT NULL AND \"SourceInvoiceLineId\" IS NOT NULL)");
+        });
+        builder.Property(a => a.Name).HasMaxLength(AssetItem.MaxNameLength);
+        builder.Property(a => a.Notes).HasMaxLength(AssetItem.MaxNotesLength);
+        builder.Property(a => a.CreatedBy).HasMaxLength(200);
+        builder.Property(a => a.UnitCost).HasPrecision(18, 2);
+        builder.Property(a => a.Origin).IsEnumName();
+        builder.Property(a => a.Status).IsEnumName();
+        builder.Ignore(a => a.TotalCost);
+        builder.Ignore(a => a.IsGone);
+        builder.HasOne<AssetCategory>().WithMany().HasForeignKey(a => a.CategoryId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<Employee>().WithMany().HasForeignKey(a => a.EmployeeId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<OtantikPos.Inventory.Domain.Purchases.PurchaseInvoice>().WithMany().HasForeignKey(a => a.SourceInvoiceId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(a => a.EmployeeId);
+        // A posted line makes one asset, however often it is read.
+        builder.HasIndex(a => a.SourceInvoiceLineId).IsUnique().HasFilter("\"SourceInvoiceLineId\" IS NOT NULL");
+    }
+}
+
+internal sealed class AssetTransactionConfiguration : IEntityTypeConfiguration<AssetTransaction>
+{
+    public void Configure(EntityTypeBuilder<AssetTransaction> builder)
+    {
+        builder.ToTable("AssetTransactions", NodeDbContext.HrSchema, t =>
+        {
+            t.HasCheckConstraint("CK_AssetTransactions_Quantity", "\"Quantity\" > 0");
+            // A check-out says why; a check-in, nothing.
+            t.HasCheckConstraint("CK_AssetTransactions_Reason", "(\"Type\" = 'CheckOut') = (\"Reason\" IS NOT NULL)");
+        });
+        builder.Property(t => t.Type).IsEnumName();
+        builder.Property(t => t.Reason).IsEnumName();
+        builder.Property(t => t.Notes).HasMaxLength(AssetItem.MaxNotesLength);
+        builder.Property(t => t.RecordedBy).HasMaxLength(200);
+        builder.Property(t => t.UnitCost).HasPrecision(18, 2);
+        builder.Ignore(t => t.Cost);
+        builder.Ignore(t => t.RoutedToWaste);
+        builder.HasOne<AssetItem>().WithMany().HasForeignKey(t => t.AssetItemId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<Employee>().WithMany().HasForeignKey(t => t.EmployeeId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(t => new { t.AssetItemId, t.Date });
+        builder.HasIndex(t => t.Date);
+        // The breakage entry it made (inventory.BreakageEntries names it back, with a key).
+        builder.HasIndex(t => t.WasteEntryId).IsUnique().HasFilter("\"WasteEntryId\" IS NOT NULL");
     }
 }
 

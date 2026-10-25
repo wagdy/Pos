@@ -301,6 +301,13 @@ public sealed class InventoryController(ISender sender) : ControllerBase
     public Task<ExpenseItemDto> SaveExpenseItem(Guid expenseItemId, SaveExpenseItemRequest request, CancellationToken cancellationToken) =>
         sender.Send(new SaveExpenseItemCommand(expenseItemId, request.Name, request.CategoryId, request.NameAr, request.Unit), cancellationToken);
 
+    // Bought as an asset of a custody category (each posted line of it one in Custody & Assets),
+    // or with none, a plain expense again.
+    [HttpPut("expense-items/{expenseItemId:guid}/asset-category")]
+    [Authorize(Policy = Permissions.InventoryManage)]
+    public Task<ExpenseItemDto> MarkExpenseItemAsAsset(Guid expenseItemId, ExpenseAssetCategoryRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new MarkExpenseItemAsAssetCommand(expenseItemId, request.AssetCategoryId), cancellationToken);
+
     // Deleted if it is on no invoice, archived if it is: the answer says which.
     [HttpDelete("expense-items/{expenseItemId:guid}")]
     [Authorize(Policy = Permissions.InventoryManage)]
@@ -643,6 +650,8 @@ public sealed record SaveSupplierRequest(string Name, string? ContactPerson = nu
 public sealed record SavePurchaseCategoryRequest(string Name, string? NameAr = null, ExpenseLine? ExpenseLine = null, CategoryKind? Kind = null);
 
 public sealed record SaveExpenseItemRequest(string Name, Guid? CategoryId = null, string? NameAr = null, string? Unit = null);
+
+public sealed record ExpenseAssetCategoryRequest(Guid? AssetCategoryId);
 
 public sealed record DeletePurchaseCategoryRequest(
     Guid RequestId,

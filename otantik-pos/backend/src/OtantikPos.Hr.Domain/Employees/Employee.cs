@@ -60,6 +60,13 @@ public sealed partial class Employee : AggregateRoot
     public const int MaxIdPhotoBytes = 5 * 1024 * 1024;
     public const int MaxIdPhotoFileNameLength = 200;
 
+    // The self-service portal's PIN: 4 to 6 digits. A PIN has few possibilities, so guessing has
+    // to be slow: five misses lock it for five minutes, as a till PIN does.
+    public const int MinPinLength = 4;
+    public const int MaxPinLength = 6;
+    public const int MaxFailedPinAttempts = 5;
+    public static readonly TimeSpan PinLockout = TimeSpan.FromMinutes(5);
+
     // A photo (JPEG, PNG or WebP) or a PDF of their ID card.
     public static readonly IReadOnlySet<string> IdPhotoTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -152,6 +159,14 @@ public sealed partial class Employee : AggregateRoot
     public bool IsActive { get; private set; }
 
     public DateTime CreatedAtUtc { get; private set; }
+
+    // Their PIN for the self-service portal (البوابة), hashed: never kept, nor shown, as typed. They
+    // sign in with their mobile number and it. None until a manager sets one.
+    public string? PinHash { get; private set; }
+    public DateTime? PinSetAtUtc { get; private set; }
+    public int FailedPinAttempts { get; private set; }
+    public DateTime? PinLockedUntilUtc { get; private set; }
+    public bool HasPin => PinHash is not null;
 
     public decimal DailyRate => IsDaily ? DailyWage : MonthlySalary / PayDaysInMonth;
     public decimal HourlyRate => DailyRate / ShiftHours;
@@ -293,6 +308,62 @@ public sealed partial class Employee : AggregateRoot
         IdPhotoBytes = null;
         IdPhotoUploadedAtUtc = null;
         IdPhotoUploadedBy = null;
+    }
+
+    // A mobile number as typed, as it is kept (01012345678); null when it cannot be one. What the
+    // portal looks them up by.
+    public static string? Mobile(string? typed) => Digits(typed, "()") is { } number && MobilePattern().IsMatch(number) ? number : null;
+
+    // A PIN as typed, Arabic digits as ASCII ones: what is hashed. Refused unless 4 to 6 digits.
+    public static string Pin(string? typed)
+    {
+        var pin = Digits(typed) ?? string.Empty;
+        if (pin.Length is < MinPinLength or > MaxPinLength || !pin.All(char.IsAsciiDigit))
+            throw new DomainException($"A PIN is {MinPinLength} to {MaxPinLength} digits.");
+        return pin;
+    }
+
+    // A new PIN, hashed by the caller; a lockout cleared with it, so a manager setting one is how
+    // someone locked out gets back in before the five minutes are up. They need a mobile number
+    // to sign in with.
+    public void SetPinHash(string pinHash)
+    {
+        if (string.IsNullOrWhiteSpace(pinHash))
+            throw new DomainException("A PIN is kept hashed.");
+        if (MobileNumber is null)
+            throw new DomainException("Enter their mobile number first: they sign in to the portal with it.");
+        PinHash = pinHash;
+        PinSetAtUtc = DateTime.UtcNow;
+        FailedPinAttempts = 0;
+        PinLockedUntilUtc = null;
+    }
+
+    public void ClearPin()
+    {
+        PinHash = null;
+        PinSetAtUtc = null;
+        FailedPinAttempts = 0;
+        PinLockedUntilUtc = null;
+    }
+
+    public bool IsPinLockedAt(DateTime utcNow) => PinLockedUntilUtc > utcNow;
+
+    // A wrong PIN: the fifth in a row locks it for five minutes.
+    public void PinRefused(DateTime utcNow)
+    {
+        if (++FailedPinAttempts < MaxFailedPinAttempts)
+            return;
+        FailedPinAttempts = 0;
+        PinLockedUntilUtc = utcNow + PinLockout;
+    }
+
+    // Signed in: the misses forgotten. With a rehash, the PIN kept again under a newer hash.
+    public void PinAccepted(string? rehashed = null)
+    {
+        FailedPinAttempts = 0;
+        PinLockedUntilUtc = null;
+        if (rehashed is not null)
+            PinHash = rehashed;
     }
 
     public void LinkStaff(string? staffMemberId) =>

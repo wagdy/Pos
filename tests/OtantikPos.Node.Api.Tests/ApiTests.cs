@@ -1033,11 +1033,12 @@ public class ApiTests
             .Order(StringComparer.Ordinal)
             .ToList();
         // The attendance device's ADMS door cannot sign in: it is checked by the device's serial
-        // number, refused until a manager approves it (HrApiTests).
+        // number, refused until a manager approves it (HrApiTests). The employee portal's sign-in
+        // is its own (CustodyApiTests).
         Assert.Equal(
             [
                 "* /health", "* /health/ready", "* {*path:nonfile}", "GET api/auth/staff", "GET iclock/cdata", "GET iclock/getrequest",
-                "POST api/auth/sign-in", "POST iclock/cdata", "POST iclock/devicecmd",
+                "POST api/auth/employee-login", "POST api/auth/sign-in", "POST iclock/cdata", "POST iclock/devicecmd",
             ],
             open);
     }

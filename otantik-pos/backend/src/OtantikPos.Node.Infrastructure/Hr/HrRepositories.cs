@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using OtantikPos.Hr.Domain;
 using OtantikPos.Hr.Domain.Attendance;
+using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
 using OtantikPos.Hr.Domain.Payroll;
 using OtantikPos.Inventory.Application.Hr;
@@ -24,11 +25,78 @@ internal sealed class EmployeeRepository(NodeDbContext db) : IEmployeeRepository
     public Task<Employee?> GetByNationalIdAsync(string nationalId, CancellationToken cancellationToken = default) =>
         db.Employees.AsNoTracking().FirstOrDefaultAsync(e => e.NationalId == nationalId, cancellationToken);
 
+    public Task<Employee?> GetByMobileNumberAsync(string mobileNumber, CancellationToken cancellationToken = default) =>
+        db.Employees.FirstOrDefaultAsync(e => e.MobileNumber == mobileNumber, cancellationToken);
+
     public async Task<IReadOnlyList<Employee>> GetInDepartmentAsync(Guid departmentId, CancellationToken cancellationToken = default) =>
         await db.Employees.Where(e => e.DepartmentId == departmentId).ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyList<Employee>> GetWithRoleAsync(Guid jobRoleId, CancellationToken cancellationToken = default) =>
         await db.Employees.Where(e => e.JobRoleId == jobRoleId).ToListAsync(cancellationToken);
+}
+
+internal sealed class AssetCategoryRepository(NodeDbContext db) : IAssetCategoryRepository
+{
+    public Task<AssetCategory?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.AssetCategories.SingleOrDefaultAsync(c => c.Id == id, cancellationToken);
+
+    public void Add(AssetCategory aggregate) => db.AssetCategories.Add(aggregate);
+
+    public void Remove(AssetCategory category) => db.AssetCategories.Remove(category);
+
+    public async Task<IReadOnlyList<AssetCategory>> GetAllAsync(CancellationToken cancellationToken = default) =>
+        await db.AssetCategories.AsNoTracking().OrderBy(c => c.Name).ToListAsync(cancellationToken);
+}
+
+internal sealed class AssetItemRepository(NodeDbContext db) : IAssetItemRepository
+{
+    public Task<AssetItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.AssetItems.SingleOrDefaultAsync(a => a.Id == id, cancellationToken);
+
+    public void Add(AssetItem aggregate) => db.AssetItems.Add(aggregate);
+
+    public async Task<IReadOnlyList<AssetItem>> GetAllAsync(AssetOrigin? origin = null, CancellationToken cancellationToken = default) =>
+        await db.AssetItems.AsNoTracking().Where(a => origin == null || a.Origin == origin).OrderBy(a => a.Name).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<AssetItem>> GetInCustodyOfAsync(Guid employeeId, CancellationToken cancellationToken = default) =>
+        await db.AssetItems.AsNoTracking()
+            .Where(a => a.EmployeeId == employeeId && a.Status == AssetStatus.InCustody)
+            .OrderBy(a => a.Name)
+            .ToListAsync(cancellationToken);
+
+    public Task<bool> AnyInCategoryAsync(Guid categoryId, CancellationToken cancellationToken = default) =>
+        db.AssetItems.AnyAsync(a => a.CategoryId == categoryId, cancellationToken);
+
+    public Task<AssetItem?> GetBySourceLineAsync(Guid invoiceLineId, CancellationToken cancellationToken = default) =>
+        db.AssetItems.SingleOrDefaultAsync(a => a.SourceInvoiceLineId == invoiceLineId, cancellationToken);
+
+    public async Task<IReadOnlyList<AssetItem>> GetFromInvoiceAsync(Guid invoiceId, CancellationToken cancellationToken = default) =>
+        await db.AssetItems.Where(a => a.SourceInvoiceId == invoiceId).ToListAsync(cancellationToken);
+
+    public void Remove(AssetItem asset) => db.AssetItems.Remove(asset);
+}
+
+internal sealed class AssetTransactionRepository(NodeDbContext db) : IAssetTransactionRepository
+{
+    public Task<AssetTransaction?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.AssetTransactions.SingleOrDefaultAsync(t => t.Id == id, cancellationToken);
+
+    public void Add(AssetTransaction aggregate) => db.AssetTransactions.Add(aggregate);
+
+    public async Task<IReadOnlyList<AssetTransaction>> GetForAssetAsync(Guid assetItemId, CancellationToken cancellationToken = default) =>
+        await db.AssetTransactions.AsNoTracking()
+            .Where(t => t.AssetItemId == assetItemId)
+            .OrderByDescending(t => t.Date).ThenByDescending(t => t.RecordedAtUtc)
+            .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<AssetTransaction>> GetBetweenAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default) =>
+        await db.AssetTransactions.AsNoTracking()
+            .Where(t => t.Date >= from && t.Date <= to)
+            .OrderByDescending(t => t.Date).ThenByDescending(t => t.RecordedAtUtc)
+            .ToListAsync(cancellationToken);
+
+    public Task<bool> AnyForAssetAsync(Guid assetItemId, CancellationToken cancellationToken = default) =>
+        db.AssetTransactions.AnyAsync(t => t.AssetItemId == assetItemId, cancellationToken);
 }
 
 // An employee's ID card photo: one row per employee, its bytes alone.

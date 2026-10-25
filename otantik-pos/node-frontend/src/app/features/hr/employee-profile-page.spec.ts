@@ -7,12 +7,13 @@ import { of, throwError } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
 import { ApprovalRequest } from '../../core/costing/costing.api';
+import { CustodyApi, CustodyItem } from '../../core/custody/custody.api';
 import { Department, Employee, HrApi, PayrollFigures, PayrollSlip } from '../../core/hr/hr.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { BusinessDay, Treasury } from '../costing/financials';
 import { EmployeeDialog } from './employee-dialog';
-import { EmployeeProfilePage, IdCardDialog, RemoveIdCardDialog } from './employee-profile-page';
+import { EmployeeProfilePage, IdCardDialog, PinDialog, RemoveIdCardDialog } from './employee-profile-page';
 import { EmploymentDialog } from './employment-dialog';
 
 const text = (el: Element) => el.textContent!.replace(/\s+/g, ' ').trim();
@@ -54,6 +55,10 @@ describe('an employee’s profile', () => {
   const idPhoto = vi.fn();
   const uploadIdPhoto = vi.fn();
   const removeIdPhoto = vi.fn();
+  const setPin = vi.fn();
+  const removePin = vi.fn();
+  const employeeCustody = vi.fn();
+  const deviceConnection = vi.fn();
   const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
   const pending = signal<ApprovalRequest[]>([]);
@@ -70,7 +75,11 @@ describe('an employee’s profile', () => {
         provideRouter([]),
         {
           provide: HrApi,
-          useValue: { employee, departments: () => of(departments), payroll, idPhoto, uploadIdPhoto, removeIdPhoto },
+          useValue: { employee, departments: () => of(departments), payroll, idPhoto, uploadIdPhoto, removeIdPhoto, setPin, removePin, deviceConnection },
+        },
+        {
+          provide: CustodyApi,
+          useValue: { employeeCustody },
         },
         { provide: AuthService, useValue: { can: (p: string) => manage || p !== Permissions.HrManage } },
         { provide: Approvals, useValue: approvals },
@@ -102,6 +111,10 @@ describe('an employee’s profile', () => {
     idPhoto.mockReset().mockReturnValue(of(new Blob(['jpeg'], { type: 'image/jpeg' })));
     uploadIdPhoto.mockReset();
     removeIdPhoto.mockReset();
+    setPin.mockReset();
+    removePin.mockReset();
+    employeeCustody.mockReset().mockReturnValue(of([]));
+    deviceConnection.mockReset().mockReturnValue(of({ devicePort: 5082, portalPort: 5083, addresses: ['192.168.1.57'] }));
     open.mockReset();
     notify.info.mockReset();
     notify.error.mockReset();
@@ -143,7 +156,7 @@ describe('an employee’s profile', () => {
     });
     expect(cell(el.querySelector('.id-card .empty')!)).toBe('badge No photo of their ID card yet.');
     expect(idPhoto).not.toHaveBeenCalled();
-    expect([...el.querySelectorAll('.card-actions button')].map(text)).toEqual(['upload Upload رفع']);
+    expect([...el.querySelectorAll('.id-card .card-actions button')].map(text)).toEqual(['upload Upload رفع']);
   });
 
   it('embeds the business month’s payslip, a month before at a time, and never past this one', async () => {
@@ -257,7 +270,7 @@ describe('an employee’s profile', () => {
     const { el } = await render(false);
 
     expect(el.querySelectorAll('.profile-toolbar > button').length).toBe(0);
-    expect([...el.querySelectorAll('.card-actions button')].map(text)).toEqual(['zoom_in View larger']);
+    expect([...el.querySelectorAll('.id-card .card-actions button')].map(text)).toEqual(['zoom_in View larger']);
     expect(el.querySelector('.id-card app-paper-preview img')).not.toBeNull();
   });
 
@@ -267,5 +280,67 @@ describe('an employee’s profile', () => {
 
     expect(el.querySelector('p.error')).not.toBeNull();
     expect(el.querySelector('app-payslip-page')).toBeNull();
+  });
+
+  it('lists what is in their custody, and since when', async () => {
+    const plates: CustodyItem = {
+      since: '2026-10-20',
+      asset: {
+        id: 'plates', name: 'Dinner plates', categoryId: 't', categoryName: 'Tableware', isConsumable: true, unitCost: 35, quantity: 37, totalCost: 1_295,
+        employeeId: 'hassan', employeeName: 'Hassan Mahmoud Ali', origin: 'HrManual', status: 'InCustody', sourceInvoiceId: null, notes: null,
+        createdBy: 'Omar', createdAtUtc: '2026-10-20T09:00:00Z',
+      },
+    };
+    employeeCustody.mockReturnValue(of([plates]));
+    const { el } = await render();
+
+    expect(employeeCustody).toHaveBeenCalledWith('hassan');
+    expect([...el.querySelectorAll('.custody .held')].map(cell)).toEqual(['Dinner plates × 37 Tableware · since 20 Oct 2026 L.E 1,295.00']);
+    expect(el.querySelector('.custody a')!.getAttribute('href')).toBe('/custody/assets');
+  });
+
+  it('sets, changes and takes off their portal PIN, a manager’s, and says where the portal is', async () => {
+    employee.mockReturnValue(of({ ...hassan, hasPin: false, pinSetAtUtc: null }));
+    const { el, page, refresh } = await render();
+    const pin = () => el.querySelector('.card.pin')!;
+    await refresh();
+
+    expect(cell(pin())).toContain('No PIN yet: they cannot sign in to the portal.');
+    expect(cell(pin())).toContain('On the restaurant\'s Wi-Fi: http://192.168.1.57:5083/portal');
+    expect([...pin().querySelectorAll('button')].map(text)).toEqual(['password Set a PIN الرقم السري']);
+
+    open.mockReturnValue({ afterClosed: () => of('2468') });
+    setPin.mockReturnValue(of({ ...hassan, hasPin: true, pinSetAtUtc: '2026-10-25T10:00:00Z' }));
+    await page['setPin'](page['employee']());
+    expect(open.mock.lastCall![0]).toBe(PinDialog);
+    expect(open.mock.lastCall![1].data).toEqual({ name: 'Hassan Mahmoud Ali', mobile: '01012345678', hasPin: false });
+    expect(setPin).toHaveBeenCalledWith('hassan', '2468');
+    await refresh();
+    expect(cell(pin())).toContain('A PIN is set, on 25 Oct 2026');
+    expect([...pin().querySelectorAll('button')].map(text)).toEqual(['password Change PIN الرقم السري', 'no_encryption Take it off']);
+
+    // Cancelled: nothing sent.
+    open.mockReturnValue({ afterClosed: () => of(undefined) });
+    await page['setPin'](page['employee']());
+    expect(setPin).toHaveBeenCalledTimes(1);
+
+    removePin.mockReturnValue(of({ ...hassan, hasPin: false, pinSetAtUtc: null }));
+    await page['removePin'](page['employee']());
+    expect(removePin).toHaveBeenCalledWith('hassan');
+    expect(notify.info).toHaveBeenLastCalledWith('Hassan Mahmoud Ali can no longer sign in to the portal.');
+  });
+
+  it('asks for a mobile number before a PIN, and leaves the PIN to a manager', async () => {
+    employee.mockReturnValue(of({ ...hassan, mobileNumber: null }));
+    const { el } = await render();
+    expect(cell(el.querySelector('.card.pin')!)).toContain('Enter their mobile number first');
+    expect(el.querySelectorAll('.card.pin button').length).toBe(0);
+
+    TestBed.resetTestingModule();
+    approvals.canApprove.set(false);
+    employee.mockReturnValue(of(hassan));
+    const accountant = await render();
+    expect(accountant.el.querySelectorAll('.card.pin button').length).toBe(0);
+    approvals.canApprove.set(true);
   });
 });

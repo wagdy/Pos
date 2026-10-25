@@ -316,7 +316,11 @@ public sealed record PostPurchaseInvoiceCommand(Guid InvoiceId, string StaffName
 // Posting an invoice: its stock in and its payment settled, for an invoice posted on its own and for
 // each invoice of a daily batch alike. Tracked, for the caller to save.
 internal sealed class InvoicePoster(
-    IRawMaterialRepository materials, IStockMovementRepository movements, IApprovalRequestRepository requests, TreasuryWriter treasury)
+    IRawMaterialRepository materials,
+    IStockMovementRepository movements,
+    IApprovalRequestRepository requests,
+    TreasuryWriter treasury,
+    Custody.PurchasedAssets assets)
 {
     public async Task PostAsync(PurchaseInvoice invoice, string staffName, string staffId, bool canApprove, CancellationToken cancellationToken)
     {
@@ -326,6 +330,8 @@ internal sealed class InvoicePoster(
             : await materials.GetRequiredByIdsAsync(materialIds, cancellationToken);
         foreach (var movement in invoice.Post(byId, staffName))
             movements.Add(movement);
+        // Its lines of expenses bought as assets: in Custody & Assets, in the store.
+        await assets.MakeAsync(invoice, staffName, cancellationToken);
         await treasury.SettleAsync(invoice, Guid.NewGuid(), staffId, staffName, canApprove, requests, cancellationToken);
     }
 }

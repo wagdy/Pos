@@ -35,5 +35,28 @@ public sealed class TokenService(IOptions<AuthOptions> options, TimeProvider tim
         return (token, expiresAtUtc);
     }
 
+    // An employee's, for the self-service portal: their id, the role Employee, and when their PIN
+    // was set. A shift's length, as a till's.
+    public (string Token, DateTime ExpiresAtUtc) IssueEmployee(Guid employeeId, string name, DateTime pinSetAtUtc)
+    {
+        var expiresAtUtc = time.GetUtcNow().UtcDateTime.AddHours(options.Value.TokenLifetimeHours);
+        var token = Handler.CreateToken(new SecurityTokenDescriptor
+        {
+            Issuer = Issuer,
+            Audience = Audience,
+            Expires = expiresAtUtc,
+            Subject = new ClaimsIdentity(
+            [
+                new Claim(StaffClaims.Id, employeeId.ToString()),
+                new Claim(StaffClaims.Name, name),
+                new Claim(StaffClaims.Role, PortalClaims.Role),
+                new Claim(PortalClaims.PinSetAt, pinSetAtUtc.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            ]),
+            SigningCredentials = new SigningCredentials(SigningKey(options.Value), SecurityAlgorithms.HmacSha256),
+        });
+
+        return (token, expiresAtUtc);
+    }
+
     public static SymmetricSecurityKey SigningKey(AuthOptions options) => new(Encoding.UTF8.GetBytes(options.SigningKey));
 }

@@ -8,9 +8,11 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatSelectModule } from '@angular/material/select';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { CostingApi, ExpenseItem } from '../../core/costing/costing.api';
+import { AssetCategory, CustodyApi } from '../../core/custody/custody.api';
 import { errorMessage } from '../../core/http/error-message';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
@@ -19,7 +21,9 @@ import { ExpenseItemDialog, ExpenseItemDialogData } from './expense-item-dialog'
 // The expense items (المصروفات العمومية): what is bought but never stock (cleaning supplies,
 // repairs, bills), each under a category that says where it counts in the profit and loss. They
 // never appear on the stock list or in recipes. One on an invoice is archived rather than
-// deleted, as a supplier is; either way it is asked first, in the row.
+// deleted, as a supplier is; either way it is asked first, in the row. One can be bought as an
+// asset (كأصل) of a custody category: each posted invoice line of it is then an asset in Custody &
+// Assets, in the store. The column shows for whoever sees Custody.
 @Component({
   selector: 'app-expense-items-page',
   imports: [
@@ -31,6 +35,7 @@ import { ExpenseItemDialog, ExpenseItemDialogData } from './expense-item-dialog'
     MatIconModule,
     MatInputModule,
     MatProgressBarModule,
+    MatSelectModule,
     MoneyPipe,
     RouterLink,
   ],
@@ -68,6 +73,9 @@ import { ExpenseItemDialog, ExpenseItemDialogData } from './expense-item-dialog'
               <th class="num">Invoices<span class="ar">الفواتير</span></th>
               <th class="num">Spent<span class="ar">إجمالي المصروف</span></th>
               <th>Last invoice<span class="ar">آخر فاتورة</span></th>
+              @if (assetCategories(); as kinds) {
+                <th>Bought as an asset<span class="ar">يُسجل كأصل</span></th>
+              }
               <th class="num"><span class="visually-hidden">Actions</span></th>
             </tr>
           </thead>
@@ -93,6 +101,17 @@ import { ExpenseItemDialog, ExpenseItemDialogData } from './expense-item-dialog'
                 <td class="num">{{ s.invoices }}</td>
                 <td class="num">{{ s.postedTotal | money }}</td>
                 <td class="nowrap">{{ s.lastPostedAtUtc ? (s.lastPostedAtUtc | date: 'd MMM y') : '—' }}</td>
+                @if (assetCategories(); as kinds) {
+                  <td>
+                    <mat-select class="asset-kind" [ngModel]="s.assetCategoryId ?? null" (ngModelChange)="markAsAsset(s, $event)" [disabled]="s.isArchived || saving()"
+                      [attr.aria-label]="s.name + ' bought as an asset'" placeholder="Not an asset">
+                      <mat-option [value]="null">Not an asset</mat-option>
+                      @for (k of kinds; track k.id) {
+                        <mat-option [value]="k.id">{{ k.name }}</mat-option>
+                      }
+                    </mat-select>
+                  </td>
+                }
                 <td class="num actions">
                   @if (s.isArchived) {
                     <button mat-button (click)="restore(s)" [disabled]="saving()"><mat-icon>unarchive</mat-icon> Restore</button>
@@ -107,7 +126,7 @@ import { ExpenseItemDialog, ExpenseItemDialogData } from './expense-item-dialog'
               </tr>
               @if (confirming() === s.id) {
                 <tr class="confirm-row">
-                  <td colspan="7">
+                  <td [attr.colspan]="assetCategories() ? 8 : 7">
                     <div class="confirm">
                       <span class="ask">
                         @if (s.invoices) {
@@ -128,7 +147,7 @@ import { ExpenseItemDialog, ExpenseItemDialogData } from './expense-item-dialog'
               }
             } @empty {
               <tr>
-                <td colspan="7" class="muted">
+                <td [attr.colspan]="assetCategories() ? 8 : 7" class="muted">
                   {{ items().length ? 'No expense item matches.' : 'No expense items yet. Add one here, such as Electricity or Cleaning supplies, or type a new name on an invoice.' }}
                 </td>
               </tr>
@@ -140,6 +159,10 @@ import { ExpenseItemDialog, ExpenseItemDialogData } from './expense-item-dialog'
   `,
   styleUrl: './costing.scss',
   styles: `
+    .asset-kind {
+      min-width: 150px;
+      font: var(--mat-sys-body-medium);
+    }
     .search {
       min-width: 240px;
     }
@@ -213,8 +236,34 @@ export class ExpenseItemsPage {
     );
   });
 
+  private readonly custody = inject(CustodyApi);
+  // Custody's categories; none for whoever does not see Custody, and the column is not shown.
+  protected readonly assetCategories = signal<AssetCategory[] | null>(null);
+
   constructor() {
     void this.load();
+    firstValueFrom(this.custody.categories()).then(
+      (kinds) => this.assetCategories.set(kinds),
+      () => this.assetCategories.set(null),
+    );
+  }
+
+  protected async markAsAsset(item: ExpenseItem, assetCategoryId: string | null): Promise<void> {
+    this.saving.set(true);
+    try {
+      const saved = await firstValueFrom(this.api.markExpenseItemAsAsset(item.id, assetCategoryId));
+      this.items.update((all) => all.map((i) => (i.id === saved.id ? saved : i)));
+      this.notify.info(
+        assetCategoryId
+          ? `${item.name} is bought as an asset: each invoice line of it posted from now is one in Custody & Assets.`
+          : `${item.name} is a plain expense again.`,
+      );
+    } catch (error) {
+      this.notify.error(error, 'It could not be saved.');
+      await this.load();
+    } finally {
+      this.saving.set(false);
+    }
   }
 
   protected async add(): Promise<void> {
