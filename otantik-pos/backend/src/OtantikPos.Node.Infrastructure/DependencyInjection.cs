@@ -95,6 +95,12 @@ public static class DependencyInjection
         services.AddScoped<OtantikPos.Hr.Domain.IEmployeeIdPhotoStore, Hr.EmployeeIdPhotoStore>();
         services.AddScoped<OtantikPos.Hr.Domain.IAssetCategoryRepository, Hr.AssetCategoryRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IStaffHrAccessRepository, Hr.StaffHrAccessRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.ILeaveTypeRepository, Hr.LeaveTypeRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IEmployeeLeaveBalanceRepository, Hr.EmployeeLeaveBalanceRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.ILeaveRequestRepository, Hr.LeaveRequestRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IPerformanceKpiRepository, Hr.PerformanceKpiRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IPerformanceEvaluationRepository, Hr.PerformanceEvaluationRepository>();
+        services.AddScoped<OtantikPos.Hr.Domain.IDisciplinaryActionRepository, Hr.DisciplinaryActionRepository>();
         services.AddSingleton<OtantikPos.Inventory.Application.Hr.IPinHasher, Identity.PinHasher>();
         services.AddScoped<OtantikPos.Hr.Domain.IAssetItemRepository, Hr.AssetItemRepository>();
         services.AddScoped<OtantikPos.Hr.Domain.IAssetTransactionRepository, Hr.AssetTransactionRepository>();

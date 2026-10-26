@@ -8,7 +8,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { Observable, firstValueFrom } from 'rxjs';
 import { AuthService } from '../../core/auth/auth.service';
 import { Permissions } from '../../core/auth/permissions';
@@ -25,6 +25,7 @@ import { PaperPreview } from '../costing/invoice-paper';
 import { EmployeeDialog, EmployeeDialogData, idDigits } from './employee-dialog';
 import { EmploymentDialog, EmploymentDialogData } from './employment-dialog';
 import { PayslipPage } from './payslip-page';
+import { PerformanceSection } from './performance-section';
 
 // What an ID card can be uploaded as, and how large.
 const idPhotoTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
@@ -157,14 +158,15 @@ export class PinDialog {
 }
 
 // An employee's profile (ملف الموظف), opened from their row on Employees: who they are (their full
-// name, national ID, mobile, and their ID card's photo) and their work and pay, beside their payslip
+// name, national ID, mobile, and their ID card's photo), their work and pay, and their performance
+// and disciplinary record (PerformanceSection), beside their payslip
 // for the month as the Payroll tab has it (one under the other on a narrow screen). Edited with the Employees tab's own form; deactivated by
 // leaving, paid to their last day with nothing erased, and brought back the same way. A manager's
 // change at once, anyone else's waiting for a manager, the profile locked until then. The ID card
 // is uploaded, replaced or taken off by whoever manages HR, at once.
 @Component({
   selector: 'app-employee-profile-page',
-  imports: [DatePipe, MatButtonModule, MatIconModule, MatProgressBarModule, MatTooltipModule, MoneyPipe, PaperPreview, PayslipPage, RouterLink],
+  imports: [DatePipe, MatButtonModule, MatIconModule, MatProgressBarModule, MatTooltipModule, MoneyPipe, PaperPreview, PayslipPage, PerformanceSection, RouterLink],
   template: `
     <div class="toolbar profile-toolbar no-print">
       <a mat-button routerLink="/hr/employees"><mat-icon>arrow_back</mat-icon> Employees · الموظفين</a>
@@ -342,6 +344,10 @@ export class PinDialog {
                 </div>
               }
             </div>
+
+            <div class="card" id="performance">
+              <app-performance-section [employee]="e" (changed)="payslipKey.update((k) => k + 1)" />
+            </div>
           </div>
         </section>
 
@@ -354,7 +360,7 @@ export class PinDialog {
               <span class="month">{{ month() | date: 'MMMM y' }}</span>
               <button mat-icon-button (click)="moveMonth(1)" [disabled]="month() >= thisMonth()" aria-label="The month after"><mat-icon>chevron_right</mat-icon></button>
             </div>
-            <app-payslip-page [employeeId]="e.id" [month]="month()" [embedded]="true" />
+            <app-payslip-page [employeeId]="e.id" [month]="month()" [embedded]="true" [reloadKey]="payslipKey()" />
           </section>
         }
       </div>
@@ -490,6 +496,10 @@ export class PinDialog {
       gap: 8px;
       margin-top: 8px;
     }
+    /* Clear of the till's bar when scrolled to. */
+    #performance {
+      scroll-margin-top: 72px;
+    }
     .payslip-part app-payslip-page {
       display: block;
     }
@@ -538,6 +548,7 @@ export class EmployeeProfilePage {
   protected readonly pendingLabel = pendingLabel;
 
   private readonly custodyApi = inject(CustodyApi);
+  private readonly route = inject(ActivatedRoute);
 
   readonly employeeId = input.required<string>();
   protected readonly custody = signal<CustodyItem[]>([]);
@@ -553,6 +564,8 @@ export class EmployeeProfilePage {
   // The payslip's month (its first day); the business day's to start with, and none after it.
   protected readonly thisMonth = signal('');
   protected readonly month = signal('');
+  // Read again when a penalty deduction is issued or withdrawn on the profile.
+  protected readonly payslipKey = signal(0);
   protected readonly canManage = computed(() => this.auth.can(Permissions.HrManage));
   protected readonly asked = computed(() => {
     const e = this.employee();
@@ -751,6 +764,11 @@ export class EmployeeProfilePage {
       this.portalAddress.set(where.portalPort && where.addresses.length ? `http://${where.addresses[0]}:${where.portalPort}/portal` : null);
     } catch {
       this.portalAddress.set(null);
+    }
+    // Opened at #performance (Corrections' link to a disciplinary action): scrolled to once the
+    // cards above it are in.
+    if (this.route.snapshot.fragment === 'performance') {
+      setTimeout(() => document.getElementById('performance')?.scrollIntoView?.({ block: 'start' }));
     }
   }
 }

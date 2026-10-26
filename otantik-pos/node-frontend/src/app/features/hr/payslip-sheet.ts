@@ -3,11 +3,11 @@ import { Component, computed, input, output } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import { PayrollAdjustment, PayrollSlip, adjustmentLabels, duration } from '../../core/hr/hr.api';
+import { PayrollAdjustment, PayrollSlip, PayslipPenalty, adjustmentLabels, duration } from '../../core/hr/hr.api';
 import { MoneyPipe } from '../../core/ui/money.pipe';
 
 // A payslip as it reads (قسيمة الراتب): the formula line by line, from the base salary to the net
-// payable; the days it was worked out from; what is paid of it; and the incentives, allowances,
+// payable, its unpaid leave and disciplinary penalties day by day; the days it was worked out from; what is paid of it; and the incentives, allowances,
 // advances and salary paid in it. Read-only, but for voiding an incentive (canVoid): the Payroll
 // tab's slip and the employee portal's alike. What is put inside it (the Payroll tab's buttons)
 // comes between the slip and its lists.
@@ -101,10 +101,33 @@ import { MoneyPipe } from '../../core/ui/money.pipe';
             </th>
             <td>{{ f.absencePenalty | money }}</td>
           </tr>
-          @if (f.administrativePenalty) {
+          @if (unpaidLeave().deduction || unpaidLeave().days) {
+            <tr class="minus unpaid-leave">
+              <th>− Unpaid leave <span class="ar">إجازة بدون راتب</span>
+                <div class="how">{{ unpaidLeave().days }} {{ unpaidLeave().days === 1 ? 'day' : 'days' }} at {{ s.employee.dailyRate | money }}, approved leave not paid</div>
+                @if (unpaidLeave().dates.length) {
+                  <div class="how">{{ unpaidLeave().dates.join(', ') }}</div>
+                }
+              </th>
+              <td>{{ unpaidLeave().deduction | money }}</td>
+            </tr>
+          }
+          @if (hourPenalty()) {
             <tr class="minus">
               <th>− Administrative penalties <span class="ar">جزاءات إدارية</span><div class="how">{{ f.administrativePenaltyHours }} hours at {{ s.employee.hourlyRate | money }}</div></th>
-              <td>{{ f.administrativePenalty | money }}</td>
+              <td>{{ hourPenalty() | money }}</td>
+            </tr>
+          }
+          @if (moneyPenalties().total) {
+            <tr class="minus disciplinary">
+              <th>− Disciplinary penalties <span class="ar">خصم جزاءات تأديبية</span>
+                @for (p of moneyPenalties().lines; track $index) {
+                  <div class="how item"><span>{{ p.date | date: 'd MMM' }} · {{ p.reason }}</span><span>{{ p.amount | money }}</span></div>
+                } @empty {
+                  <div class="how">Penalty deductions of disciplinary actions, as issued</div>
+                }
+              </th>
+              <td>{{ moneyPenalties().total | money }}</td>
             </tr>
           }
           <tr class="total">
@@ -127,6 +150,9 @@ import { MoneyPipe } from '../../core/ui/money.pipe';
           <div><dt>Holidays worked</dt><dd>{{ f.holidaysWorked }}</dd></div>
         }
         <div><dt>Absent</dt><dd>{{ f.absentDays }}</dd></div>
+        @if (unpaidLeave().days) {
+          <div><dt>Unpaid leave</dt><dd>{{ unpaidLeave().days }}</dd></div>
+        }
         <div><dt>Suspended</dt><dd [class.warn]="f.missingPunchDays > 0">{{ f.missingPunchDays }}</dd></div>
         @if (f.openDays) {
           <div><dt>Not over yet</dt><dd>{{ f.openDays }}</dd></div>
@@ -236,6 +262,13 @@ import { MoneyPipe } from '../../core/ui/money.pipe';
         font: var(--mat-sys-body-small);
         color: var(--mat-sys-on-surface-variant);
       }
+      .how.item {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        max-width: 420px;
+        font-variant-numeric: tabular-nums;
+      }
       tr.minus td {
         color: var(--mat-sys-error);
       }
@@ -337,8 +370,40 @@ export class PayslipSheet {
   protected readonly labels = adjustmentLabels;
   protected readonly duration = duration;
 
+  // Unpaid leave's days, dated as the days stand now while they still add up to the slip's.
+  protected readonly unpaidLeave = computed(() => {
+    const s = this.slip();
+    const days = s.figures.unpaidLeaveDays ?? 0;
+    const dates = s.unpaidLeaveDays ?? [];
+    return {
+      days,
+      deduction: s.figures.unpaidLeaveDeduction ?? 0,
+      dates: dates.length === days ? dates.map((d) => dayMonth(d)) : [],
+    };
+  });
+
+  // The administrative penalties' hours at the hourly rate, the money ones apart.
+  protected readonly hourPenalty = computed(() => {
+    const f = this.slip().figures;
+    return Math.round((f.administrativePenalty - (f.administrativePenaltyAmounts ?? 0)) * 100) / 100;
+  });
+
+  // The disciplinary penalty deductions, one by one while they add up to the slip's.
+  protected readonly moneyPenalties = computed(() => {
+    const s = this.slip();
+    const total = s.figures.administrativePenaltyAmounts ?? 0;
+    const lines = (s.penalties ?? []).filter((p) => p.amount !== null && p.amount > 0) as (PayslipPenalty & { amount: number })[];
+    const sum = Math.round(lines.reduce((t, p) => t + p.amount, 0) * 100) / 100;
+    return { total, lines: sum === total ? lines : [] };
+  });
+
   protected readonly status = computed(() => {
     const s = this.slip().status;
     return s === 'Finalized' ? { en: 'Finalized', ar: 'نهائي' } : s === 'Draft' ? { en: 'Draft', ar: 'مسودة' } : { en: 'Not calculated', ar: 'لم يُحتسب' };
   });
+}
+
+// "12 Oct".
+function dayMonth(day: string): string {
+  return new Date(`${day}T12:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }

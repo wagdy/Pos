@@ -54,8 +54,9 @@ public sealed record PayrollFigures(
     int MissingPunchDays,
     int OpenDays,
     decimal DaysOffWorkedPay = 0,
-    // A manager's administrative penalties (جزاءات إدارية), in hours, and their deduction at the
-    // hourly rate.
+    // A manager's administrative penalties (جزاءات إدارية): in hours, and in money (a disciplinary
+    // action's deductions among them, AdministrativePenaltyAmounts); their deduction, the hours at
+    // the hourly rate and the amounts as they are.
     decimal AdministrativePenaltyHours = 0,
     decimal AdministrativePenalty = 0,
     // Public holidays worked (عطلات رسمية), and their holiday allowance.
@@ -63,10 +64,15 @@ public sealed record PayrollFigures(
     decimal HolidaysWorkedPay = 0,
     // How the base pay was made: a monthly salary's share, or a daily wage for each day worked.
     EmploymentType EmploymentType = EmploymentType.Monthly,
-    decimal DailyWage = 0)
+    decimal DailyWage = 0,
+    decimal AdministrativePenaltyAmounts = 0,
+    // Days of approved unpaid leave (إجازة بدون راتب), and a day's pay off for each: not absences.
+    // A daily worker is paid only the days they work, so theirs take nothing.
+    int UnpaidLeaveDays = 0,
+    decimal UnpaidLeaveDeduction = 0)
 {
     public decimal Gross => BaseSalary + Incentives + LeaveAllowances + DaysOffWorkedPay + HolidaysWorkedPay + OvertimePay;
-    public decimal Deductions => Advances + BroughtForward + LatenessPenalty + AbsencePenalty + AdministrativePenalty;
+    public decimal Deductions => Advances + BroughtForward + LatenessPenalty + AbsencePenalty + AdministrativePenalty + UnpaidLeaveDeduction;
     public decimal Net => Gross - Deductions;
     public decimal NetPayable => Net > 0 ? Net : 0;
     public decimal CarriedForward => Net < 0 ? -Net : 0;
@@ -74,7 +80,7 @@ public sealed record PayrollFigures(
     // What the month's work cost the restaurant: the pay less what was deducted for time not
     // worked and for penalties. Advances and last month's shortfall settle what was owed; they
     // cost nothing.
-    public decimal WagesCost => Gross - LatenessPenalty - AbsencePenalty - AdministrativePenalty;
+    public decimal WagesCost => Gross - LatenessPenalty - AbsencePenalty - AdministrativePenalty - UnpaidLeaveDeduction;
 }
 
 public static class PayrollCalculator
@@ -137,7 +143,9 @@ public static class PayrollCalculator
         var overtime = counted.Sum(d => d?.OvertimeMinutes ?? 0);
         var shortMinutes = counted.Sum(d => d is null ? 0 : CountedShortMinutes(d));
         var absent = daily ? 0 : Count(DayStatus.Absent);
+        var unpaidLeave = daily ? 0 : Count(DayStatus.UnpaidLeave);
         var penaltyHours = counted.Sum(d => d?.PenaltyHours ?? 0);
+        var penaltyAmounts = counted.Sum(d => d?.PenaltyAmount ?? 0);
         var daysOffWorkedPay = counted
             .Where(d => d?.Status == DayStatus.WorkedOnDayOff)
             .Sum(d => DayOffWorkedPay(employee, d!.WorkedMinutes));
@@ -165,11 +173,14 @@ public static class PayrollCalculator
             counted.Count(d => d is null || d.Status == DayStatus.Open),
             Money(daysOffWorkedPay),
             penaltyHours,
-            Money(penaltyHours * employee.HourlyRate),
+            Money(penaltyHours * employee.HourlyRate + penaltyAmounts),
             holidaysWorked.Count,
             Money(holidaysWorkedPay),
             employee.EmploymentType,
-            employee.DailyWage);
+            employee.DailyWage,
+            Money(penaltyAmounts),
+            unpaidLeave,
+            Money(unpaidLeave * employee.DailyRate));
     }
 
     private static decimal Money(decimal amount) => Math.Round(amount, 2, MidpointRounding.AwayFromZero);

@@ -4,6 +4,8 @@ using OtantikPos.Hr.Domain.Access;
 using OtantikPos.Hr.Domain.Attendance;
 using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
+using OtantikPos.Hr.Domain.Leaves;
+using OtantikPos.Hr.Domain.Performance;
 using OtantikPos.Hr.Domain.Payroll;
 using OtantikPos.Inventory.Application.Hr;
 using OtantikPos.Node.Infrastructure.Persistence;
@@ -265,6 +267,9 @@ internal sealed class DeviceUserRepository(NodeDbContext db) : IDeviceUserReposi
 
 internal sealed class DayMarkRepository(NodeDbContext db) : IDayMarkRepository
 {
+    public async Task<IReadOnlyList<DayMark>> GetForLeaveRequestAsync(Guid leaveRequestId, CancellationToken cancellationToken = default) =>
+        await db.DayMarks.Where(m => m.LeaveRequestId == leaveRequestId).OrderBy(m => m.Date).ToListAsync(cancellationToken);
+
     public Task<DayMark?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
         db.DayMarks.SingleOrDefaultAsync(m => m.Id == id, cancellationToken);
 
@@ -289,7 +294,10 @@ internal sealed class AdministrativePenaltyRepository(NodeDbContext db) : IAdmin
     public void Remove(AdministrativePenalty penalty) => db.AdministrativePenalties.Remove(penalty);
 
     public Task<AdministrativePenalty?> GetAsync(Guid employeeId, DateOnly date, CancellationToken cancellationToken = default) =>
-        db.AdministrativePenalties.SingleOrDefaultAsync(p => p.EmployeeId == employeeId && p.Date == date, cancellationToken);
+        db.AdministrativePenalties.SingleOrDefaultAsync(p => p.EmployeeId == employeeId && p.Date == date && p.DisciplinaryActionId == null, cancellationToken);
+
+    public Task<AdministrativePenalty?> GetForDisciplinaryActionAsync(Guid disciplinaryActionId, CancellationToken cancellationToken = default) =>
+        db.AdministrativePenalties.SingleOrDefaultAsync(p => p.DisciplinaryActionId == disciplinaryActionId, cancellationToken);
 
     public async Task<IReadOnlyList<AdministrativePenalty>> GetBetweenAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default) =>
         await db.AdministrativePenalties.AsNoTracking().Where(p => p.Date >= from && p.Date <= to).ToListAsync(cancellationToken);
@@ -407,4 +415,118 @@ internal sealed class AttendanceSettingsStore(NodeDbContext db) : IAttendanceSet
         settings.DoubleScanMinutes = policy.DoubleScanMinutes;
         await db.SaveChangesAsync(cancellationToken);
     }
+}
+
+internal sealed class LeaveTypeRepository(NodeDbContext db) : ILeaveTypeRepository
+{
+    public Task<LeaveType?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.LeaveTypes.SingleOrDefaultAsync(l => l.Id == id, cancellationToken);
+
+    public void Add(LeaveType aggregate) => db.LeaveTypes.Add(aggregate);
+
+    public void Remove(LeaveType type) => db.LeaveTypes.Remove(type);
+
+    public async Task<IReadOnlyList<LeaveType>> GetAllAsync(CancellationToken cancellationToken = default) =>
+        await db.LeaveTypes.AsNoTracking().OrderBy(l => l.Name).ToListAsync(cancellationToken);
+}
+
+internal sealed class EmployeeLeaveBalanceRepository(NodeDbContext db) : IEmployeeLeaveBalanceRepository
+{
+    public Task<EmployeeLeaveBalance?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.EmployeeLeaveBalances.SingleOrDefaultAsync(b => b.Id == id, cancellationToken);
+
+    public void Add(EmployeeLeaveBalance aggregate) => db.EmployeeLeaveBalances.Add(aggregate);
+
+    public Task<EmployeeLeaveBalance?> GetAsync(Guid employeeId, Guid leaveTypeId, int year, CancellationToken cancellationToken = default) =>
+        db.EmployeeLeaveBalances.SingleOrDefaultAsync(b => b.EmployeeId == employeeId && b.LeaveTypeId == leaveTypeId && b.Year == year, cancellationToken);
+
+    public async Task<IReadOnlyList<EmployeeLeaveBalance>> GetForYearAsync(int year, Guid? employeeId = null, CancellationToken cancellationToken = default) =>
+        await db.EmployeeLeaveBalances.AsNoTracking()
+            .Where(b => b.Year == year && (employeeId == null || b.EmployeeId == employeeId))
+            .ToListAsync(cancellationToken);
+
+    public Task<bool> AnyForTypeAsync(Guid leaveTypeId, CancellationToken cancellationToken = default) =>
+        db.EmployeeLeaveBalances.AnyAsync(b => b.LeaveTypeId == leaveTypeId, cancellationToken);
+}
+
+internal sealed class LeaveRequestRepository(NodeDbContext db) : ILeaveRequestRepository
+{
+    public Task<LeaveRequest?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.LeaveRequests.SingleOrDefaultAsync(r => r.Id == id, cancellationToken);
+
+    public void Add(LeaveRequest aggregate) => db.LeaveRequests.Add(aggregate);
+
+    public async Task<IReadOnlyList<LeaveRequest>> GetPendingAsync(CancellationToken cancellationToken = default) =>
+        await db.LeaveRequests.AsNoTracking()
+            .Where(r => r.Status == LeaveRequestStatus.Pending)
+            .OrderBy(r => r.RequestedAtUtc)
+            .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<LeaveRequest>> GetForEmployeeAsync(Guid employeeId, CancellationToken cancellationToken = default) =>
+        await db.LeaveRequests.AsNoTracking()
+            .Where(r => r.EmployeeId == employeeId)
+            .OrderByDescending(r => r.StartDate)
+            .ThenByDescending(r => r.RequestedAtUtc)
+            .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<LeaveRequest>> GetForYearAsync(int year, CancellationToken cancellationToken = default) =>
+        await db.LeaveRequests.AsNoTracking()
+            .Where(r => r.StartDate >= new DateOnly(year, 1, 1) && r.StartDate <= new DateOnly(year, 12, 31))
+            .OrderByDescending(r => r.StartDate).ThenByDescending(r => r.RequestedAtUtc)
+            .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<LeaveRequest>> GetOverlappingAsync(Guid employeeId, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default) =>
+        await db.LeaveRequests.AsNoTracking()
+            .Where(r => r.EmployeeId == employeeId
+                && (r.Status == LeaveRequestStatus.Pending || r.Status == LeaveRequestStatus.Approved)
+                && r.StartDate <= endDate
+                && (r.CancelledFrom == null ? r.EndDate : r.CancelledFrom.Value.AddDays(-1)) >= startDate)
+            .ToListAsync(cancellationToken);
+
+    public Task<bool> AnyForTypeAsync(Guid leaveTypeId, CancellationToken cancellationToken = default) =>
+        db.LeaveRequests.AnyAsync(r => r.LeaveTypeId == leaveTypeId, cancellationToken);
+}
+
+internal sealed class PerformanceKpiRepository(NodeDbContext db) : IPerformanceKpiRepository
+{
+    public Task<PerformanceKpi?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.PerformanceKpis.SingleOrDefaultAsync(k => k.Id == id, cancellationToken);
+
+    public void Add(PerformanceKpi aggregate) => db.PerformanceKpis.Add(aggregate);
+
+    public void Remove(PerformanceKpi kpi) => db.PerformanceKpis.Remove(kpi);
+
+    public async Task<IReadOnlyList<PerformanceKpi>> GetAllAsync(CancellationToken cancellationToken = default) =>
+        await db.PerformanceKpis.AsNoTracking().OrderBy(k => k.Name).ToListAsync(cancellationToken);
+}
+
+internal sealed class PerformanceEvaluationRepository(NodeDbContext db) : IPerformanceEvaluationRepository
+{
+    public Task<PerformanceEvaluation?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.PerformanceEvaluations.SingleOrDefaultAsync(e => e.Id == id, cancellationToken);
+
+    public void Add(PerformanceEvaluation aggregate) => db.PerformanceEvaluations.Add(aggregate);
+
+    public async Task<IReadOnlyList<PerformanceEvaluation>> GetForEmployeeAsync(Guid employeeId, CancellationToken cancellationToken = default) =>
+        await db.PerformanceEvaluations.AsNoTracking()
+            .Where(e => e.EmployeeId == employeeId)
+            .OrderByDescending(e => e.Date).ThenByDescending(e => e.RecordedAtUtc)
+            .ToListAsync(cancellationToken);
+
+    public Task<bool> AnyForKpiAsync(Guid kpiId, CancellationToken cancellationToken = default) =>
+        db.PerformanceEvaluations.AnyAsync(e => e.Scores.Any(s => s.KpiId == kpiId), cancellationToken);
+}
+
+internal sealed class DisciplinaryActionRepository(NodeDbContext db) : IDisciplinaryActionRepository
+{
+    public Task<DisciplinaryAction?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        db.DisciplinaryActions.SingleOrDefaultAsync(a => a.Id == id, cancellationToken);
+
+    public void Add(DisciplinaryAction aggregate) => db.DisciplinaryActions.Add(aggregate);
+
+    public async Task<IReadOnlyList<DisciplinaryAction>> GetForEmployeeAsync(Guid employeeId, CancellationToken cancellationToken = default) =>
+        await db.DisciplinaryActions.AsNoTracking()
+            .Where(a => a.EmployeeId == employeeId)
+            .OrderByDescending(a => a.Date).ThenByDescending(a => a.IssuedAtUtc)
+            .ToListAsync(cancellationToken);
 }

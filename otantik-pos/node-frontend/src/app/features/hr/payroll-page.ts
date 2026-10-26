@@ -23,7 +23,7 @@ import { DailyCostPage } from './daily-cost-page';
 // The monthly payroll (مسير الرواتب): every employee's pay for the month, each part of it a column,
 // as the formula adds them up:
 //   base salary + incentives + leave allowances + overtime − advances − last month's shortfall
-//   − deductions and penalties (lateness, absence, administrative penalties) = net payable.
+//   − deductions and penalties (lateness, absence, unpaid leave, administrative penalties) = net payable.
 // Above it, the month's total salaries before anything is deducted (إجمالي الرواتب).
 // The leave allowances are the ones entered and the days off worked, which earn theirs by
 // themselves.
@@ -135,7 +135,7 @@ import { DailyCostPage } from './daily-cost-page';
                   <td class="num minus">{{ f.advances | money }}</td>
                   <td class="num minus">{{ f.broughtForward | money }}</td>
                   <td class="num minus deductions">
-                    {{ f.latenessPenalty + f.absencePenalty + f.administrativePenalty | money }}
+                    {{ f.latenessPenalty + f.absencePenalty + f.administrativePenalty + (f.unpaidLeaveDeduction ?? 0) | money }}
                     @for (part of deductionParts(f); track part.label) {
                       <div class="muted small">{{ part.label }} {{ part.amount | money }}</div>
                     }
@@ -171,7 +171,7 @@ import { DailyCostPage } from './daily-cost-page';
                   <td class="num">{{ p.totals.overtimePay | money }}</td>
                   <td class="num">{{ p.totals.advances | money }}</td>
                   <td class="num">{{ p.totals.broughtForward | money }}</td>
-                  <td class="num deductions">{{ p.totals.latenessPenalties + p.totals.absencePenalties + p.totals.administrativePenalties | money }}</td>
+                  <td class="num deductions">{{ p.totals.latenessPenalties + p.totals.absencePenalties + p.totals.administrativePenalties + (p.totals.unpaidLeaveDeductions ?? 0) | money }}</td>
                   <td class="num">{{ p.totals.netPayable | money }}</td>
                   <td></td>
                 </tr>
@@ -310,6 +310,7 @@ export class PayrollPage {
     return [
       { label: 'Late', amount: f.latenessPenalty },
       { label: 'Absent', amount: f.absencePenalty },
+      { label: 'Unpaid leave', amount: f.unpaidLeaveDeduction ?? 0 },
       { label: 'Penalties', amount: f.administrativePenalty },
     ].filter((p) => p.amount > 0);
   }

@@ -216,7 +216,7 @@ public class HrAccessApiTests
     [Fact]
     public void Every_hr_endpoint_says_its_tabs()
     {
-        var actions = new[] { typeof(HrController), typeof(CustodyController) }
+        var actions = new[] { typeof(HrController), typeof(CustodyController), typeof(LeavesController), typeof(PerformanceController) }
             .SelectMany(c => c.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
             .Where(m => m.GetCustomAttributes<Microsoft.AspNetCore.Mvc.Routing.HttpMethodAttribute>().Any())
             .ToList();
@@ -227,7 +227,16 @@ public class HrAccessApiTests
             .Any(a => a.Policy is Otantik.SharedKernel.Authorization.Permissions.HrView or Otantik.SharedKernel.Authorization.Permissions.HrManage)).Select(m => m.Name));
         var managers = actions.Where(m => m.GetCustomAttributes<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>()
             .Any(a => a.Policy == Otantik.SharedKernel.Authorization.Permissions.ApprovalDecide)).Select(m => m.Name).Order().ToList();
-        Assert.Equal(["GetAccess", "RemovePin", "SetEmployeeAccess", "SetPin", "SetStaffAccess"], managers);
+        string[] expected =
+        [
+            // HR: the PINs and who holds which tab.
+            "GetAccess", "RemovePin", "SetEmployeeAccess", "SetPin", "SetStaffAccess",
+            // Leaves: deciding them, the balances' days and the types.
+            "Approve", "Cancel", "DeleteType", "Reject", "SaveType", "SetBalance",
+            // Performance & Disciplinary: all of it but reading.
+            "DeleteKpi", "IssueAction", "RecordEvaluation", "RestoreKpi", "RetireKpi", "SaveKpi", "WithdrawAction",
+        ];
+        Assert.Equal(expected.Order(StringComparer.Ordinal), managers.Order(StringComparer.Ordinal));
     }
 
     [Fact]

@@ -122,7 +122,9 @@ export type DayStatus =
   | 'WorkedOnDayOff'
   | 'NotEmployed'
   | 'Holiday'
-  | 'WorkedOnHoliday';
+  | 'WorkedOnHoliday'
+  // Approved unpaid leave with no punches: a day's pay off, never an absence.
+  | 'UnpaidLeave';
 
 export const dayStatusLabels: Record<DayStatus, { en: string; ar: string }> = {
   Open: { en: 'Today so far', ar: 'جارٍ' },
@@ -135,10 +137,12 @@ export const dayStatusLabels: Record<DayStatus, { en: string; ar: string }> = {
   NotEmployed: { en: 'Not employed', ar: 'غير معيّن' },
   Holiday: { en: 'Public holiday', ar: 'عطلة رسمية' },
   WorkedOnHoliday: { en: 'Worked a holiday', ar: 'عمل يوم عطلة' },
+  UnpaidLeave: { en: 'Unpaid leave', ar: 'إجازة بدون راتب' },
 };
 
 // WorkingDay: a weekly day off worked in exchange for another, counted as a normal shift.
-export type DayMarkKind = 'Leave' | 'DayOff' | 'WorkingDay';
+// UnpaidLeave: an approved leave request's only, never set by hand.
+export type DayMarkKind = 'Leave' | 'DayOff' | 'WorkingDay' | 'UnpaidLeave';
 
 export interface Punch {
   id: string;
@@ -184,6 +188,8 @@ export interface AttendanceDay {
   dayEndsAt: string;
   // A punch-in with no punch-out once the shift is over (نسي تسجيل الانصراف).
   forgotToCheckOut: boolean;
+  // Penalties in money on the day, a disciplinary action's penalty deduction: taken off as they are.
+  penaltyAmount?: number;
 }
 
 // A device's punch that came after its month's pay was finalized, for a manager to see to.
@@ -222,8 +228,9 @@ export interface AttendanceDayReport {
   unassigned: Punch[];
 }
 
-// A manager's administrative penalty (جزاء إداري) as the month's list shows it: hours, and what
-// they take off the pay at the employee's hourly rate.
+// An administrative penalty (جزاء إداري) as the month's list shows it: a manager's own, hours on a
+// day taken off at the employee's hourly rate; or a disciplinary action's penalty deduction, an
+// amount as it is (no hours), linked to its action and changed only by withdrawing it.
 export interface AdministrativePenalty {
   employeeId: string;
   employeeName: string;
@@ -234,6 +241,7 @@ export interface AdministrativePenalty {
   reason: string;
   setBy: string;
   setAtUtc: string;
+  disciplinaryActionId?: string | null;
 }
 
 export interface Timesheet {
@@ -489,9 +497,14 @@ export interface PayrollFigures {
   missingPunchDays: number;
   openDays: number;
   daysOffWorkedPay: number;
-  // A manager's administrative penalties, in hours, and their deduction at the hourly rate.
+  // Administrative penalties: a manager's, in hours, at the hourly rate, and disciplinary penalty
+  // deductions, in money (administrativePenaltyAmounts); their deduction, both together.
   administrativePenaltyHours: number;
   administrativePenalty: number;
+  administrativePenaltyAmounts?: number;
+  // Approved unpaid leave not worked: a day's pay off each, never an absence.
+  unpaidLeaveDays?: number;
+  unpaidLeaveDeduction?: number;
   // Public holidays worked, and their holiday allowance.
   holidaysWorked: number;
   holidaysWorkedPay: number;
@@ -550,6 +563,18 @@ export interface PayrollSlip {
   adjustments: PayrollAdjustment[];
   advances: PayrollCash[];
   salaries: PayrollCash[];
+  // What the penalties and unpaid leave deducted are, day by day.
+  penalties?: PayslipPenalty[];
+  unpaidLeaveDays?: string[];
+}
+
+// A penalty on a slip: hours at the hourly rate, or an amount as it is (a disciplinary action's).
+export interface PayslipPenalty {
+  date: string;
+  hours: number;
+  amount: number | null;
+  reason: string;
+  disciplinaryActionId: string | null;
 }
 
 export interface PayrollMonth {
@@ -572,6 +597,7 @@ export interface PayrollMonth {
     // The month's salaries before anything is deducted (إجمالي الرواتب).
     gross: number;
     administrativePenalties: number;
+    unpaidLeaveDeductions?: number;
   };
   slips: PayrollSlip[];
 }

@@ -4,6 +4,8 @@ using OtantikPos.Hr.Domain.Access;
 using OtantikPos.Hr.Domain.Attendance;
 using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
+using OtantikPos.Hr.Domain.Leaves;
+using OtantikPos.Hr.Domain.Performance;
 using OtantikPos.Hr.Domain.Payroll;
 using OtantikPos.Inventory.Domain.Treasury;
 using OtantikPos.Inventory.Domain.Waste;
@@ -254,6 +256,149 @@ public class HrPersistenceTests
         await Assert.ThrowsAnyAsync<Exception>(() => node.Db(db => db.Database.ExecuteSqlAsync($"""
             INSERT INTO hr."AssetTransactions" ("Id", "AssetItemId", "Type", "Date", "Quantity", "RecordedBy", "RecordedAtUtc")
             VALUES (gen_random_uuid(), {plates.Id}, 'CheckOut', '2026-10-26', 1, 'Omar', now())
+            """)));
+    }
+
+    [Fact]
+    public async Task Leave_types_balances_and_requests_are_kept_and_the_database_refuses_what_the_rules_forbid()
+    {
+        await using var node = await TestNode.StartAsync();
+        var chef = new Employee(Guid.NewGuid(), "Hassan", "Chef", 5_400, new TimeOnly(10, 0), WeekDays.Friday, new DateOnly(2026, 1, 1));
+        var annual = new LeaveType(Guid.NewGuid(), "Annual", isPaid: true, defaultDaysPerYear: 21);
+        var unpaid = new LeaveType(Guid.NewGuid(), "Unpaid", isPaid: false, defaultDaysPerYear: 0);
+        var balance = EmployeeLeaveBalance.Open(chef, annual, 2026);
+        balance.Use(4);
+        var approved = new LeaveRequest(Guid.NewGuid(), chef.Id, annual.Id, new DateOnly(2026, 11, 1), new DateOnly(2026, 11, 5), 4, "Wedding", "Hassan");
+        approved.Approve("staff-omar", "Omar", "Enjoy it");
+        var waiting = new LeaveRequest(Guid.NewGuid(), chef.Id, unpaid.Id, new DateOnly(2026, 12, 1), new DateOnly(2026, 12, 1), 1, null, "Hassan");
+        await node.Db(async db =>
+        {
+            db.Employees.Add(chef);
+            db.LeaveTypes.AddRange(annual, unpaid);
+            db.EmployeeLeaveBalances.Add(balance);
+            db.LeaveRequests.AddRange(approved, waiting);
+            return await db.SaveChangesAsync();
+        });
+
+        using (var scope = node.Scope())
+        {
+            var kept = await node.Service<OtantikPos.Hr.Domain.IEmployeeLeaveBalanceRepository>(scope).GetAsync(chef.Id, annual.Id, 2026);
+            Assert.Equal((21m, 4m, 17m, 2026), (kept!.TotalAllocatedDays, kept.UsedDays, kept.RemainingDays, kept.Year));
+            var requests = node.Service<OtantikPos.Hr.Domain.ILeaveRequestRepository>(scope);
+            Assert.Equal([waiting.Id], (await requests.GetPendingAsync()).Select(r => r.Id));
+            Assert.Equal([waiting.Id, approved.Id], (await requests.GetForEmployeeAsync(chef.Id)).Select(r => r.Id));
+            var read = (await requests.GetForEmployeeAsync(chef.Id)).Single(r => r.Id == approved.Id);
+            Assert.Equal((LeaveRequestStatus.Approved, "staff-omar", "Enjoy it", 4), (read.Status, read.DecidedById, read.ManagerNotes, read.TotalDaysRequested));
+            // A day asked for once: what meets those dates, waiting or approved.
+            Assert.Equal([approved.Id], (await requests.GetOverlappingAsync(chef.Id, new DateOnly(2026, 11, 5), new DateOnly(2026, 11, 9))).Select(r => r.Id));
+            Assert.Empty(await requests.GetOverlappingAsync(chef.Id, new DateOnly(2026, 11, 6), new DateOnly(2026, 11, 9)));
+            Assert.True(await requests.AnyForTypeAsync(unpaid.Id));
+            Assert.True(await node.Service<OtantikPos.Hr.Domain.IEmployeeLeaveBalanceRepository>(scope).AnyForTypeAsync(annual.Id));
+            // Beside the three the till starts with.
+            Assert.Equal(["Annual", "Annual (اعتيادي)", "Sick (مرضي)", "Unpaid", "Unpaid (بدون راتب)"],
+                (await node.Service<OtantikPos.Hr.Domain.ILeaveTypeRepository>(scope).GetAllAsync()).Select(t => t.Name).Order(StringComparer.Ordinal));
+        }
+
+        // Two types of a name; two balances of a type in a year.
+        await Assert.ThrowsAsync<ConflictException>(() => node.Db(async db =>
+        {
+            db.LeaveTypes.Add(new LeaveType(Guid.NewGuid(), "Annual", true, 30));
+            return await db.SaveChangesAsync();
+        }));
+        await Assert.ThrowsAsync<ConflictException>(() => node.Db(async db =>
+        {
+            db.EmployeeLeaveBalances.Add(new EmployeeLeaveBalance(chef.Id, annual.Id, 2026, 30, "Omar"));
+            return await db.SaveChangesAsync();
+        }));
+        // The database's own checks: more taken than given; unpaid leave with days a year; a leave
+        // across a year's end; one decided by no one.
+        await Assert.ThrowsAnyAsync<Exception>(() => node.Db(db => db.Database.ExecuteSqlAsync($"""
+            UPDATE hr."EmployeeLeaveBalances" SET "UsedDays" = 22 WHERE "Id" = {balance.Id}
+            """)));
+        await Assert.ThrowsAnyAsync<Exception>(() => node.Db(db => db.Database.ExecuteSqlAsync($"""
+            UPDATE hr."LeaveTypes" SET "DefaultDaysPerYear" = 5 WHERE "Id" = {unpaid.Id}
+            """)));
+        await Assert.ThrowsAnyAsync<Exception>(() => node.Db(db => db.Database.ExecuteSqlAsync($"""
+            UPDATE hr."LeaveRequests" SET "EndDate" = '2027-01-02' WHERE "Id" = {waiting.Id}
+            """)));
+        await Assert.ThrowsAnyAsync<Exception>(() => node.Db(db => db.Database.ExecuteSqlAsync($"""
+            UPDATE hr."LeaveRequests" SET "Status" = 'Approved' WHERE "Id" = {waiting.Id}
+            """)));
+    }
+
+    [Fact]
+    public async Task Evaluations_and_disciplinary_actions_are_kept_and_a_penalty_deduction_is_its_own_beside_a_managers()
+    {
+        await using var node = await TestNode.StartAsync();
+        var chef = new Employee(Guid.NewGuid(), "Hassan", "Chef", 5_400, new TimeOnly(10, 0), WeekDays.Friday, new DateOnly(2026, 1, 1));
+        var punctuality = new PerformanceKpi(Guid.NewGuid(), "Punctuality");
+        var hygiene = new PerformanceKpi(Guid.NewGuid(), "Hygiene");
+        var evaluation = new PerformanceEvaluation(Guid.NewGuid(), chef.Id, Monday, [(punctuality, 5), (hygiene, 3)], "Good month", "staff-omar", "Omar");
+        var warning = new DisciplinaryAction(Guid.NewGuid(), chef.Id, Monday, "Negligence", SeverityLevel.FirstWritten, null, null, "staff-omar", "Omar");
+        var deduction = new DisciplinaryAction(Guid.NewGuid(), chef.Id, Monday, "Absence", SeverityLevel.PenaltyDeduction, "Third time", 250, "staff-omar", "Omar");
+        // The manager's own hours on the same day, and the deduction's penalty beside them.
+        var own = new AdministrativePenalty(chef.Id, Monday, 2, "Late again", "Omar");
+        var day = new DayEvaluation(Monday, DayStatus.Worked, null, null, 2, 540, 0, 0, 0, 0, PenaltyHours: 2, PenaltyAmount: 250);
+        await node.Db(async db =>
+        {
+            db.Employees.Add(chef);
+            db.PerformanceKpis.AddRange(punctuality, hygiene);
+            db.PerformanceEvaluations.Add(evaluation);
+            db.DisciplinaryActions.AddRange(warning, deduction);
+            db.AdministrativePenalties.AddRange(own, deduction.Penalty()!);
+            db.DailyRecords.Add(new DailyRecord(chef.Id, day));
+            return await db.SaveChangesAsync();
+        });
+
+        using (var scope = node.Scope())
+        {
+            var kept = (await node.Service<OtantikPos.Hr.Domain.IPerformanceEvaluationRepository>(scope).GetForEmployeeAsync(chef.Id)).Single();
+            Assert.Equal((80.0m, "Omar", "Good month"), (kept.TotalScore, kept.ReviewerName, kept.Notes));
+            Assert.Equal([("Punctuality", 5), ("Hygiene", 3)], kept.Scores.OrderByDescending(s => s.Score).Select(s => (s.KpiName, s.Score)));
+            Assert.True(await node.Service<OtantikPos.Hr.Domain.IPerformanceEvaluationRepository>(scope).AnyForKpiAsync(hygiene.Id));
+            Assert.Equal(["Hygiene", "Punctuality"], (await node.Service<OtantikPos.Hr.Domain.IPerformanceKpiRepository>(scope).GetAllAsync()).Select(k => k.Name));
+
+            var actions = await node.Service<OtantikPos.Hr.Domain.IDisciplinaryActionRepository>(scope).GetForEmployeeAsync(chef.Id);
+            Assert.Equal((1, 1, SeverityLevel.PenaltyDeduction), (DisciplinaryRecord.Of(actions).FirstWritten, DisciplinaryRecord.Of(actions).PenaltyDeductions, DisciplinaryRecord.Of(actions).Next));
+            Assert.Equal((decimal?)250m, actions.Single(a => a.Id == deduction.Id).PenaltyAmount);
+
+            var penalties = node.Service<OtantikPos.Hr.Domain.IAdministrativePenaltyRepository>(scope);
+            Assert.Equal(own.Id, (await penalties.GetAsync(chef.Id, Monday))!.Id);
+            Assert.Equal((decimal?)250m, (await penalties.GetForDisciplinaryActionAsync(deduction.Id))!.Amount);
+            Assert.Equal(2, (await penalties.GetBetweenAsync(Monday, Monday)).Count);
+        }
+
+        Assert.Equal((2m, 250m), await node.Db(async db =>
+        {
+            var record = await db.DailyRecords.SingleAsync();
+            return (record.AdministrativePenaltyHours, record.AdministrativePenaltyAmount);
+        }));
+
+        // Two KPIs of a name; a second penalty for the same deduction; a manager's own twice on a day.
+        await Assert.ThrowsAsync<ConflictException>(() => node.Db(async db =>
+        {
+            db.PerformanceKpis.Add(new PerformanceKpi(Guid.NewGuid(), "Hygiene"));
+            return await db.SaveChangesAsync();
+        }));
+        await Assert.ThrowsAsync<ConflictException>(() => node.Db(async db =>
+        {
+            db.AdministrativePenalties.Add(AdministrativePenalty.ForAmount(chef.Id, Monday.AddDays(1), 100, "Again", "Omar", deduction.Id));
+            return await db.SaveChangesAsync();
+        }));
+        await Assert.ThrowsAsync<ConflictException>(() => node.Db(async db =>
+        {
+            db.AdministrativePenalties.Add(AdministrativePenalty.ForAmount(chef.Id, Monday, 100, "Again", "Omar"));
+            return await db.SaveChangesAsync();
+        }));
+        // The database's own checks: hours and an amount at once; a warning with an amount; a score past 5.
+        await Assert.ThrowsAnyAsync<Exception>(() => node.Db(db => db.Database.ExecuteSqlAsync($"""
+            UPDATE hr."AdministrativePenalties" SET "Amount" = 10 WHERE "Id" = {own.Id}
+            """)));
+        await Assert.ThrowsAnyAsync<Exception>(() => node.Db(db => db.Database.ExecuteSqlAsync($"""
+            UPDATE hr."DisciplinaryActions" SET "PenaltyAmount" = 10 WHERE "Id" = {warning.Id}
+            """)));
+        await Assert.ThrowsAnyAsync<Exception>(() => node.Db(db => db.Database.ExecuteSqlAsync($"""
+            UPDATE hr."EvaluationScores" SET "Score" = 6 WHERE "KpiId" = {hygiene.Id}
             """)));
     }
 

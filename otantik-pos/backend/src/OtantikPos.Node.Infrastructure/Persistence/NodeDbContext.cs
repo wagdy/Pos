@@ -99,6 +99,12 @@ public sealed class NodeDbContext(DbContextOptions<NodeDbContext> options, Outbo
     public DbSet<AdvanceAllocation> AdvanceAllocations => Set<AdvanceAllocation>();
     public DbSet<HrAdvance> HrAdvances => Set<HrAdvance>();
     public DbSet<AssetCategory> AssetCategories => Set<AssetCategory>();
+    public DbSet<OtantikPos.Hr.Domain.Leaves.LeaveType> LeaveTypes => Set<OtantikPos.Hr.Domain.Leaves.LeaveType>();
+    public DbSet<OtantikPos.Hr.Domain.Leaves.EmployeeLeaveBalance> EmployeeLeaveBalances => Set<OtantikPos.Hr.Domain.Leaves.EmployeeLeaveBalance>();
+    public DbSet<OtantikPos.Hr.Domain.Leaves.LeaveRequest> LeaveRequests => Set<OtantikPos.Hr.Domain.Leaves.LeaveRequest>();
+    public DbSet<OtantikPos.Hr.Domain.Performance.PerformanceKpi> PerformanceKpis => Set<OtantikPos.Hr.Domain.Performance.PerformanceKpi>();
+    public DbSet<OtantikPos.Hr.Domain.Performance.PerformanceEvaluation> PerformanceEvaluations => Set<OtantikPos.Hr.Domain.Performance.PerformanceEvaluation>();
+    public DbSet<OtantikPos.Hr.Domain.Performance.DisciplinaryAction> DisciplinaryActions => Set<OtantikPos.Hr.Domain.Performance.DisciplinaryAction>();
     public DbSet<OtantikPos.Hr.Domain.Access.StaffHrAccess> StaffHrAccess => Set<OtantikPos.Hr.Domain.Access.StaffHrAccess>();
     public DbSet<AssetItem> AssetItems => Set<AssetItem>();
     public DbSet<AssetTransaction> AssetTransactions => Set<AssetTransaction>();

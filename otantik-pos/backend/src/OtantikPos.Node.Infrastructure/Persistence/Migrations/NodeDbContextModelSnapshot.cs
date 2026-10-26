@@ -572,8 +572,15 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
+                    b.Property<decimal?>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
                     b.Property<DateOnly>("Date")
                         .HasColumnType("date");
+
+                    b.Property<Guid?>("DisciplinaryActionId")
+                        .HasColumnType("uuid");
 
                     b.Property<Guid>("EmployeeId")
                         .HasColumnType("uuid");
@@ -603,10 +610,20 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("EmployeeId", "Date")
-                        .IsUnique();
+                    b.HasIndex("DisciplinaryActionId")
+                        .IsUnique()
+                        .HasFilter("\"DisciplinaryActionId\" IS NOT NULL");
 
-                    b.ToTable("AdministrativePenalties", "hr");
+                    b.HasIndex("EmployeeId", "Date")
+                        .IsUnique()
+                        .HasFilter("\"DisciplinaryActionId\" IS NULL");
+
+                    b.ToTable("AdministrativePenalties", "hr", t =>
+                        {
+                            t.HasCheckConstraint("CK_AdministrativePenalties_Disciplinary", "\"DisciplinaryActionId\" IS NULL OR \"Amount\" IS NOT NULL");
+
+                            t.HasCheckConstraint("CK_AdministrativePenalties_HoursOrAmount", "(\"Hours\" > 0 AND \"Amount\" IS NULL) OR (\"Hours\" = 0 AND \"Amount\" > 0)");
+                        });
                 });
 
             modelBuilder.Entity("OtantikPos.Hr.Domain.Attendance.AttendanceDevice", b =>
@@ -745,6 +762,10 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
+                    b.Property<decimal>("AdministrativePenaltyAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
                     b.Property<decimal>("AdministrativePenaltyHours")
                         .HasPrecision(5, 2)
                         .HasColumnType("numeric(5,2)");
@@ -817,6 +838,9 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
+                    b.Property<Guid?>("LeaveRequestId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime>("MarkedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -837,10 +861,16 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("LeaveRequestId")
+                        .HasFilter("\"LeaveRequestId\" IS NOT NULL");
+
                     b.HasIndex("EmployeeId", "Date")
                         .IsUnique();
 
-                    b.ToTable("DayMarks", "hr");
+                    b.ToTable("DayMarks", "hr", t =>
+                        {
+                            t.HasCheckConstraint("CK_DayMarks_UnpaidLeave", "\"Kind\" <> 'UnpaidLeave' OR \"LeaveRequestId\" IS NOT NULL");
+                        });
                 });
 
             modelBuilder.Entity("OtantikPos.Hr.Domain.Attendance.DeviceCommand", b =>
@@ -1351,6 +1381,200 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                     b.ToTable("JobRoles", "hr");
                 });
 
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Leaves.EmployeeLeaveBalance", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("AllocatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("AllocatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("LeaveTypeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("TotalAllocatedDays")
+                        .HasPrecision(4, 1)
+                        .HasColumnType("numeric(4,1)");
+
+                    b.Property<decimal>("UsedDays")
+                        .HasPrecision(4, 1)
+                        .HasColumnType("numeric(4,1)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.Property<int>("Year")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LeaveTypeId");
+
+                    b.HasIndex("Year");
+
+                    b.HasIndex("EmployeeId", "LeaveTypeId", "Year")
+                        .IsUnique();
+
+                    b.ToTable("EmployeeLeaveBalances", "hr", t =>
+                        {
+                            t.HasCheckConstraint("CK_EmployeeLeaveBalances_Days", "\"TotalAllocatedDays\" BETWEEN 0 AND 365 AND \"UsedDays\" BETWEEN 0 AND \"TotalAllocatedDays\"");
+
+                            t.HasCheckConstraint("CK_EmployeeLeaveBalances_Year", "\"Year\" BETWEEN 2000 AND 2100");
+                        });
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Leaves.LeaveRequest", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CancellationNotes")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTime?>("CancelledAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CancelledBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("CancelledById")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<int>("CancelledDays")
+                        .HasColumnType("integer");
+
+                    b.Property<DateOnly?>("CancelledFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("DecidedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DecidedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("DecidedById")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("EndDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("LeaveTypeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ManagerNotes")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTime>("RequestedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RequestedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateOnly>("StartDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<int>("TotalDaysRequested")
+                        .HasColumnType("integer");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LeaveTypeId");
+
+                    b.HasIndex("Status")
+                        .HasFilter("\"Status\" = 'Pending'");
+
+                    b.HasIndex("EmployeeId", "StartDate");
+
+                    b.ToTable("LeaveRequests", "hr", t =>
+                        {
+                            t.HasCheckConstraint("CK_LeaveRequests_Cancellation", "(\"CancelledFrom\" IS NULL) = (\"CancelledAtUtc\" IS NULL) AND (\"CancelledFrom\" IS NULL OR \"Status\" IN ('Approved', 'Cancelled')) AND (\"Status\" <> 'Cancelled' OR (\"CancelledFrom\" IS NOT NULL AND \"CancelledDays\" = \"TotalDaysRequested\")) AND \"CancelledDays\" BETWEEN 0 AND \"TotalDaysRequested\"");
+
+                            t.HasCheckConstraint("CK_LeaveRequests_Dates", "\"EndDate\" >= \"StartDate\" AND date_part('year', \"EndDate\") = date_part('year', \"StartDate\") AND \"EndDate\" - \"StartDate\" < 90");
+
+                            t.HasCheckConstraint("CK_LeaveRequests_Days", "\"TotalDaysRequested\" > 0 AND \"TotalDaysRequested\" <= \"EndDate\" - \"StartDate\" + 1");
+
+                            t.HasCheckConstraint("CK_LeaveRequests_Decision", "(\"Status\" = 'Pending') = (\"DecidedById\" IS NULL AND \"DecidedAtUtc\" IS NULL)");
+                        });
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Leaves.LeaveType", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("DefaultDaysPerYear")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("IsPaid")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<bool>("ProratedForNewHires")
+                        .HasColumnType("boolean");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("LeaveTypes", "hr", t =>
+                        {
+                            t.HasCheckConstraint("CK_LeaveTypes_Days", "\"DefaultDaysPerYear\" BETWEEN 0 AND 365");
+
+                            t.HasCheckConstraint("CK_LeaveTypes_Unpaid", "\"IsPaid\" OR \"DefaultDaysPerYear\" = 0");
+                        });
+                });
+
             modelBuilder.Entity("OtantikPos.Hr.Domain.Payroll.AdvanceAllocation", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1592,6 +1816,10 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                                 .HasPrecision(10, 2)
                                 .HasColumnType("numeric(10,2)");
 
+                            b1.Property<decimal>("AdministrativePenaltyAmounts")
+                                .HasPrecision(10, 2)
+                                .HasColumnType("numeric(10,2)");
+
                             b1.Property<decimal>("AdministrativePenaltyHours")
                                 .HasPrecision(10, 2)
                                 .HasColumnType("numeric(10,2)");
@@ -1671,6 +1899,13 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
 
                             b1.Property<int>("ShortMinutes")
                                 .HasColumnType("integer");
+
+                            b1.Property<int>("UnpaidLeaveDays")
+                                .HasColumnType("integer");
+
+                            b1.Property<decimal>("UnpaidLeaveDeduction")
+                                .HasPrecision(10, 2)
+                                .HasColumnType("numeric(10,2)");
                         });
 
                     b.HasKey("Id");
@@ -1681,6 +1916,162 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("PayrollSlips", "hr");
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Performance.DisciplinaryAction", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsWithdrawn")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("IssuedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("IssuerId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<string>("IssuerName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<decimal?>("PenaltyAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("SeverityLevel")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.Property<string>("ViolationType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("WithdrawalReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<DateTime?>("WithdrawnAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("WithdrawnBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("WithdrawnById")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EmployeeId", "Date");
+
+                    b.ToTable("DisciplinaryActions", "hr", t =>
+                        {
+                            t.HasCheckConstraint("CK_DisciplinaryActions_Penalty", "(\"SeverityLevel\" = 'PenaltyDeduction') = (\"PenaltyAmount\" IS NOT NULL) AND (\"PenaltyAmount\" IS NULL OR \"PenaltyAmount\" > 0)");
+
+                            t.HasCheckConstraint("CK_DisciplinaryActions_Withdrawal", "\"IsWithdrawn\" = (\"WithdrawnById\" IS NOT NULL AND \"WithdrawnAtUtc\" IS NOT NULL AND \"WithdrawalReason\" IS NOT NULL)");
+                        });
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Performance.PerformanceEvaluation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<DateTime>("RecordedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ReviewerId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<string>("ReviewerName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<decimal>("TotalScore")
+                        .HasPrecision(4, 1)
+                        .HasColumnType("numeric(4,1)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EmployeeId", "Date");
+
+                    b.ToTable("PerformanceEvaluations", "hr", t =>
+                        {
+                            t.HasCheckConstraint("CK_PerformanceEvaluations_Total", "\"TotalScore\" BETWEEN 20 AND 100");
+                        });
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Performance.PerformanceKpi", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("PerformanceKpis", "hr");
                 });
 
             modelBuilder.Entity("OtantikPos.Inventory.Domain.Approvals.ApprovalRequest", b =>
@@ -3361,6 +3752,11 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("OtantikPos.Hr.Domain.Attendance.AdministrativePenalty", b =>
                 {
+                    b.HasOne("OtantikPos.Hr.Domain.Performance.DisciplinaryAction", null)
+                        .WithMany()
+                        .HasForeignKey("DisciplinaryActionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("OtantikPos.Hr.Domain.Employees.Employee", null)
                         .WithMany()
                         .HasForeignKey("EmployeeId")
@@ -3392,6 +3788,11 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasForeignKey("EmployeeId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("OtantikPos.Hr.Domain.Leaves.LeaveRequest", null)
+                        .WithMany()
+                        .HasForeignKey("LeaveRequestId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("OtantikPos.Hr.Domain.Custody.AssetItem", b =>
@@ -3449,6 +3850,36 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Leaves.EmployeeLeaveBalance", b =>
+                {
+                    b.HasOne("OtantikPos.Hr.Domain.Employees.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("EmployeeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OtantikPos.Hr.Domain.Leaves.LeaveType", null)
+                        .WithMany()
+                        .HasForeignKey("LeaveTypeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Leaves.LeaveRequest", b =>
+                {
+                    b.HasOne("OtantikPos.Hr.Domain.Employees.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("EmployeeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("OtantikPos.Hr.Domain.Leaves.LeaveType", null)
+                        .WithMany()
+                        .HasForeignKey("LeaveTypeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("OtantikPos.Hr.Domain.Payroll.AdvanceAllocation", b =>
                 {
                     b.HasOne("OtantikPos.Hr.Domain.Employees.Employee", null)
@@ -3492,6 +3923,70 @@ namespace OtantikPos.Node.Infrastructure.Persistence.Migrations
                         .HasForeignKey("EmployeeId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Performance.DisciplinaryAction", b =>
+                {
+                    b.HasOne("OtantikPos.Hr.Domain.Employees.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("EmployeeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OtantikPos.Hr.Domain.Performance.PerformanceEvaluation", b =>
+                {
+                    b.HasOne("OtantikPos.Hr.Domain.Employees.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("EmployeeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.OwnsMany("OtantikPos.Hr.Domain.Performance.KpiScore", "Scores", b1 =>
+                        {
+                            b1.Property<int>("Id")
+                                .ValueGeneratedOnAdd()
+                                .HasColumnType("integer");
+
+                            NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b1.Property<int>("Id"));
+
+                            b1.Property<Guid>("EvaluationId")
+                                .HasColumnType("uuid");
+
+                            b1.Property<Guid>("KpiId")
+                                .HasColumnType("uuid");
+
+                            b1.Property<string>("KpiName")
+                                .IsRequired()
+                                .HasMaxLength(100)
+                                .HasColumnType("character varying(100)");
+
+                            b1.Property<int>("Score")
+                                .HasColumnType("integer");
+
+                            b1.HasKey("Id");
+
+                            b1.HasIndex("KpiId");
+
+                            b1.HasIndex("EvaluationId", "KpiId")
+                                .IsUnique();
+
+                            b1.ToTable("EvaluationScores", "hr", t =>
+                                {
+                                    t.HasCheckConstraint("CK_EvaluationScores_Score", "\"Score\" BETWEEN 1 AND 5");
+                                });
+
+                            b1.WithOwner()
+                                .HasForeignKey("EvaluationId");
+
+                            b1.HasOne("OtantikPos.Hr.Domain.Performance.PerformanceKpi", null)
+                                .WithMany()
+                                .HasForeignKey("KpiId")
+                                .OnDelete(DeleteBehavior.Restrict)
+                                .IsRequired();
+                        });
+
+                    b.Navigation("Scores");
                 });
 
             modelBuilder.Entity("OtantikPos.Inventory.Domain.Expenses.ExpenseItem", b =>

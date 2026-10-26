@@ -44,13 +44,20 @@ public sealed record PayrollSlipDto(
     string? FinalizedBy,
     IReadOnlyList<PayrollAdjustmentDto> Adjustments,
     IReadOnlyList<PayrollCashDto> Advances,
-    IReadOnlyList<PayrollCashDto> Salaries);
+    IReadOnlyList<PayrollCashDto> Salaries,
+    // What the penalties and unpaid leave deducted are, day by day, as the days stand now.
+    IReadOnlyList<PayslipPenaltyDto> Penalties,
+    IReadOnlyList<DateOnly> UnpaidLeaveDays);
+
+// A penalty on the slip: hours at the hourly rate, or an amount as it is (a disciplinary action's
+// penalty deduction, linked to it).
+public sealed record PayslipPenaltyDto(DateOnly Date, decimal Hours, decimal? Amount, string Reason, Guid? DisciplinaryActionId);
 
 // Gross: the month's salaries (إجمالي الرواتب), what is earned before anything is deducted.
 public sealed record PayrollTotals(
     decimal BaseSalaries, decimal Incentives, decimal LeaveAllowances, decimal OvertimePay, decimal Advances, decimal BroughtForward,
     decimal LatenessPenalties, decimal AbsencePenalties, decimal NetPayable, decimal CarriedForward, decimal WagesCost, decimal SalaryPaid,
-    decimal DaysOffWorkedPay, decimal HolidaysWorkedPay, decimal Gross = 0, decimal AdministrativePenalties = 0);
+    decimal DaysOffWorkedPay, decimal HolidaysWorkedPay, decimal Gross = 0, decimal AdministrativePenalties = 0, decimal UnpaidLeaveDeductions = 0);
 
 public sealed record PayrollMonthDto(DateOnly Month, PayrollTotals Totals, IReadOnlyList<PayrollSlipDto> Slips);
 
@@ -119,7 +126,7 @@ internal sealed class PayrollWorker(
                 Sum(f => f.BaseSalary), Sum(f => f.Incentives), Sum(f => f.LeaveAllowances), Sum(f => f.OvertimePay), Sum(f => f.Advances),
                 Sum(f => f.BroughtForward), Sum(f => f.LatenessPenalty), Sum(f => f.AbsencePenalty), Sum(f => f.NetPayable), Sum(f => f.CarriedForward),
                 Sum(f => f.WagesCost), slipDtos.Sum(s => s.SalaryPaid), Sum(f => f.DaysOffWorkedPay), Sum(f => f.HolidaysWorkedPay), Sum(f => f.Gross),
-                Sum(f => f.AdministrativePenalty)),
+                Sum(f => f.AdministrativePenalty), Sum(f => f.UnpaidLeaveDeduction)),
             slipDtos);
     }
 
@@ -142,7 +149,12 @@ internal sealed class PayrollWorker(
                 .Concat(w.Outside.Select(a => new PayrollCashDto(
                     a.Id, SafeTransactionKind.EmployeeAdvance, a.Date, a.Amount, null, a.Notes, a.RecordedBy, a.ApprovedBy, null, null, true)))
                 .OrderBy(c => c.Date).ToList(),
-            entries.Where(t => t.Kind == SafeTransactionKind.SalaryPayment).Select(Cash).ToList());
+            entries.Where(t => t.Kind == SafeTransactionKind.SalaryPayment).Select(Cash).ToList(),
+            w.Sheet.Days.SelectMany(d => d.Penalties ?? [])
+                .Select(p => new PayslipPenaltyDto(p.Date, p.Hours, p.Amount, p.Reason, p.DisciplinaryActionId))
+                .OrderBy(p => p.Date).ToList(),
+            w.Employee.IsDaily ? []
+                : w.Sheet.Days.Where(d => d.Evaluation.Status == DayStatus.UnpaidLeave).Select(d => d.Evaluation.Day).ToList());
     }
 }
 

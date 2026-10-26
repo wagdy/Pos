@@ -5,19 +5,22 @@ import { AuthService } from '../auth/auth.service';
 import { ConnectivityService } from '../connectivity/connectivity.service';
 import { PortalAuth } from '../portal/portal-auth';
 
+// The APIs of the tabs a manager gives: HR & Payroll's, its leaves and performance, and Custody's.
+const employeeApis = ['/api/hr', '/api/leaves', '/api/performance', '/api/custody'];
+
 // The till token on every API call. A 401 on anything but the sign-in itself means the API no
 // longer accepts it (the shift ended, or the account changed in the delivery system), so the
 // till goes back to the sign-in screen.
 //
 // The employee portal's calls are apart: they carry the employee's token and never the till's
 // (on a till where both are signed in, neither reaches the other's API), and a 401 there signs
-// the employee out of the portal, not the till. So do HR's and Custody's calls while an
-// employee is the one acting (no one of the till signed in): the tabs a manager gave them, in the
-// portal.
+// the employee out of the portal, not the till. So do the calls of the tabs a manager gives
+// (employeeApis) while an employee is the one acting (no one of the till signed in): the tabs a
+// manager gave them, in the portal.
 export const authInterceptor: HttpInterceptorFn = (request, next) => {
   const auth = inject(AuthService);
   const portalCall = request.url.startsWith('/api/portal');
-  const hrAsEmployee = (request.url.startsWith('/api/hr') || request.url.startsWith('/api/custody')) && auth.employeeActing();
+  const hrAsEmployee = employeeApis.some((api) => request.url.startsWith(api)) && auth.employeeActing();
   if (portalCall || hrAsEmployee || request.url.startsWith('/api/auth/employee-login')) {
     const portal = inject(PortalAuth);
     const employeeToken = portalCall || hrAsEmployee ? portal.token() : null;

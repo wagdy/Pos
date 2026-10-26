@@ -506,6 +506,60 @@ public class HrTests
     }
 
     [Fact]
+    public void A_penalty_in_money_is_deducted_as_it_is_beside_the_hours_and_a_disciplinary_actions_is_its_own()
+    {
+        var chef = Chef();
+        var amount = AdministrativePenalty.ForAmount(chef.Id, Monday, 150.5m, " Broke the rota ", "Omar");
+        Assert.Equal((0m, (decimal?)150.5m, "Broke the rota", (Guid?)null), (amount.Hours, amount.Amount, amount.Reason, amount.DisciplinaryActionId));
+        Assert.Equal(150.5m, amount.DeductionAt(20));
+        Assert.Equal(40m, new AdministrativePenalty(chef.Id, Monday, 2, "Late", "Omar").DeductionAt(20));
+        Assert.Throws<DomainException>(() => amount.Change(2, "Late", "Omar"));
+        Assert.Throws<DomainException>(() => new AdministrativePenalty(chef.Id, Monday, 2, "Late", "Omar").ChangeAmount(100, "Late", "Omar"));
+        Assert.Throws<DomainException>(() => AdministrativePenalty.ForAmount(chef.Id, Monday, 0, "Late", "Omar"));
+        Assert.Throws<DomainException>(() => AdministrativePenalty.ForAmount(chef.Id, Monday, 10.255m, "Late", "Omar"));
+        Assert.Throws<DomainException>(() => AdministrativePenalty.ForAmount(chef.Id, Monday, AdministrativePenalty.MaxAmount + 1, "Late", "Omar"));
+
+        // Two hours and L.E 150.50 on the Monday: 40 + 150.50 off the pay, the money apart.
+        var october = new DateOnly(2026, 10, 1);
+        var days = PayrollMonth.Days(october).Select(d =>
+            chef.IsDayOff(d) ? Nothing(d, DayStatus.DayOff)
+            : d == Monday ? new DayEvaluation(d, DayStatus.Worked, null, null, 2, 540, 0, 0, 0, 0, PenaltyHours: 2, PenaltyAmount: 150.5m)
+            : new DayEvaluation(d, DayStatus.Worked, null, null, 2, 540, 0, 0, 0, 0)).ToList();
+        var figures = PayrollCalculator.Calculate(chef, october, days, [], advances: 0, broughtForward: 0);
+        Assert.Equal((2m, 150.5m, 190.5m, 5_209.5m), (figures.AdministrativePenaltyHours, figures.AdministrativePenaltyAmounts, figures.AdministrativePenalty, figures.Net));
+
+        // Kept on the day's record as worked out.
+        var record = new DailyRecord(chef.Id, days.Single(d => d.Day == Monday));
+        Assert.Equal((2m, 150.5m), (record.ToEvaluation().PenaltyHours, record.ToEvaluation().PenaltyAmount));
+    }
+
+    [Fact]
+    public void Unpaid_leave_takes_a_days_pay_never_counted_absent_and_worked_after_all_is_a_working_day()
+    {
+        var chef = Chef();
+        Assert.Equal(DayStatus.UnpaidLeave, Timesheet.Evaluate(chef, Monday, [], DayMarkKind.UnpaidLeave, TenMinutesGrace, Later).Status);
+        var came = Timesheet.Evaluate(chef, Monday, [At(Monday, 10, 20), At(Monday, 19)], DayMarkKind.UnpaidLeave, TenMinutesGrace, Later);
+        Assert.Equal((DayStatus.Worked, 20), (came.Status, came.LateMinutes));
+        // Only a leave request's.
+        Assert.Throws<DomainException>(() => new DayMark(chef.Id, Monday, DayMarkKind.UnpaidLeave, null, "Omar"));
+        Assert.Equal(DayMarkKind.UnpaidLeave, new DayMark(chef.Id, Monday, DayMarkKind.UnpaidLeave, "Unpaid", "Omar", Guid.NewGuid()).Kind);
+
+        // Two days of it in October: 180 each off, and no absence.
+        var october = new DateOnly(2026, 10, 1);
+        var days = PayrollMonth.Days(october).Select(d =>
+            chef.IsDayOff(d) ? Nothing(d, DayStatus.DayOff)
+            : d == Monday || d == Monday.AddDays(1) ? Nothing(d, DayStatus.UnpaidLeave)
+            : new DayEvaluation(d, DayStatus.Worked, null, null, 2, 540, 0, 0, 0, 0)).ToList();
+        var figures = PayrollCalculator.Calculate(chef, october, days, [], advances: 0, broughtForward: 0);
+        Assert.Equal((2, 360m, 0, 5_040m, 5_040m), (figures.UnpaidLeaveDays, figures.UnpaidLeaveDeduction, figures.AbsentDays, figures.Net, figures.WagesCost));
+
+        // A daily worker is paid only the days they work: nothing more comes off.
+        var helper = Chef();
+        helper.SetPay(EmploymentType.Daily, 200);
+        Assert.Equal(0m, PayrollCalculator.Calculate(helper, october, days, [], advances: 0, broughtForward: 0).UnpaidLeaveDeduction);
+    }
+
+    [Fact]
     public void A_punch_is_kept_to_the_second_on_the_wall_clock_and_ignored_rather_than_removed()
     {
         var at = new DateTime(2026, 10, 12, 10, 0, 7, 450, DateTimeKind.Utc);

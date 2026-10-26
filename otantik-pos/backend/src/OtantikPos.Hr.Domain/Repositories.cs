@@ -3,6 +3,8 @@ using OtantikPos.Hr.Domain.Access;
 using OtantikPos.Hr.Domain.Attendance;
 using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
+using OtantikPos.Hr.Domain.Leaves;
+using OtantikPos.Hr.Domain.Performance;
 using OtantikPos.Hr.Domain.Payroll;
 
 namespace OtantikPos.Hr.Domain;
@@ -152,12 +154,19 @@ public interface IDayMarkRepository : IRepository<DayMark>
 
     Task<IReadOnlyList<DayMark>> GetBetweenAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default);
 
+    // An approved leave request's days, to change.
+    Task<IReadOnlyList<DayMark>> GetForLeaveRequestAsync(Guid leaveRequestId, CancellationToken cancellationToken = default);
+
     void Remove(DayMark mark);
 }
 
 public interface IAdministrativePenaltyRepository : IRepository<AdministrativePenalty>
 {
+    // A manager's own penalty on the day: not a disciplinary action's.
     Task<AdministrativePenalty?> GetAsync(Guid employeeId, DateOnly date, CancellationToken cancellationToken = default);
+
+    // A disciplinary action's penalty deduction.
+    Task<AdministrativePenalty?> GetForDisciplinaryActionAsync(Guid disciplinaryActionId, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<AdministrativePenalty>> GetBetweenAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default);
 
@@ -216,4 +225,62 @@ public interface IStaffHrAccessRepository : IRepository<StaffHrAccess>
     Task<StaffHrAccess?> GetByStaffIdAsync(string staffId, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<StaffHrAccess>> GetAllAsync(CancellationToken cancellationToken = default);
+}
+
+// The kinds of leave, by name.
+public interface ILeaveTypeRepository : IRepository<LeaveType>
+{
+    Task<IReadOnlyList<LeaveType>> GetAllAsync(CancellationToken cancellationToken = default);
+
+    void Remove(LeaveType type);
+}
+
+// The leave balances: one to an employee, a type and a year.
+public interface IEmployeeLeaveBalanceRepository : IRepository<EmployeeLeaveBalance>
+{
+    Task<EmployeeLeaveBalance?> GetAsync(Guid employeeId, Guid leaveTypeId, int year, CancellationToken cancellationToken = default);
+
+    // A year's, everyone's or one employee's.
+    Task<IReadOnlyList<EmployeeLeaveBalance>> GetForYearAsync(int year, Guid? employeeId = null, CancellationToken cancellationToken = default);
+
+    Task<bool> AnyForTypeAsync(Guid leaveTypeId, CancellationToken cancellationToken = default);
+}
+
+public interface ILeaveRequestRepository : IRepository<LeaveRequest>
+{
+    // Waiting for a manager, the oldest first.
+    Task<IReadOnlyList<LeaveRequest>> GetPendingAsync(CancellationToken cancellationToken = default);
+
+    // One employee's, the latest first.
+    Task<IReadOnlyList<LeaveRequest>> GetForEmployeeAsync(Guid employeeId, CancellationToken cancellationToken = default);
+
+    // Everyone's starting in a year, the latest first.
+    Task<IReadOnlyList<LeaveRequest>> GetForYearAsync(int year, CancellationToken cancellationToken = default);
+
+    // An employee's waiting or approved ones whose dates meet these: a day is asked for once.
+    Task<IReadOnlyList<LeaveRequest>> GetOverlappingAsync(Guid employeeId, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default);
+
+    Task<bool> AnyForTypeAsync(Guid leaveTypeId, CancellationToken cancellationToken = default);
+}
+
+// The KPIs, by name, retired ones too.
+public interface IPerformanceKpiRepository : IRepository<PerformanceKpi>
+{
+    Task<IReadOnlyList<PerformanceKpi>> GetAllAsync(CancellationToken cancellationToken = default);
+
+    void Remove(PerformanceKpi kpi);
+}
+
+public interface IPerformanceEvaluationRepository : IRepository<PerformanceEvaluation>
+{
+    // One employee's, the latest first.
+    Task<IReadOnlyList<PerformanceEvaluation>> GetForEmployeeAsync(Guid employeeId, CancellationToken cancellationToken = default);
+
+    Task<bool> AnyForKpiAsync(Guid kpiId, CancellationToken cancellationToken = default);
+}
+
+public interface IDisciplinaryActionRepository : IRepository<DisciplinaryAction>
+{
+    // One employee's, the latest first: their record, and what the next escalates from.
+    Task<IReadOnlyList<DisciplinaryAction>> GetForEmployeeAsync(Guid employeeId, CancellationToken cancellationToken = default);
 }

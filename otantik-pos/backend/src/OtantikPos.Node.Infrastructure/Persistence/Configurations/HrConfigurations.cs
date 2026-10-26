@@ -4,6 +4,8 @@ using OtantikPos.Hr.Domain.Access;
 using OtantikPos.Hr.Domain.Attendance;
 using OtantikPos.Hr.Domain.Custody;
 using OtantikPos.Hr.Domain.Employees;
+using OtantikPos.Hr.Domain.Leaves;
+using OtantikPos.Hr.Domain.Performance;
 using OtantikPos.Hr.Domain.Payroll;
 
 namespace OtantikPos.Node.Infrastructure.Persistence.Configurations;
@@ -204,11 +206,15 @@ internal sealed class DayMarkConfiguration : IEntityTypeConfiguration<DayMark>
 {
     public void Configure(EntityTypeBuilder<DayMark> builder)
     {
-        builder.ToTable("DayMarks", NodeDbContext.HrSchema);
+        builder.ToTable("DayMarks", NodeDbContext.HrSchema, t =>
+            // Unpaid leave is an approved leave request's.
+            t.HasCheckConstraint("CK_DayMarks_UnpaidLeave", "\"Kind\" <> 'UnpaidLeave' OR \"LeaveRequestId\" IS NOT NULL"));
         builder.Property(m => m.Kind).IsEnumName();
         builder.Property(m => m.Notes).HasMaxLength(DayMark.MaxNotesLength);
         builder.Property(m => m.MarkedBy).HasMaxLength(200);
         builder.HasOne<Employee>().WithMany().HasForeignKey(m => m.EmployeeId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<LeaveRequest>().WithMany().HasForeignKey(m => m.LeaveRequestId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(m => m.LeaveRequestId).HasFilter("\"LeaveRequestId\" IS NOT NULL");
         builder.HasIndex(m => new { m.EmployeeId, m.Date }).IsUnique();
     }
 }
@@ -217,13 +223,23 @@ internal sealed class AdministrativePenaltyConfiguration : IEntityTypeConfigurat
 {
     public void Configure(EntityTypeBuilder<AdministrativePenalty> builder)
     {
-        builder.ToTable("AdministrativePenalties", NodeDbContext.HrSchema);
+        builder.ToTable("AdministrativePenalties", NodeDbContext.HrSchema, t =>
+        {
+            // Hours, or an amount of money: one or the other.
+            t.HasCheckConstraint("CK_AdministrativePenalties_HoursOrAmount",
+                "(\"Hours\" > 0 AND \"Amount\" IS NULL) OR (\"Hours\" = 0 AND \"Amount\" > 0)");
+            // A disciplinary action's deduction is an amount.
+            t.HasCheckConstraint("CK_AdministrativePenalties_Disciplinary", "\"DisciplinaryActionId\" IS NULL OR \"Amount\" IS NOT NULL");
+        });
         builder.Property(p => p.Hours).HasPrecision(5, 2);
+        builder.Property(p => p.Amount).HasPrecision(18, 2);
         builder.Property(p => p.Reason).HasMaxLength(AdministrativePenalty.MaxReasonLength);
         builder.Property(p => p.SetBy).HasMaxLength(200);
         builder.HasOne<Employee>().WithMany().HasForeignKey(p => p.EmployeeId).OnDelete(DeleteBehavior.Restrict);
-        // One a day: changed, not added to.
-        builder.HasIndex(p => new { p.EmployeeId, p.Date }).IsUnique();
+        builder.HasOne<OtantikPos.Hr.Domain.Performance.DisciplinaryAction>().WithMany().HasForeignKey(p => p.DisciplinaryActionId).OnDelete(DeleteBehavior.Restrict);
+        // A manager's own, one a day: changed, not added to. A disciplinary action's beside it, one to an action.
+        builder.HasIndex(p => new { p.EmployeeId, p.Date }).IsUnique().HasFilter("\"DisciplinaryActionId\" IS NULL");
+        builder.HasIndex(p => p.DisciplinaryActionId).IsUnique().HasFilter("\"DisciplinaryActionId\" IS NOT NULL");
     }
 }
 
@@ -276,6 +292,7 @@ internal sealed class DailyRecordConfiguration : IEntityTypeConfiguration<DailyR
         builder.Property(r => r.FirstIn).HasColumnType("timestamp without time zone");
         builder.Property(r => r.LastOut).HasColumnType("timestamp without time zone");
         builder.Property(r => r.AdministrativePenaltyHours).HasPrecision(5, 2);
+        builder.Property(r => r.AdministrativePenaltyAmount).HasPrecision(18, 2);
         builder.HasOne<Employee>().WithMany().HasForeignKey(r => r.EmployeeId).OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(r => new { r.EmployeeId, r.Date }).IsUnique();
     }
@@ -352,5 +369,148 @@ internal sealed class PayrollSlipConfiguration : IEntityTypeConfiguration<Payrol
         builder.HasOne<Employee>().WithMany().HasForeignKey(s => s.EmployeeId).OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(s => new { s.EmployeeId, s.Month }).IsUnique();
         builder.HasIndex(s => s.Month);
+    }
+}
+
+internal sealed class LeaveTypeConfiguration : IEntityTypeConfiguration<LeaveType>
+{
+    public void Configure(EntityTypeBuilder<LeaveType> builder)
+    {
+        builder.ToTable("LeaveTypes", NodeDbContext.HrSchema, t =>
+        {
+            t.HasCheckConstraint("CK_LeaveTypes_Days", $"\"DefaultDaysPerYear\" BETWEEN 0 AND {LeaveType.MaxDaysPerYear}");
+            // Unpaid leave has no days a year.
+            t.HasCheckConstraint("CK_LeaveTypes_Unpaid", "\"IsPaid\" OR \"DefaultDaysPerYear\" = 0");
+        });
+        builder.Property(l => l.Name).HasMaxLength(LeaveType.MaxNameLength);
+        builder.HasIndex(l => l.Name).IsUnique();
+    }
+}
+
+internal sealed class EmployeeLeaveBalanceConfiguration : IEntityTypeConfiguration<EmployeeLeaveBalance>
+{
+    public void Configure(EntityTypeBuilder<EmployeeLeaveBalance> builder)
+    {
+        builder.ToTable("EmployeeLeaveBalances", NodeDbContext.HrSchema, t =>
+        {
+            t.HasCheckConstraint("CK_EmployeeLeaveBalances_Days",
+                $"\"TotalAllocatedDays\" BETWEEN 0 AND {EmployeeLeaveBalance.MaxDays} AND \"UsedDays\" BETWEEN 0 AND \"TotalAllocatedDays\"");
+            t.HasCheckConstraint("CK_EmployeeLeaveBalances_Year", $"\"Year\" BETWEEN {EmployeeLeaveBalance.FirstYear} AND {EmployeeLeaveBalance.LastYear}");
+        });
+        builder.Property(b => b.AllocatedBy).HasMaxLength(200);
+        // Half days.
+        builder.Property(b => b.TotalAllocatedDays).HasPrecision(4, 1);
+        builder.Property(b => b.UsedDays).HasPrecision(4, 1);
+        builder.Ignore(b => b.RemainingDays);
+        builder.HasOne<Employee>().WithMany().HasForeignKey(b => b.EmployeeId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<LeaveType>().WithMany().HasForeignKey(b => b.LeaveTypeId).OnDelete(DeleteBehavior.Restrict);
+        // One to an employee, a type and a year.
+        builder.HasIndex(b => new { b.EmployeeId, b.LeaveTypeId, b.Year }).IsUnique();
+        builder.HasIndex(b => b.Year);
+    }
+}
+
+internal sealed class LeaveRequestConfiguration : IEntityTypeConfiguration<LeaveRequest>
+{
+    public void Configure(EntityTypeBuilder<LeaveRequest> builder)
+    {
+        builder.ToTable("LeaveRequests", NodeDbContext.HrSchema, t =>
+        {
+            t.HasCheckConstraint("CK_LeaveRequests_Dates",
+                $"\"EndDate\" >= \"StartDate\" AND date_part('year', \"EndDate\") = date_part('year', \"StartDate\") AND \"EndDate\" - \"StartDate\" < {LeaveRequest.MaxDays}");
+            t.HasCheckConstraint("CK_LeaveRequests_Days", "\"TotalDaysRequested\" > 0 AND \"TotalDaysRequested\" <= \"EndDate\" - \"StartDate\" + 1");
+            // Decided: by someone, when; waiting: by no one yet.
+            t.HasCheckConstraint("CK_LeaveRequests_Decision",
+                "(\"Status\" = 'Pending') = (\"DecidedById\" IS NULL AND \"DecidedAtUtc\" IS NULL)");
+            // Cancelled from a day by someone, no more days given back than it took: all of them
+            // when none of it stands.
+            t.HasCheckConstraint("CK_LeaveRequests_Cancellation",
+                "(\"CancelledFrom\" IS NULL) = (\"CancelledAtUtc\" IS NULL) AND (\"CancelledFrom\" IS NULL OR \"Status\" IN ('Approved', 'Cancelled')) " +
+                "AND (\"Status\" <> 'Cancelled' OR (\"CancelledFrom\" IS NOT NULL AND \"CancelledDays\" = \"TotalDaysRequested\")) " +
+                "AND \"CancelledDays\" BETWEEN 0 AND \"TotalDaysRequested\"");
+        });
+        builder.Property(r => r.Status).IsEnumName();
+        builder.Property(r => r.Reason).HasMaxLength(LeaveRequest.MaxReasonLength);
+        builder.Property(r => r.ManagerNotes).HasMaxLength(LeaveRequest.MaxNotesLength);
+        builder.Property(r => r.RequestedBy).HasMaxLength(200);
+        builder.Property(r => r.DecidedById).HasMaxLength(450);
+        builder.Property(r => r.DecidedBy).HasMaxLength(200);
+        builder.Property(r => r.CancelledById).HasMaxLength(450);
+        builder.Property(r => r.CancelledBy).HasMaxLength(200);
+        builder.Property(r => r.CancellationNotes).HasMaxLength(LeaveRequest.MaxNotesLength);
+        builder.Ignore(r => r.Year);
+        builder.Ignore(r => r.IsPending);
+        builder.Ignore(r => r.DaysTaken);
+        builder.HasOne<Employee>().WithMany().HasForeignKey(r => r.EmployeeId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<LeaveType>().WithMany().HasForeignKey(r => r.LeaveTypeId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(r => new { r.EmployeeId, r.StartDate });
+        // The waiting ones, for the managers' list.
+        builder.HasIndex(r => r.Status).HasFilter("\"Status\" = 'Pending'");
+    }
+}
+
+internal sealed class PerformanceKpiConfiguration : IEntityTypeConfiguration<PerformanceKpi>
+{
+    public void Configure(EntityTypeBuilder<PerformanceKpi> builder)
+    {
+        builder.ToTable("PerformanceKpis", NodeDbContext.HrSchema);
+        builder.Property(k => k.Name).HasMaxLength(PerformanceKpi.MaxNameLength);
+        builder.HasIndex(k => k.Name).IsUnique();
+    }
+}
+
+internal sealed class PerformanceEvaluationConfiguration : IEntityTypeConfiguration<PerformanceEvaluation>
+{
+    public void Configure(EntityTypeBuilder<PerformanceEvaluation> builder)
+    {
+        builder.ToTable("PerformanceEvaluations", NodeDbContext.HrSchema, t =>
+            t.HasCheckConstraint("CK_PerformanceEvaluations_Total", "\"TotalScore\" BETWEEN 20 AND 100"));
+        builder.Property(e => e.TotalScore).HasPrecision(4, 1);
+        builder.Property(e => e.Notes).HasMaxLength(PerformanceEvaluation.MaxNotesLength);
+        builder.Property(e => e.ReviewerId).HasMaxLength(450);
+        builder.Property(e => e.ReviewerName).HasMaxLength(200);
+        builder.HasOne<Employee>().WithMany().HasForeignKey(e => e.EmployeeId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(e => new { e.EmployeeId, e.Date });
+        // The KPIs it scored (KpiDetails), a row each.
+        builder.OwnsMany(e => e.Scores, score =>
+        {
+            score.ToTable("EvaluationScores", NodeDbContext.HrSchema, t => t.HasCheckConstraint("CK_EvaluationScores_Score",
+                $"\"Score\" BETWEEN {PerformanceEvaluation.MinScore} AND {PerformanceEvaluation.MaxScore}"));
+            score.WithOwner().HasForeignKey("EvaluationId");
+            score.Property<int>("Id");
+            score.HasKey("Id");
+            score.Property(s => s.KpiName).HasMaxLength(PerformanceKpi.MaxNameLength);
+            score.HasOne<PerformanceKpi>().WithMany().HasForeignKey(s => s.KpiId).OnDelete(DeleteBehavior.Restrict);
+            score.HasIndex("EvaluationId", nameof(KpiScore.KpiId)).IsUnique();
+        });
+        builder.Navigation(e => e.Scores).UsePropertyAccessMode(PropertyAccessMode.Field);
+    }
+}
+
+internal sealed class DisciplinaryActionConfiguration : IEntityTypeConfiguration<DisciplinaryAction>
+{
+    public void Configure(EntityTypeBuilder<DisciplinaryAction> builder)
+    {
+        builder.ToTable("DisciplinaryActions", NodeDbContext.HrSchema, t =>
+        {
+            // A penalty deduction has its amount; nothing else has one.
+            t.HasCheckConstraint("CK_DisciplinaryActions_Penalty",
+                "(\"SeverityLevel\" = 'PenaltyDeduction') = (\"PenaltyAmount\" IS NOT NULL) AND (\"PenaltyAmount\" IS NULL OR \"PenaltyAmount\" > 0)");
+            // Withdrawn: by someone, when, and why.
+            t.HasCheckConstraint("CK_DisciplinaryActions_Withdrawal",
+                "\"IsWithdrawn\" = (\"WithdrawnById\" IS NOT NULL AND \"WithdrawnAtUtc\" IS NOT NULL AND \"WithdrawalReason\" IS NOT NULL)");
+        });
+        builder.Property(a => a.SeverityLevel).IsEnumName();
+        builder.Property(a => a.ViolationType).HasMaxLength(DisciplinaryAction.MaxViolationLength);
+        builder.Property(a => a.Notes).HasMaxLength(DisciplinaryAction.MaxNotesLength);
+        builder.Property(a => a.PenaltyAmount).HasPrecision(18, 2);
+        builder.Property(a => a.IssuerId).HasMaxLength(450);
+        builder.Property(a => a.IssuerName).HasMaxLength(200);
+        builder.Property(a => a.WithdrawnById).HasMaxLength(450);
+        builder.Property(a => a.WithdrawnBy).HasMaxLength(200);
+        builder.Property(a => a.WithdrawalReason).HasMaxLength(DisciplinaryAction.MaxNotesLength);
+        builder.Ignore(a => a.IsWarning);
+        builder.HasOne<Employee>().WithMany().HasForeignKey(a => a.EmployeeId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(a => new { a.EmployeeId, a.Date });
     }
 }

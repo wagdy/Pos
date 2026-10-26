@@ -7,6 +7,7 @@ import { signal } from '@angular/core';
 import { FinancialsShell } from '../costing/financials-shell';
 import { HrShell } from './hr-shell';
 import { CorrectionsCount } from './corrections-count';
+import { PendingLeaves } from './pending-leaves';
 import { hrGuard, portalHrMatch } from '../../core/hr/hr-access';
 
 // The route of that path, anywhere under these.
@@ -41,7 +42,8 @@ describe('the HR navigation', () => {
       ['payroll/:employeeId', 'page', 1],
       ['advances', 'page', 1],
       ['corrections', 'page', 1],
-      ['holidays', 'page', 1],
+      ['leaves', 'page', 1],
+      ['holidays', undefined, 0],
       ['devices', 'page', 1],
       ['permissions', 'page', 1],
     ]);
@@ -50,6 +52,11 @@ describe('the HR navigation', () => {
     expect(routes.indexOf(portal)).toBeLessThan(routes.indexOf(shell));
     expect(portal.canMatch).toEqual([portalHrMatch]);
     expect(portal.children![0].children).toBe(till.children);
+    // Leaves & Holidays: the requests first, and the public holidays' old address kept.
+    const leaves = till.children!.find((r) => r.path === 'leaves')!;
+    expect(leaves.children!.map((r) => r.path)).toEqual(['', 'requests', 'balances', 'types', 'holidays']);
+    expect(leaves.children![0].redirectTo).toBe('requests');
+    expect(till.children!.find((r) => r.path === 'holidays')!.redirectTo).toBe('leaves/holidays');
     // Advances in Financials are HR's too: guarded the same way.
     expect(find(find(routes, 'financials')!.children, 'advances')!.canActivate?.length).toBe(1);
   });
@@ -57,28 +64,32 @@ describe('the HR navigation', () => {
   async function shellOf(hrTabs: string[], manager: boolean) {
     const count = signal(0);
     const refresh = vi.fn();
+    const leaves = signal(0);
+    const refreshLeaves = vi.fn();
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
         { provide: CorrectionsCount, useValue: { count, refresh } },
+        { provide: PendingLeaves, useValue: { count: leaves, refresh: refreshLeaves } },
         { provide: AuthService, useValue: { employeeActing: () => false, me: signal({ hrTabs }), can: (p: string) => manager || p !== Permissions.ApprovalDecide } },
       ],
     });
     const fixture = TestBed.createComponent(HrShell);
     await fixture.whenStable();
     fixture.detectChanges();
-    return { el: fixture.nativeElement as HTMLElement, fixture, count, refresh };
+    return { el: fixture.nativeElement as HTMLElement, fixture, count, refresh, leaves, refreshLeaves };
   }
 
-  it('has a tab each for now, the employees, departments, attendance, corrections, payroll, advances, holidays and devices, counting what waits, and Permissions for a manager', async () => {
+  it('has a tab each for now, the employees, departments, attendance, corrections, payroll, advances, leaves and holidays, and devices, counting what waits, and Permissions for a manager', async () => {
     const all = ['Now', 'Employees', 'Departments', 'Attendance', 'Corrections', 'Payroll', 'Advances', 'Holidays', 'Devices'];
-    const { el, fixture, count, refresh } = await shellOf(all, true);
+    const { el, fixture, count, refresh, leaves, refreshLeaves } = await shellOf(all, true);
 
     expect(text(el.querySelector('h1')!)).toBe('HR & Payroll الموارد البشرية والرواتب');
     expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('href'))).toEqual([
-      '/now', '/employees', '/departments', '/attendance', '/corrections', '/payroll', '/advances', '/holidays', '/devices', '/permissions',
+      '/now', '/employees', '/departments', '/attendance', '/corrections', '/payroll', '/advances', '/leaves', '/devices', '/permissions',
     ]);
+    expect(text(el.querySelectorAll('nav a')[7])).toBe('Leaves & Holidaysالإجازات والعطلات');
     expect(text(el.querySelectorAll('nav a')[9])).toBe('Permissionsصلاحيات الموظفين');
     expect(refresh).toHaveBeenCalled();
     expect(el.querySelector('.count')).toBeNull();
@@ -87,6 +98,12 @@ describe('the HR navigation', () => {
     fixture.detectChanges();
     expect(el.querySelectorAll('nav a')[4].querySelector('.count')!.getAttribute('aria-label')).toBe('2 waiting');
     expect(text(el.querySelector('.count')!)).toBe('2');
+
+    // The leave requests waiting for a manager, on Leaves & Holidays.
+    expect(refreshLeaves).toHaveBeenCalled();
+    leaves.set(3);
+    fixture.detectChanges();
+    expect(el.querySelectorAll('nav a')[7].querySelector('.count')!.getAttribute('aria-label')).toBe('3 leave requests waiting');
   });
 
   it('shows an accountant only the tabs a manager ticked for them, and no Permissions', async () => {

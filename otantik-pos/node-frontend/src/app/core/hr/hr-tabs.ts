@@ -20,7 +20,8 @@ export const hrTabs: readonly HrTabInfo[] = [
   { tab: 'Corrections', path: 'corrections', en: 'Corrections', ar: 'مراجعة وجزاءات' },
   { tab: 'Payroll', path: 'payroll', en: 'Payroll', ar: 'مسير الرواتب' },
   { tab: 'Advances', path: 'advances', en: 'Advances', ar: 'السلفيات' },
-  { tab: 'Holidays', path: 'holidays', en: 'Holidays', ar: 'العطلات الرسمية' },
+  // The leaves and the public holidays (the tab the API calls Holidays).
+  { tab: 'Holidays', path: 'leaves', en: 'Leaves & Holidays', ar: 'الإجازات والعطلات' },
   { tab: 'Devices', path: 'devices', en: 'Attendance devices', ar: 'أجهزة البصمة' },
 ];
 

@@ -190,6 +190,9 @@ export class PayslipPage {
   readonly startMonth = input<string>(undefined, { alias: 'month' });
   // In an employee's profile, not a page of its own.
   readonly embedded = input(false);
+  // Changed by whoever holds it to have the slip read again: the profile, when a disciplinary
+  // action's penalty is issued or withdrawn beside it.
+  readonly reloadKey = input(0);
 
   // A manager's, or an employee's holding the Payroll tab in the portal.
   protected readonly canDecide = computed(() => this.access.canDecide('Payroll'));
@@ -202,7 +205,7 @@ export class PayslipPage {
 
   constructor() {
     effect(() => {
-      const [, month] = [this.employeeId(), this.startMonth()];
+      const [, month] = [this.employeeId(), this.startMonth(), this.reloadKey()];
       untracked(() => {
         if (month && /^\d{4}-\d{2}-\d{2}$/.test(month)) {
           this.month.set(`${month.slice(0, 8)}01`);

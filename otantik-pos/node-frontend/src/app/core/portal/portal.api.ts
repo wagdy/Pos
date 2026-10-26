@@ -2,6 +2,8 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { EmployeeIdPhoto, EmploymentType, PayrollSlip, WeekDay } from '../hr/hr.api';
+import { LeaveBalance, LeaveDays, LeaveRequest } from '../hr/leaves.api';
+import { EmployeePerformance } from '../hr/performance.api';
 
 // What the portal shows an employee of themselves: read-only, and only ever their own, from their
 // token.
@@ -28,6 +30,22 @@ export interface EmployeeCustody {
   quantity: number;
 }
 
+// Their leaves this year: the balance of each paid type, their requests (the latest first), and
+// the types they may ask for, paid and unpaid.
+export interface EmployeeLeaves {
+  year: number;
+  balances: LeaveBalance[];
+  requests: LeaveRequest[];
+  types: { id: string; name: string; isPaid: boolean }[];
+}
+
+export interface PortalLeaveInput {
+  leaveTypeId: string;
+  startDate: string;
+  endDate: string;
+  reason: string | null;
+}
+
 @Injectable({ providedIn: 'root' })
 export class PortalApi {
   private readonly http = inject(HttpClient);
@@ -51,5 +69,24 @@ export class PortalApi {
 
   custody(): Observable<EmployeeCustody[]> {
     return this.http.get<EmployeeCustody[]>('/api/portal/custody');
+  }
+
+  leaves(): Observable<EmployeeLeaves> {
+    return this.http.get<EmployeeLeaves>('/api/portal/leaves');
+  }
+
+  // The working days a leave of theirs would take, before asking.
+  leaveDays(startDate: string, endDate: string): Observable<LeaveDays> {
+    return this.http.get<LeaveDays>('/api/portal/leaves/days', { params: { startDate, endDate } });
+  }
+
+  // Asked for, to wait for a manager; the id made here, so a retry finds the one made.
+  requestLeave(input: PortalLeaveInput, requestId: string = crypto.randomUUID()): Observable<LeaveRequest> {
+    return this.http.post<LeaveRequest>('/api/portal/leaves', { requestId, ...input });
+  }
+
+  // Their evaluations and disciplinary actions, withdrawn ones left out.
+  performance(): Observable<EmployeePerformance> {
+    return this.http.get<EmployeePerformance>('/api/portal/performance');
   }
 }

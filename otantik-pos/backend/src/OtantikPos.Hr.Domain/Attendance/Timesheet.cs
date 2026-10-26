@@ -38,6 +38,9 @@ public enum DayStatus
     // Punched on a public holiday: measured as the day would have been (against the shift on a
     // working day, with nothing late on a day off), and a holiday allowance for it on the payslip.
     WorkedOnHoliday = 10,
+
+    // Unpaid leave (إجازة بدون راتب), approved, with no punches: a day's pay off, never an absence.
+    UnpaidLeave = 11,
 }
 
 // How punches are read: the grace for arriving late (up to that many minutes after the shift
@@ -77,7 +80,10 @@ public sealed record DayEvaluation(
     int OvertimeMinutes,
     // A manager's administrative penalty on the day (جزاء إداري), in hours: deducted at the hourly
     // rate. Not the timesheet's: set beside it.
-    decimal PenaltyHours = 0)
+    decimal PenaltyHours = 0,
+    // Penalties in money on the day, a disciplinary action's deduction among them: deducted as
+    // they are.
+    decimal PenaltyAmount = 0)
 {
     // Of the shift's nine hours, the minutes not worked: what is deducted.
     public int ShortMinutes => LateMinutes + EarlyLeaveMinutes + AwayMinutes;
@@ -141,7 +147,13 @@ public static class Timesheet
         var off = IsOff(employee, day, mark);
         if (times.Count == 0)
             return Nothing(
-                day, holiday ? DayStatus.Holiday : mark == DayMarkKind.Leave ? DayStatus.Leave : off ? DayStatus.DayOff : over ? DayStatus.Absent : DayStatus.Open);
+                day,
+                holiday ? DayStatus.Holiday
+                : mark == DayMarkKind.Leave ? DayStatus.Leave
+                : mark == DayMarkKind.UnpaidLeave ? DayStatus.UnpaidLeave
+                : off ? DayStatus.DayOff
+                : over ? DayStatus.Absent
+                : DayStatus.Open);
 
         var complete = times.Count % 2 == 0;
         var pairs = Enumerable.Range(0, times.Count / 2).Select(i => (In: times[2 * i], Out: times[2 * i + 1])).ToList();
@@ -245,6 +257,7 @@ public sealed class DailyRecord : AggregateRoot
     public int AwayMinutes { get; private set; }
     public int OvertimeMinutes { get; private set; }
     public decimal AdministrativePenaltyHours { get; private set; }
+    public decimal AdministrativePenaltyAmount { get; private set; }
     public DateTime CalculatedAtUtc { get; private set; }
 
     public void Update(DayEvaluation evaluation)
@@ -261,9 +274,11 @@ public sealed class DailyRecord : AggregateRoot
         AwayMinutes = evaluation.AwayMinutes;
         OvertimeMinutes = evaluation.OvertimeMinutes;
         AdministrativePenaltyHours = evaluation.PenaltyHours;
+        AdministrativePenaltyAmount = evaluation.PenaltyAmount;
         CalculatedAtUtc = DateTime.UtcNow;
     }
 
     public DayEvaluation ToEvaluation() =>
-        new(Date, Status, FirstIn, LastOut, Punches, WorkedMinutes, LateMinutes, EarlyLeaveMinutes, AwayMinutes, OvertimeMinutes, AdministrativePenaltyHours);
+        new(Date, Status, FirstIn, LastOut, Punches, WorkedMinutes, LateMinutes, EarlyLeaveMinutes, AwayMinutes, OvertimeMinutes, AdministrativePenaltyHours,
+            AdministrativePenaltyAmount);
 }

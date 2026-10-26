@@ -62,11 +62,22 @@ const hrChildren: Routes = [
     loadComponent: () => import('./features/hr/corrections-page').then((m) => m.CorrectionsPage),
   },
   {
-    // A year's public holidays: ?year= not needed, it opens on the business day's.
-    path: 'holidays',
+    // Leaves & Holidays (الإجازات والعطلات): the leave requests waiting for a manager and the
+    // year's, everyone's balances, the leave types, and the year's public holidays (opening on the
+    // business day's).
+    path: 'leaves',
     canActivate: [hrTabGuard('Holidays')],
-    loadComponent: () => import('./features/hr/holidays-page').then((m) => m.HolidaysPage),
+    loadComponent: () => import('./features/hr/leaves-shell').then((m) => m.LeavesShell),
+    children: [
+      { path: '', pathMatch: 'full', redirectTo: 'requests' },
+      { path: 'requests', loadComponent: () => import('./features/hr/leave-requests-page').then((m) => m.LeaveRequestsPage) },
+      { path: 'balances', loadComponent: () => import('./features/hr/leave-balances-page').then((m) => m.LeaveBalancesPage) },
+      { path: 'types', loadComponent: () => import('./features/hr/leave-types-page').then((m) => m.LeaveTypesPage) },
+      { path: 'holidays', loadComponent: () => import('./features/hr/holidays-page').then((m) => m.HolidaysPage) },
+    ],
   },
+  // The public holidays' address before they were a part of Leaves & Holidays.
+  { path: 'holidays', redirectTo: 'leaves/holidays' },
   {
     path: 'devices',
     canActivate: [hrTabGuard('Devices')],

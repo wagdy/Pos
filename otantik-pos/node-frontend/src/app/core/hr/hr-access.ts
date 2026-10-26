@@ -27,8 +27,13 @@ export class HrAccess {
   // A tab of HR & Payroll's own held (Custody & Assets is a section of its own).
   readonly any = computed(() => hrTabs.some((t) => this.tabs().has(t.tab)));
 
+  // A manager of the till: who gives the tabs, and decides what stays a manager's even for an
+  // employee holding the tab (leaves, balances and their types; evaluations and disciplinary
+  // actions).
+  readonly manager = computed(() => !this.auth.employeeActing() && this.auth.can(Permissions.ApprovalDecide));
+
   // Who gives the tabs: a manager of the till.
-  readonly canGive = computed(() => !this.auth.employeeActing() && this.auth.can(Permissions.ApprovalDecide));
+  readonly canGive = this.manager;
 
   has(tab: HrTab): boolean {
     return this.tabs().has(tab);

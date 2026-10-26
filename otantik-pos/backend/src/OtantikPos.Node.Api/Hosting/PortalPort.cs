@@ -20,6 +20,7 @@ internal static class PortalPort
         var path = request.Path;
         if (path.StartsWithSegments("/api"))
             return path.StartsWithSegments("/api/portal") || path.StartsWithSegments("/api/hr") || path.StartsWithSegments("/api/custody")
+                || path.StartsWithSegments("/api/leaves") || path.StartsWithSegments("/api/performance")
                 || path.Equals("/api/auth/employee-login", StringComparison.OrdinalIgnoreCase);
         if (path.StartsWithSegments("/hubs") || path.StartsWithSegments("/iclock") || path.StartsWithSegments("/health") || path.StartsWithSegments("/openapi"))
             return false;

@@ -769,10 +769,37 @@ public class HrApiTests
         Assert.Equal(("Hassan", Iso(day), 2m, 40m, "Left the walk-in open"), (listed.GetProperty("employeeName").GetString(), listed.GetProperty("date").GetString(),
             listed.GetProperty("hours").GetDecimal(), listed.GetProperty("amount").GetDecimal(), listed.GetProperty("reason").GetString()));
 
-        // Taken off again.
+        // A disciplinary action's penalty deduction on the same day: its own, beside the manager's
+        // hours, in money, off the same pay.
+        var deduction = new OtantikPos.Hr.Domain.Performance.DisciplinaryAction(
+            Guid.NewGuid(), hassan, day, "Absence", OtantikPos.Hr.Domain.Performance.SeverityLevel.PenaltyDeduction, null, 250, "boss", "Boss");
+        await api.Db(db =>
+        {
+            db.DisciplinaryActions.Add(deduction);
+            db.AdministrativePenalties.Add(deduction.Penalty()!);
+            return db.SaveChangesAsync();
+        });
+        figures = await Figures();
+        Assert.Equal((2m, 250m, 290m), (figures.GetProperty("administrativePenaltyHours").GetDecimal(), figures.GetProperty("administrativePenaltyAmounts").GetDecimal(),
+            figures.GetProperty("administrativePenalty").GetDecimal()));
+        // The slip lists both, the action's linked to it.
+        var lines = (await Json(await accountant.GetAsync($"/api/hr/payroll?month={Iso(month)}", Cancel))).GetProperty("slips")[0].GetProperty("penalties")
+            .EnumerateArray().Select(p => (p.GetProperty("hours").GetDecimal(), p.GetProperty("amount").ValueKind == JsonValueKind.Null ? (decimal?)null : p.GetProperty("amount").GetDecimal(),
+                p.GetProperty("disciplinaryActionId").ValueKind == JsonValueKind.Null ? (Guid?)null : p.GetProperty("disciplinaryActionId").GetGuid()))
+            .OrderBy(l => l.Item1).ToList();
+        Assert.Equal([(0m, (decimal?)250m, (Guid?)deduction.Id), (2m, (decimal?)null, (Guid?)null)], lines);
+        marked = (await Json(await accountant.GetAsync($"/api/hr/attendance?date={Iso(day)}", Cancel))).GetProperty("employees")[0].GetProperty("day");
+        Assert.Equal((2m, 250m, "Left the walk-in open"), (marked.GetProperty("penaltyHours").GetDecimal(), marked.GetProperty("penaltyAmount").GetDecimal(),
+            marked.GetProperty("penaltyReason").GetString()));
+        var both = (await Json(await accountant.GetAsync(Penalties, Cancel))).EnumerateArray().ToList();
+        var fromAction = both.Single(p => p.GetProperty("disciplinaryActionId").ValueKind != JsonValueKind.Null);
+        Assert.Equal((0m, 250m, "Penalty deduction: Absence", deduction.Id), (fromAction.GetProperty("hours").GetDecimal(), fromAction.GetProperty("amount").GetDecimal(),
+            fromAction.GetProperty("reason").GetString(), fromAction.GetProperty("disciplinaryActionId").GetGuid()));
+
+        // The manager's own taken off again: the deduction stays.
         Assert.Equal(HttpStatusCode.NoContent, (await manager.PutAsJsonAsync(Penalty, new { hours = (decimal?)null }, Cancel)).StatusCode);
-        Assert.Equal(0m, (await Figures()).GetProperty("administrativePenalty").GetDecimal());
-        Assert.Empty((await Json(await accountant.GetAsync(Penalties, Cancel))).EnumerateArray());
+        Assert.Equal(250m, (await Figures()).GetProperty("administrativePenalty").GetDecimal());
+        Assert.Equal([250m], (await Json(await accountant.GetAsync(Penalties, Cancel))).EnumerateArray().Select(p => p.GetProperty("amount").GetDecimal()));
     }
 
     [Fact]

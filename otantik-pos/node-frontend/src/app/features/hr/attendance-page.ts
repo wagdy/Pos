@@ -27,6 +27,7 @@ import {
   duration,
   shift,
 } from '../../core/hr/hr.api';
+import { MoneyPipe } from '../../core/ui/money.pipe';
 import { NotifyService } from '../../core/ui/notify.service';
 import { BusinessDay, isoDay } from '../costing/financials';
 import {
@@ -66,6 +67,7 @@ interface Row {
   imports: [
     DatePipe,
     FormsModule,
+    MoneyPipe,
     MatButtonModule,
     MatButtonToggleModule,
     MatFormFieldModule,
@@ -184,6 +186,9 @@ interface Row {
                   }
                   @if (d.penaltyHours) {
                     <div class="small bad-text">Penalty {{ d.penaltyHours }}h: {{ d.penaltyReason }}</div>
+                  }
+                  @if (d.penaltyAmount) {
+                    <div class="small bad-text">Penalty deduction {{ d.penaltyAmount | money }}</div>
                   }
                 </td>
                 <td class="num"><mat-icon class="chevron">{{ open().has(r.key) ? 'expand_less' : 'expand_more' }}</mat-icon></td>
@@ -459,6 +464,7 @@ export class AttendancePage {
     Leave: 'Marked leave',
     DayOff: 'Marked day off',
     WorkingDay: 'Marked a working day: a swap',
+    UnpaidLeave: 'Unpaid leave, approved',
   };
   protected readonly clock = clock;
   protected readonly duration = duration;

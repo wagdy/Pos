@@ -48,7 +48,32 @@ public sealed class PortalController(ISender sender) : ControllerBase
 
     // Name, category and how many, never what it cost: the profile's custody, with its costs, is
     // the managers' (HrController).
+    // Their leave this year: each paid type's balance, and their requests.
+    [HttpGet("leaves")]
+    public Task<EmployeeLeavesDto> GetLeaves(CancellationToken cancellationToken) =>
+        sender.Send(new GetEmployeeLeavesQuery(Me), cancellationToken);
+
+    // The working days the dates would take, before asking.
+    [HttpGet("leaves/days")]
+    public Task<LeaveDaysDto> CountLeaveDays([FromQuery] DateOnly startDate, [FromQuery] DateOnly endDate, CancellationToken cancellationToken) =>
+        sender.Send(new CountLeaveDaysQuery(Me, startDate, endDate), cancellationToken);
+
+    // Asked for themselves: it waits for a manager.
+    [HttpPost("leaves")]
+    public Task<LeaveRequestDto> RequestLeave(PortalLeaveRequest request, CancellationToken cancellationToken) =>
+        sender.Send(new SubmitLeaveRequestCommand(
+            request.RequestId, Me, request.LeaveTypeId, request.StartDate, request.EndDate, request.Reason,
+            User.FindFirst(StaffClaims.Name)?.Value ?? string.Empty), cancellationToken);
+
+    // Their evaluations and disciplinary actions, read-only: what was withdrawn left out.
+    [HttpGet("performance")]
+    public Task<EmployeePerformanceDto> GetPerformance(CancellationToken cancellationToken) =>
+        sender.Send(new GetEmployeePerformanceQuery(Me, ForEmployee: true), cancellationToken);
+
     [HttpGet("custody")]
     public Task<IReadOnlyList<EmployeeCustodyDto>> GetCustody(CancellationToken cancellationToken) =>
         sender.Send(new GetPortalCustodyQuery(Me), cancellationToken);
 }
+
+// RequestId made by the phone: a retry finds the one made.
+public sealed record PortalLeaveRequest(Guid RequestId, Guid LeaveTypeId, DateOnly StartDate, DateOnly EndDate, string? Reason = null);

@@ -101,7 +101,7 @@ internal sealed class Presence(IEmployeeRepository employees, Timesheets timeshe
                 var since = day.Punches.Where(p => !p.IsIgnored).Select(p => (DateTime?)p.PunchedAt).Max();
                 DateTime? due = sheet.Employee.ShiftStartsAt is { } start ? group.Key.ToDateTime(start) : null;
                 var state = e.Punches > 0 ? e.Punches % 2 == 1 ? PresenceState.In : PresenceState.Left
-                    : e.Status is DayStatus.DayOff or DayStatus.Leave or DayStatus.Holiday ? PresenceState.Off
+                    : e.Status is DayStatus.DayOff or DayStatus.Leave or DayStatus.UnpaidLeave or DayStatus.Holiday ? PresenceState.Off
                     : due is { } d && now > d.AddMinutes(policy.GraceMinutes) ? PresenceState.Late
                     : PresenceState.NotArrived;
                 list.Add(new PresenceDto(EmployeeDto.From(sheet.Employee), group.Key, state, e.Punches > 0 ? since : null, due, e.Status, day.Holiday?.Name));

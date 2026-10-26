@@ -149,6 +149,8 @@ describe('an employee’s own profile in the portal', () => {
   const payslip = vi.fn();
   const custody = vi.fn();
   const idPhoto = vi.fn();
+  const leaves = vi.fn();
+  const performance = vi.fn();
   const signOut = vi.fn();
   const hrTabs = signal<string[]>([]);
 
@@ -174,7 +176,7 @@ describe('an employee’s own profile in the portal', () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
-        { provide: PortalApi, useValue: { me, months, payslip, custody, idPhoto } },
+        { provide: PortalApi, useValue: { me, months, payslip, custody, idPhoto, leaves, performance } },
         { provide: PortalAuth, useValue: { session: signal({ name: 'Hassan Mahmoud Ali' }), hrTabs, signOut } },
       ],
     });
@@ -199,6 +201,10 @@ describe('an employee’s own profile in the portal', () => {
       { name: 'Dinner plates', category: 'Tableware', quantity: 37 },
       { name: 'Knife set', category: null, quantity: 1 },
     ]));
+    leaves.mockReset().mockReturnValue(of({ year: 2026, balances: [], requests: [], types: [] }));
+    performance.mockReset().mockReturnValue(
+      of({ employeeId: 'hassan', employeeName: 'Hassan', evaluations: [], actions: [], record: { verbalWarnings: 0, firstWritten: 0, secondWritten: 0, penaltyDeductions: 0, terminations: 0, warnings: 0, next: 'VerbalWarning' } }),
+    );
     signOut.mockReset();
     hrTabs.set([]);
   });
@@ -227,6 +233,12 @@ describe('an employee’s own profile in the portal', () => {
       ['Knife set', '—', '1'],
     ]);
     expect(text(el.querySelector('.custody')!)).not.toContain('L.E');
+    // Their leaves and their record beside them.
+    expect(leaves).toHaveBeenCalled();
+    expect(performance).toHaveBeenCalled();
+    expect(text(el.querySelector('.leaves h2')!)).toBe('My leaves إجازاتي');
+    expect(text(el.querySelector('.record h2')!)).toBe('My record سجلي');
+    expect(text(el.querySelector('.record .empty')!)).toBe('Nothing on your record: no evaluations or warnings.');
   });
 
   it('says when nothing is in their custody', async () => {

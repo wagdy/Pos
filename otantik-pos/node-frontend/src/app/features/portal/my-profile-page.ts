@@ -14,13 +14,29 @@ import { PortalAuth } from '../../core/portal/portal-auth';
 import { EmployeeCustody, PortalApi, PortalProfile } from '../../core/portal/portal.api';
 import { PaperPreview } from '../costing/invoice-paper';
 import { PayslipSheet } from '../hr/payslip-sheet';
+import { MyLeaves } from './my-leaves';
+import { MyRecord } from './my-record';
 
-// An employee's own page in the portal (ملفي), read-only, and nothing of the till around it: who
-// they are (their details and ID card), their payslip (this month's as it stands, or one before
-// from the list), and what is in their custody.
+// An employee's own page in the portal (ملفي), and nothing of the till around it: who they are
+// (their details and ID card), their leaves (MyLeaves, where they ask for one), what is in their
+// custody, their record of evaluations and warnings (MyRecord), and their payslip (this month's as
+// it stands, or one before from the list). Read-only but for asking for leave.
 @Component({
   selector: 'app-my-profile-page',
-  imports: [DatePipe, FormsModule, MatButtonModule, MatFormFieldModule, MatIconModule, MatProgressBarModule, MatSelectModule, PaperPreview, PayslipSheet, RouterLink],
+  imports: [
+    DatePipe,
+    FormsModule,
+    MatButtonModule,
+    MatFormFieldModule,
+    MatIconModule,
+    MatProgressBarModule,
+    MatSelectModule,
+    MyLeaves,
+    MyRecord,
+    PaperPreview,
+    PayslipSheet,
+    RouterLink,
+  ],
   template: `
     <header class="bar">
       <mat-icon>badge</mat-icon>
@@ -42,29 +58,66 @@ import { PayslipSheet } from '../hr/payslip-sheet';
       @if (error(); as e) {
         <p class="error">{{ e }}</p>
       } @else if (profile(); as p) {
-        <section class="card details" aria-label="My details">
-          <h2>My details <span class="ar">بياناتي</span></h2>
-          <dl>
-            <div><dt>Full name<span class="ar">الاسم بالكامل</span></dt><dd>{{ p.name }}</dd></div>
-            <div><dt>National ID<span class="ar">رقم البطاقة</span></dt><dd class="digits" [class.missing]="!p.nationalId">{{ p.nationalId ?? 'Not entered' }}</dd></div>
-            <div><dt>Job<span class="ar">الوظيفة</span></dt><dd>{{ p.jobTitle }} · {{ p.department }}</dd></div>
-            <div><dt>Mobile<span class="ar">الموبايل</span></dt><dd class="digits">{{ p.mobileNumber ?? '—' }}</dd></div>
-            <div><dt>Started on<span class="ar">تاريخ التعيين</span></dt><dd>{{ p.hiredOn | date: 'd MMM y' }}</dd></div>
-            <div>
-              <dt>Shift<span class="ar">الوردية</span></dt>
-              <dd>
-                {{ p.shiftStartsAt && p.shiftEndsAt ? p.shiftStartsAt.slice(0, 5) + '–' + p.shiftEndsAt.slice(0, 5) : 'Flexible hours' }}
-                <span class="muted"> · {{ daysOff() }}</span>
-              </dd>
-            </div>
-          </dl>
-          @if (p.idPhoto; as photo) {
-            <h3>ID card <span class="ar">صورة البطاقة</span></h3>
-            <div class="photo">
-              <app-paper-preview [fetch]="photo$" [fileName]="photo.fileName" />
-            </div>
-          }
-        </section>
+        <div class="side">
+          <section class="card details" aria-label="My details">
+            <h2>My details <span class="ar">بياناتي</span></h2>
+            <dl>
+              <div><dt>Full name<span class="ar">الاسم بالكامل</span></dt><dd>{{ p.name }}</dd></div>
+              <div><dt>National ID<span class="ar">رقم البطاقة</span></dt><dd class="digits" [class.missing]="!p.nationalId">{{ p.nationalId ?? 'Not entered' }}</dd></div>
+              <div><dt>Job<span class="ar">الوظيفة</span></dt><dd>{{ p.jobTitle }} · {{ p.department }}</dd></div>
+              <div><dt>Mobile<span class="ar">الموبايل</span></dt><dd class="digits">{{ p.mobileNumber ?? '—' }}</dd></div>
+              <div><dt>Started on<span class="ar">تاريخ التعيين</span></dt><dd>{{ p.hiredOn | date: 'd MMM y' }}</dd></div>
+              <div>
+                <dt>Shift<span class="ar">الوردية</span></dt>
+                <dd>
+                  {{ p.shiftStartsAt && p.shiftEndsAt ? p.shiftStartsAt.slice(0, 5) + '–' + p.shiftEndsAt.slice(0, 5) : 'Flexible hours' }}
+                  <span class="muted"> · {{ daysOff() }}</span>
+                </dd>
+              </div>
+            </dl>
+            @if (p.idPhoto; as photo) {
+              <h3>ID card <span class="ar">صورة البطاقة</span></h3>
+              <div class="photo">
+                <app-paper-preview [fetch]="photo$" [fileName]="photo.fileName" />
+              </div>
+            }
+          </section>
+
+          <section class="card leaves" aria-label="My leaves">
+            <app-my-leaves />
+          </section>
+
+          <section class="card custody" aria-label="My custody">
+            <h2>My custody <span class="ar">عهدتي</span></h2>
+            @if (custody().length) {
+              <table>
+                <thead>
+                  <tr>
+                    <th>Asset<span class="ar">الصنف</span></th>
+                    <th>Category<span class="ar">الفئة</span></th>
+                    <th class="count">Quantity<span class="ar">العدد</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (c of custody(); track c.name + '|' + c.category) {
+                    <tr class="held">
+                      <td>{{ c.name }}</td>
+                      <td [class.muted]="!c.category">{{ c.category ?? '—' }}</td>
+                      <td class="count">{{ c.quantity }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+              <p class="muted small">Keep them safe: what breaks or is lost is checked out by your manager.</p>
+            } @else {
+              <p class="muted">Nothing is in your custody.</p>
+            }
+          </section>
+
+          <section class="card record" aria-label="My record">
+            <app-my-record />
+          </section>
+        </div>
 
         <section class="card payslip" aria-label="My payslip">
           <div class="head">
@@ -94,32 +147,6 @@ import { PayslipSheet } from '../hr/payslip-sheet';
           }
         </section>
 
-        <section class="card custody" aria-label="My custody">
-          <h2>My custody <span class="ar">عهدتي</span></h2>
-          @if (custody().length) {
-            <table>
-              <thead>
-                <tr>
-                  <th>Asset<span class="ar">الصنف</span></th>
-                  <th>Category<span class="ar">الفئة</span></th>
-                  <th class="count">Quantity<span class="ar">العدد</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                @for (c of custody(); track c.name + '|' + c.category) {
-                  <tr class="held">
-                    <td>{{ c.name }}</td>
-                    <td [class.muted]="!c.category">{{ c.category ?? '—' }}</td>
-                    <td class="count">{{ c.quantity }}</td>
-                  </tr>
-                }
-              </tbody>
-            </table>
-            <p class="muted small">Keep them safe: what breaks or is lost is checked out by your manager.</p>
-          } @else {
-            <p class="muted">Nothing is in your custody.</p>
-          }
-        </section>
       }
     </main>
   `,
@@ -154,8 +181,6 @@ import { PayslipSheet } from '../hr/payslip-sheet';
     .page {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
-      /* The payslip spans both rows; what is left over goes to the second, so custody sits right under the details. */
-      grid-template-rows: auto 1fr;
       gap: 16px;
       max-width: 1200px;
       margin: 0 auto;
@@ -179,8 +204,12 @@ import { PayslipSheet } from '../hr/payslip-sheet';
         color: var(--mat-sys-on-surface-variant);
       }
     }
-    .payslip {
-      grid-row: span 2;
+    /* Who they are, their leaves, custody and record on the left; the payslip beside them. */
+    .side {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 16px;
+      min-width: 0;
     }
     .head {
       display: flex;
@@ -267,10 +296,8 @@ import { PayslipSheet } from '../hr/payslip-sheet';
     @media (max-width: 800px) {
       .page {
         grid-template-columns: minmax(0, 1fr);
-        grid-template-rows: none;
       }
       .payslip {
-        grid-row: auto;
         order: 1;
       }
     }

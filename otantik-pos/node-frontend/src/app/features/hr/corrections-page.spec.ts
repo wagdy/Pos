@@ -192,6 +192,33 @@ describe('the corrections', () => {
     expect([...el.querySelectorAll('.penalties tfoot td')].map(text).slice(0, 4)).toEqual(['Total · الإجمالي', '3.5h', '', 'L.E 77.50']);
   });
 
+  it('lists a disciplinary action’s penalty deduction as money beside the hours, linked to the action and changed only there', async () => {
+    const deduction: AdministrativePenalty = {
+      employeeId: 'hassan', employeeName: 'Hassan', date: '2026-10-05', hours: 0, hourlyRate: 20, amount: 200, reason: 'Penalty deduction: Absence',
+      setBy: 'Omar', setAtUtc: '2026-10-06T09:00:00Z', disciplinaryActionId: 'action-1',
+    };
+    penaltiesOf.mockReturnValue(of([penalties[0], deduction, penalties[1]]));
+    const { el, rows, page } = await render();
+
+    const row = rows('penalties')[1];
+    expect(row.classList).toContain('disciplinary');
+    expect([...row.querySelectorAll('td')].slice(0, 5).map(text)).toEqual(['Mon 5 Oct', 'Hassan', '—', '—', 'L.E 200.00']);
+    expect(text(row.querySelectorAll('td')[5])).toBe('Disciplinaryتأديبي Penalty deduction: Absence open_in_new The disciplinary action');
+    expect(row.querySelector('a')!.getAttribute('href')).toBe('/hr/employees/hassan#performance');
+    // Withdrawn with its action, on the profile: no pencil here; the manager’s own on the same day keeps theirs.
+    expect(row.querySelector('button')).toBeNull();
+    expect(rows('penalties')[0].querySelector('button')).not.toBeNull();
+    expect([...el.querySelectorAll('.penalties tfoot td')].map(text).slice(0, 5)).toEqual(['Total · الإجمالي', '3.5h', '', 'L.E 277.50', '']);
+
+    // A day holds the manager’s own penalty and an action’s beside it: only the manager’s is one a day.
+    open.mockReturnValue({ afterClosed: () => of(undefined) });
+    await page['addPenalty']();
+    expect(open.mock.lastCall![1].data.taken).toEqual([
+      { employeeId: 'hassan', date: '2026-10-05', hours: 2 },
+      { employeeId: 'mona', date: '2026-10-09', hours: 1.5 },
+    ]);
+  });
+
   it('adds a penalty for whoever is employed in the month, and changes or takes one off', async () => {
     const { page } = await render();
 

@@ -382,7 +382,7 @@ export class NowPage {
     if (p.state === 'Off') {
       return p.dayStatus === 'Holiday'
         ? { en: 'Public holiday', ar: 'عطلة رسمية' }
-        : p.dayStatus === 'Leave'
+        : p.dayStatus === 'Leave' || p.dayStatus === 'UnpaidLeave'
           ? { en: 'On leave', ar: 'إجازة' }
           : { en: 'Day off', ar: 'راحة' };
     }

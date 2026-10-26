@@ -4,11 +4,12 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { HrAccess } from '../../core/hr/hr-access';
 import { hrTabs } from '../../core/hr/hr-tabs';
 import { CorrectionsCount } from './corrections-count';
+import { PendingLeaves } from './pending-leaves';
 
 // HR & Payroll (الموارد البشرية والرواتب), opening on who is in now: the employees and their
-// departments, their attendance and its corrections, the monthly payroll, the public holidays,
-// and the attendance devices that send their punches. The Corrections tab counts what waits there
-// for a manager. Each tab for whoever holds it (صلاحيات الموظفين): a manager every one, and the
+// departments, their attendance and its corrections, the monthly payroll, the leaves and the
+// public holidays, and the attendance devices that send their punches. The Corrections tab, and
+// Leaves & Holidays, count what waits there for a manager. Each tab for whoever holds it (صلاحيات الموظفين): a manager every one, and the
 // Permissions tab where they give them; an accountant, and an employee in the portal, those a
 // manager gave them, their changes going to a manager.
 // Advances are paid in Financials and in the daily batch, from the safe or a day's takings; the
@@ -26,6 +27,9 @@ import { CorrectionsCount } from './corrections-count';
           {{ tab.en }}<span class="inline-ar">{{ tab.ar }}</span>
           @if (tab.path === 'corrections' && waiting.count()) {
             <span class="count" [attr.aria-label]="waiting.count() + ' waiting'">{{ waiting.count() }}</span>
+          }
+          @if (tab.path === 'leaves' && leaves.count()) {
+            <span class="count" [attr.aria-label]="leaves.count() + ' leave requests waiting'">{{ leaves.count() }}</span>
           }
         </a>
       }
@@ -63,6 +67,7 @@ import { CorrectionsCount } from './corrections-count';
 })
 export class HrShell {
   protected readonly waiting = inject(CorrectionsCount);
+  protected readonly leaves = inject(PendingLeaves);
   private readonly access = inject(HrAccess);
   protected readonly tabs = computed(() => [
     ...hrTabs.filter((t) => this.access.has(t.tab)),
@@ -71,5 +76,6 @@ export class HrShell {
 
   constructor() {
     void this.waiting.refresh();
+    void this.leaves.refresh();
   }
 }

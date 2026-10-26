@@ -80,7 +80,9 @@ public sealed record AttendanceDayDto(
     // When the day ends, and the next one's punches start.
     DateTime? DayEndsAt = null,
     // A punch-in with no punch-out once the shift is over (نسي تسجيل الانصراف).
-    bool ForgotToCheckOut = false)
+    bool ForgotToCheckOut = false,
+    // Penalties in money on the day, a disciplinary action's among them: deducted as they are.
+    decimal PenaltyAmount = 0)
 {
     public static AttendanceDayDto From(Employee employee, TimesheetDay day)
     {
@@ -89,7 +91,8 @@ public sealed record AttendanceDayDto(
         return new AttendanceDayDto(
             e.Day, e.Status, start, start + Employee.ShiftLength, e.FirstIn, e.LastOut, e.WorkedMinutes, e.LateMinutes, e.EarlyLeaveMinutes, e.AwayMinutes,
             e.OvertimeMinutes, e.ShortMinutes, employee.IsDayOff(e.Day), day.Mark?.Kind, day.Mark?.Notes, day.Punches.Select(PunchDto.From).ToList(),
-            e.PenaltyHours, day.Penalty?.Reason, day.Penalty?.SetBy, day.Holiday?.Name, Timesheet.Window(employee, e.Day).To, day.ForgotToCheckOut);
+            e.PenaltyHours, day.Penalty?.Reason, day.Penalty?.SetBy, day.Holiday?.Name, Timesheet.Window(employee, e.Day).To, day.ForgotToCheckOut,
+            e.PenaltyAmount);
     }
 }
 
@@ -108,9 +111,10 @@ public sealed record TimesheetTotals(
 // One employee's month, day by day.
 public sealed record TimesheetDto(EmployeeDto Employee, DateOnly Month, AttendancePolicyDto Policy, TimesheetTotals Totals, IReadOnlyList<AttendanceDayDto> Days);
 
+// Penalty: the manager's own on the day; Penalties: every one on it, a disciplinary action's too.
 public sealed record TimesheetDay(
     DayEvaluation Evaluation, IReadOnlyList<AttendanceLog> Punches, DayMark? Mark, AdministrativePenalty? Penalty = null, PublicHoliday? Holiday = null,
-    bool ForgotToCheckOut = false);
+    bool ForgotToCheckOut = false, IReadOnlyList<AdministrativePenalty>? Penalties = null);
 
 public sealed record EmployeeSheet(Employee Employee, IReadOnlyList<TimesheetDay> Days);
 
@@ -134,7 +138,10 @@ internal sealed class Timesheets(
             from.AddDays(-1).ToDateTime(TimeOnly.MinValue), to.AddDays(2).ToDateTime(TimeOnly.MinValue), people.Count == 1 ? people[0].Id : null,
             cancellationToken);
         var dayMarks = (await marks.GetBetweenAsync(from, to, cancellationToken)).ToDictionary(m => (m.EmployeeId, m.Date));
-        var dayPenalties = (await penalties.GetBetweenAsync(from, to, cancellationToken)).ToDictionary(p => (p.EmployeeId, p.Date));
+        // A manager's own on a day, and a disciplinary action's beside it: summed.
+        var dayPenalties = (await penalties.GetBetweenAsync(from, to, cancellationToken))
+            .GroupBy(p => (p.EmployeeId, p.Date))
+            .ToDictionary(g => g.Key, g => g.ToList());
         var publicHolidays = await holidays.GetBetweenAsync(from, to, cancellationToken);
 
         var sheets = new List<EmployeeSheet>();
@@ -147,12 +154,13 @@ internal sealed class Timesheets(
                 var (windowFrom, windowTo) = Timesheet.Window(person, day);
                 var inDay = theirs.Where(p => p.PunchedAt >= windowFrom && p.PunchedAt < windowTo).ToList();
                 var mark = dayMarks.GetValueOrDefault((person.Id, day));
-                var penalty = dayPenalties.GetValueOrDefault((person.Id, day));
+                var onDay = person.IsEmployedOn(day) ? dayPenalties.GetValueOrDefault((person.Id, day)) ?? [] : [];
+                var penalty = onDay.FirstOrDefault(p => p.DisciplinaryActionId is null);
                 var holiday = publicHolidays.FirstOrDefault(h => h.Covers(day));
                 var evaluation = Timesheet.Evaluate(
                         person, day, inDay.Where(p => !p.IsIgnored).Select(p => p.PunchedAt), mark?.Kind, policy, now, holiday is not null)
-                    with { PenaltyHours = penalty is not null && person.IsEmployedOn(day) ? penalty.Hours : 0 };
-                days.Add(new TimesheetDay(evaluation, inDay, mark, penalty, holiday, Timesheet.ForgotToCheckOut(person, evaluation, mark?.Kind, now)));
+                    with { PenaltyHours = onDay.Sum(p => p.Hours), PenaltyAmount = onDay.Sum(p => p.Amount ?? 0) };
+                days.Add(new TimesheetDay(evaluation, inDay, mark, penalty, holiday, Timesheet.ForgotToCheckOut(person, evaluation, mark?.Kind, now), onDay));
             }
 
             sheets.Add(new EmployeeSheet(person, days));
@@ -193,7 +201,7 @@ internal sealed class GetAttendanceDayHandler(IEmployeeRepository employees, IAt
             days.Count(d => d.LateMinutes > 0),
             days.Count(d => d.Status == DayStatus.Absent),
             days.Count(d => d.Status == DayStatus.Suspended),
-            days.Count(d => d.Status is DayStatus.DayOff or DayStatus.Leave or DayStatus.Holiday),
+            days.Count(d => d.Status is DayStatus.DayOff or DayStatus.Leave or DayStatus.UnpaidLeave or DayStatus.Holiday),
             days.Sum(d => d.OvertimeMinutes),
             sheets.Count(s => s.Days[0].ForgotToCheckOut));
         return new AttendanceDayReport(request.Date, AttendancePolicyDto.From(policy), totals, rows, unassigned);
@@ -296,6 +304,10 @@ internal sealed class SetDayMarkHandler(
         if (request.Kind == DayMarkKind.WorkingDay && !employee.IsDayOff(request.Date))
             throw new DomainException($"{request.Date:dddd} is a working day for {employee.Name} already: only a weekly day off is marked as one.");
         var mark = await marks.GetAsync(employee.Id, request.Date, cancellationToken);
+        if (mark?.LeaveRequestId is not null)
+            throw new DomainException($"{request.Date:d MMM yyyy} is a day of {employee.Name}'s approved leave: cancel the leave from that day instead.");
+        if (request.Kind == DayMarkKind.UnpaidLeave)
+            throw new DomainException("Unpaid leave is asked for and approved as a leave request.");
         if (request.Kind is not { } kind)
         {
             if (mark is not null)
@@ -432,9 +444,12 @@ internal sealed class SettleLatePunchesHandler(IAttendanceLogRepository logs, IU
     }
 }
 
-// A penalty as the month's list shows it: whose, on which day, and what it takes off their pay.
+// A penalty as the month's list shows it: whose, on which day, and what it takes off their pay:
+// its hours at their hourly rate, or its amount (Hours 0). DisciplinaryActionId: the disciplinary
+// action it is the deduction of, changed with it rather than here.
 public sealed record AdministrativePenaltyDto(
-    Guid EmployeeId, string EmployeeName, DateOnly Date, decimal Hours, decimal HourlyRate, decimal Amount, string Reason, string SetBy, DateTime SetAtUtc);
+    Guid EmployeeId, string EmployeeName, DateOnly Date, decimal Hours, decimal HourlyRate, decimal Amount, string Reason, string SetBy, DateTime SetAtUtc,
+    Guid? DisciplinaryActionId = null);
 
 // A month's administrative penalties, everyone's, by day. Only those on days their employee is
 // employed, as only those come off the pay.
@@ -457,7 +472,8 @@ internal sealed class GetAdministrativePenaltiesHandler(IEmployeeRepository empl
                 var e = people[p.EmployeeId];
                 var rate = Math.Round(e.HourlyRate, 2, MidpointRounding.AwayFromZero);
                 return new AdministrativePenaltyDto(
-                    e.Id, e.Name, p.Date, p.Hours, rate, Math.Round(p.Hours * e.HourlyRate, 2, MidpointRounding.AwayFromZero), p.Reason, p.SetBy, p.SetAtUtc);
+                    e.Id, e.Name, p.Date, p.Hours, rate, Math.Round(p.DeductionAt(e.HourlyRate), 2, MidpointRounding.AwayFromZero), p.Reason, p.SetBy, p.SetAtUtc,
+                    p.DisciplinaryActionId);
             })
             .OrderBy(p => p.Date).ThenBy(p => p.EmployeeName)
             .ToList();

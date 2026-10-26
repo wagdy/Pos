@@ -30,7 +30,9 @@ import { CorrectionsCount } from './corrections-count';
 // A suspended day is a punch-in left 18 hours without its punch-out: it is not worked out, and its
 // month's pay can't be finalized, until a manager enters when they left, or ignores the punch when
 // it was made by mistake. A penalty (جزاء إداري) is hours on a day, with the reason, taken off the
-// month's pay at the employee's hourly rate. Accountants see both; managers put them right.
+// month's pay at the employee's hourly rate; a disciplinary action's penalty deduction is listed
+// with them, an amount taken off as it is, linked to its action on the employee's profile, where
+// it is withdrawn. Accountants see both; managers put them right.
 @Component({
   selector: 'app-corrections-page',
   imports: [
@@ -190,7 +192,8 @@ import { CorrectionsCount } from './corrections-count';
       </div>
       <p class="note">
         Hours on a day, with the reason, taken off the month's pay at the employee's hourly rate: a day's pay over nine. One a day; changed or taken
-        off until the month's pay is finalized.
+        off until the month's pay is finalized. A disciplinary action's penalty deduction is an amount, taken off as it is: withdrawn on the
+        employee's profile, with the action.
       </p>
       @if (loadingPenalties()) {
         <mat-progress-bar mode="indeterminate" />
@@ -215,20 +218,40 @@ import { CorrectionsCount } from './corrections-count';
               </tr>
             </thead>
             <tbody>
-              @for (p of penalties(); track p.employeeId + p.date) {
-                <tr>
+              @for (p of penalties(); track p.employeeId + p.date + (p.disciplinaryActionId ?? '')) {
+                <tr [class.disciplinary]="!!p.disciplinaryActionId">
                   <td class="nowrap">{{ dayName(p.date) }}</td>
                   <td><strong>{{ p.employeeName }}</strong></td>
-                  <td class="num">{{ p.hours }}h</td>
-                  <td class="num">{{ p.hourlyRate | money }}</td>
+                  @if (p.disciplinaryActionId) {
+                    <td class="num muted">—</td>
+                    <td class="num muted">—</td>
+                  } @else {
+                    <td class="num">{{ p.hours }}h</td>
+                    <td class="num">{{ p.hourlyRate | money }}</td>
+                  }
                   <td class="num minus">{{ p.amount | money }}</td>
-                  <td>{{ p.reason }}</td>
+                  <td>
+                    @if (p.disciplinaryActionId) {
+                      <span class="badge">Disciplinary<span class="inline-ar">تأديبي</span></span>
+                    }
+                    {{ p.reason }}
+                    @if (p.disciplinaryActionId && access.has('Employees')) {
+                      <div>
+                        <a class="action-link small" [routerLink]="['/hr/employees', p.employeeId]" fragment="performance"
+                          [attr.aria-label]="'The disciplinary action on ' + p.employeeName + '’s profile'">
+                          <mat-icon>open_in_new</mat-icon> The disciplinary action
+                        </a>
+                      </div>
+                    }
+                  </td>
                   <td class="muted">{{ p.setBy }}</td>
                   @if (canCorrect()) {
                     <td class="num">
-                      <button mat-icon-button (click)="changePenalty(p)" matTooltip="Change or take off" [attr.aria-label]="'Change ' + p.employeeName + '’s penalty on ' + dayName(p.date)">
-                        <mat-icon>edit</mat-icon>
-                      </button>
+                      @if (!p.disciplinaryActionId) {
+                        <button mat-icon-button (click)="changePenalty(p)" matTooltip="Change or take off" [attr.aria-label]="'Change ' + p.employeeName + '’s penalty on ' + dayName(p.date)">
+                          <mat-icon>edit</mat-icon>
+                        </button>
+                      }
                     </td>
                   }
                 </tr>
@@ -311,6 +334,21 @@ import { CorrectionsCount } from './corrections-count';
     }
     .minus {
       color: var(--mat-sys-error);
+    }
+    .action-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--mat-sys-primary);
+
+      mat-icon {
+        font-size: 16px;
+        width: 16px;
+        height: 16px;
+      }
+    }
+    .badge {
+      margin: 0 6px 0 0;
     }
     .done {
       vertical-align: middle;
@@ -446,7 +484,10 @@ export class CorrectionsPage {
       // Whoever is employed in the month.
       employees: this.employees().filter((e) => e.hiredOn <= last && (!e.leftOn || e.leftOn >= first)),
       month: { first, last },
-      taken: this.penalties().map((p) => ({ employeeId: p.employeeId, date: p.date, hours: p.hours })),
+      // A manager's own, one a day; a disciplinary action's is its own beside it.
+      taken: this.penalties()
+        .filter((p) => !p.disciplinaryActionId)
+        .map((p) => ({ employeeId: p.employeeId, date: p.date, hours: p.hours })),
     };
     await this.editPenalty(data, 'Penalty added.');
   }

@@ -9,6 +9,7 @@ import { Permissions } from '../../core/auth/permissions';
 import { ApprovalRequest } from '../../core/costing/costing.api';
 import { CustodyApi, CustodyItem } from '../../core/custody/custody.api';
 import { Department, Employee, HrApi, PayrollFigures, PayrollSlip } from '../../core/hr/hr.api';
+import { PerformanceApi } from '../../core/hr/performance.api';
 import { NotifyService } from '../../core/ui/notify.service';
 import { Approvals } from '../costing/approvals';
 import { BusinessDay, Treasury } from '../costing/financials';
@@ -59,6 +60,7 @@ describe('an employee’s profile', () => {
   const removePin = vi.fn();
   const employeeCustody = vi.fn();
   const deviceConnection = vi.fn();
+  const performanceOf = vi.fn();
   const open = vi.fn();
   const notify = { info: vi.fn(), error: vi.fn() };
   const pending = signal<ApprovalRequest[]>([]);
@@ -87,6 +89,7 @@ describe('an employee’s profile', () => {
         { provide: MatDialog, useValue: { open } },
         { provide: Treasury, useValue: { enter: vi.fn() } },
         { provide: BusinessDay, useValue: { today: () => Promise.resolve('2026-10-22') } },
+        { provide: PerformanceApi, useValue: { employee: performanceOf, kpis: () => of([]) } },
       ],
     });
     const fixture = TestBed.createComponent(EmployeeProfilePage);
@@ -114,6 +117,9 @@ describe('an employee’s profile', () => {
     setPin.mockReset();
     removePin.mockReset();
     employeeCustody.mockReset().mockReturnValue(of([]));
+    performanceOf.mockReset().mockReturnValue(
+      of({ employeeId: 'hassan', employeeName: 'Hassan', evaluations: [], actions: [], record: { verbalWarnings: 0, firstWritten: 0, secondWritten: 0, penaltyDeductions: 0, terminations: 0, warnings: 0, next: 'VerbalWarning' } }),
+    );
     deviceConnection.mockReset().mockReturnValue(of({ devicePort: 5082, portalPort: 5083, addresses: ['192.168.1.57'] }));
     open.mockReset();
     notify.info.mockReset();
